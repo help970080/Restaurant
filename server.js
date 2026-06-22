@@ -35,8 +35,8 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   const u = sys.usuarios[username];
   if (!u || !bcrypt.compareSync(password, u.passHash)) throw bad('Usuario o contraseña incorrectos', 401);
   const token = firmarToken({ row: u.row, rol: u.rol, username, sucursalId: u.sucursalId || null });
-  const tenant = sys.tenants[u.row];
-  res.json({ token, tenant: { nombre: tenant ? tenant.nombre : '', rol: u.rol } });
+  const tdoc = await db.loadState(u.row);
+  res.json({ token, tenant: { nombre: tdoc ? tdoc.meta.nombre : '', logo: (tdoc && tdoc.config && tdoc.config.logo) || null, rol: u.rol } });
 }));
 
 // ---------------------------------------------------------------------------
@@ -63,6 +63,101 @@ app.post('/api/admin/provision', wrap(async (req, res) => {
 // A partir de aquí, todo requiere JWT y corre dentro del contexto del tenant
 app.use('/api', auth);
 
+// Solo administradores
+function soloAdmin(req, res, next) {
+  if (ctx().rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
+  next();
+}
+
+// ---------------------------------------------------------------------------
+//  IDENTIDAD
+// ---------------------------------------------------------------------------
+app.get('/api/me', wrap(async (req, res) => {
+  const c = ctx(); const e = await readState();
+  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null } });
+}));
+
+// ---------------------------------------------------------------------------
+//  USUARIOS (admin) — viven en la fila SYS
+// ---------------------------------------------------------------------------
+app.get('/api/usuarios', soloAdmin, wrap(async (req, res) => {
+  const c = ctx(); const sys = await db.loadSys();
+  const arr = Object.entries(sys.usuarios).filter(([, d]) => d.row === c.row).map(([u, d]) => ({ username: u, rol: d.rol, sucursalId: d.sucursalId || null }));
+  res.json(arr);
+}));
+app.post('/api/usuarios', soloAdmin, wrap(async (req, res) => {
+  const c = ctx(); const { username, password, rol = 'cajero', sucursalId = null } = req.body || {};
+  if (!username || !password) throw bad('Falta usuario o contraseña');
+  const sys = await db.loadSys();
+  if (sys.usuarios[username]) throw bad('Ese usuario ya existe (debe ser único)', 409);
+  sys.usuarios[username] = { row: c.row, rol, passHash: bcrypt.hashSync(password, 10), sucursalId };
+  await db.saveSys(sys);
+  res.json({ username, rol, sucursalId });
+}));
+app.patch('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
+  const c = ctx(); const u = req.params.username; const { password, rol, sucursalId } = req.body || {};
+  const sys = await db.loadSys(); const d = sys.usuarios[u];
+  if (!d || d.row !== c.row) throw bad('Usuario inexistente', 404);
+  if (password) d.passHash = bcrypt.hashSync(password, 10);
+  if (rol) d.rol = rol;
+  if (sucursalId !== undefined) d.sucursalId = sucursalId;
+  await db.saveSys(sys);
+  res.json({ ok: true });
+}));
+app.delete('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
+  const c = ctx(); const u = req.params.username;
+  if (u === c.username) throw bad('No puedes eliminar tu propio usuario');
+  const sys = await db.loadSys(); const d = sys.usuarios[u];
+  if (!d || d.row !== c.row) throw bad('Usuario inexistente', 404);
+  delete sys.usuarios[u]; await db.saveSys(sys);
+  res.json({ ok: true });
+}));
+
+// ---------------------------------------------------------------------------
+//  CONFIGURACIÓN / MARCA (logo + nombre)
+// ---------------------------------------------------------------------------
+app.get('/api/config', wrap(async (req, res) => {
+  const e = await readState();
+  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda });
+}));
+app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
+  const { nombre, logo } = req.body || {};
+  const out = await withState((e) => {
+    if (nombre) e.meta.nombre = nombre;
+    if (logo !== undefined) e.config.logo = logo;
+    return { nombre: e.meta.nombre, logo: e.config.logo || null };
+  });
+  res.json(out);
+}));
+
+// ---------------------------------------------------------------------------
+//  PROMOCIONES
+// ---------------------------------------------------------------------------
+app.get('/api/promociones', wrap(async (req, res) => {
+  const e = await readState();
+  res.json(Object.values(e.promociones || {}));
+}));
+app.post('/api/promociones', soloAdmin, wrap(async (req, res) => {
+  const { nombre, tipo = 'porcentaje', valor } = req.body || {};
+  if (!nombre || valor == null) throw bad('Falta nombre o valor');
+  const p = await withState((e) => { if (!e.promociones) e.promociones = {}; const pr = M.crearPromocion({ nombre, tipo, valor }); e.promociones[pr.id] = pr; return pr; });
+  res.json(p);
+}));
+app.patch('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
+  const patch = req.body || {};
+  const p = await withState((e) => {
+    const pr = (e.promociones || {})[req.params.id];
+    if (!pr) throw bad('Promoción inexistente', 404);
+    for (const k of ['nombre', 'tipo', 'valor', 'activo']) if (k in patch) pr[k] = patch[k];
+    return pr;
+  });
+  res.json(p);
+}));
+app.delete('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
+  await withState((e) => { if (e.promociones) delete e.promociones[req.params.id]; });
+  res.json({ ok: true });
+}));
+
 // ---------------------------------------------------------------------------
 //  MENÚ
 // ---------------------------------------------------------------------------
@@ -70,13 +165,13 @@ app.get('/api/menu', wrap(async (req, res) => {
   const e = await readState();
   res.json({ categorias: e.menu.categorias, gruposModificadores: e.menu.gruposModificadores, productos: e.menu.productos });
 }));
-app.post('/api/menu/categorias', wrap(async (req, res) => {
+app.post('/api/menu/categorias', soloAdmin, wrap(async (req, res) => {
   const { nombre, orden = 0 } = req.body || {};
   if (!nombre) throw bad('Falta nombre');
   const c = await withState((e) => { const c = M.crearCategoria({ nombre, orden }); e.menu.categorias[c.id] = c; return c; });
   res.json(c);
 }));
-app.post('/api/menu/grupos', wrap(async (req, res) => {
+app.post('/api/menu/grupos', soloAdmin, wrap(async (req, res) => {
   const { nombre, tipo, obligatorio, max, opciones = [] } = req.body || {};
   if (!nombre) throw bad('Falta nombre');
   const g = await withState((e) => {
@@ -85,17 +180,21 @@ app.post('/api/menu/grupos', wrap(async (req, res) => {
   });
   res.json(g);
 }));
-app.post('/api/menu/productos', wrap(async (req, res) => {
-  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [] } = req.body || {};
+app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
+  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null } = req.body || {};
   if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
   const p = await withState((e) => {
     if (!e.menu.categorias[categoriaId]) throw bad('Categoría inexistente');
-    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta });
+    let finalReceta = receta, esCombo = false;
+    if (componentes && componentes.length) { finalReceta = M.recetaDeCombo(e, componentes); esCombo = true; }
+    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta });
+    if (esCombo) { prod.esCombo = true; prod.componentes = componentes; }
+    if (foto) prod.foto = foto;
     e.menu.productos[prod.id] = prod; return prod;
   });
   res.json(p);
 }));
-app.patch('/api/menu/productos/:id', wrap(async (req, res) => {
+app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
   const { id } = req.params;
   const patch = req.body || {};
   const p = await withState((e) => {
