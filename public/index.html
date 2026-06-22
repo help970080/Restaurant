@@ -271,7 +271,9 @@ async function boot(){
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   if(!API.token){renderLogin();return;}
   try{
-    const me=await API.get('/api/me');app.rol=me.rol;app.tenant=me.tenant;app.miSucursal=me.sucursalId;app.username=me.username;
+    const me=await API.get('/api/me');app.rol=me.rol;app.tenant=me.tenant;app.username=me.username;
+    if(app.rol==='superadmin'){renderSuper();return;}
+    app.miSucursal=me.sucursalId;
     app.sucursales=await API.get('/api/sucursales');
     if(!app.sucursalId)app.sucursalId=app.miSucursal||app.sucursales[0].id;
     await refreshTurno();
@@ -547,14 +549,42 @@ function modalNuevoProducto(){
 // ===========================================================================
 async function vInventario(){
   const inv=await API.get('/api/inventario');
-  $('#view').innerHTML=`<div class="panel" style="margin-bottom:16px"><h3>Insumos <span class="small">se descuenta con cada venta</span></h3>
-    <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th>Estado</th><th></th></tr></thead><tbody>
-    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 12px;font-size:12px;min-height:auto">+ Entrada</button></td></tr>`).join('')}
+  const esAdmin=app.rol==='admin';
+  let auds=[];if(esAdmin){try{auds=await API.get('/api/inventario/auditorias');}catch{}}
+  const bajos=inv.insumos.filter(i=>i.bajo).length;
+  $('#view').innerHTML=`<div class="kpis">
+      <div class="kpi accent"><div class="lab">Valor del inventario</div><div class="val">${money(inv.valuacion)}</div></div>
+      <div class="kpi"><div class="lab">Insumos por reabastecer</div><div class="val" style="color:${bajos?'var(--red)':'var(--green)'}">${bajos}</div></div>
+      <div class="kpi"><div class="lab">Último conteo</div><div class="val" style="font-size:18px">${auds.length?new Date(auds[0].fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'}):'—'}</div>${auds.length?`<div class="lab" style="margin-top:2px;color:${auds[0].mermaTotal>0?'var(--red)':'var(--green)'}">merma ${money(auds[0].mermaTotal)}</div>`:''}</div>
+    </div>
+    <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin?`<button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button>`:''}</h3>
+    <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 12px;font-size:12px;min-height:auto">+ Entrada</button></td></tr>`).join('')}
     </tbody></table></div>
+    ${esAdmin&&auds.length?`<div class="panel" style="margin-bottom:16px"><h3>Mermas recientes <span class="small">teórico vs físico</span></h3><table><thead><tr><th>Fecha</th><th>Por</th><th class="num">Insumos contados</th><th class="num">Merma ($)</th></tr></thead><tbody>
+    ${auds.map(a=>`<tr><td>${new Date(a.fecha).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td>${a.usuario||'—'}</td><td class="num">${a.lineas.length}</td><td class="num" style="color:${a.mermaTotal>0?'var(--red)':a.mermaTotal<0?'var(--accent-ink)':'var(--green)'};font-weight:600">${money(a.mermaTotal)}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
     <div class="panel"><h3>Food cost por producto</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
     ${inv.foodCost.map(f=>`<tr><td>${f.nombre}</td><td class="num">${money(f.costo)}</td><td class="num">${money(f.precio)}</td><td class="num" style="color:${f.foodCostPct>40?'var(--red)':f.foodCostPct>35?'var(--accent-ink)':'var(--green)'};font-weight:600">${f.foodCostPct.toFixed(0)}%</td></tr>`).join('')}
     </tbody></table></div>`;
   document.querySelectorAll('[data-ent]').forEach(b=>b.onclick=()=>modalEntrada(b.dataset.ent,b.dataset.nom));
+  if($('#conteo'))$('#conteo').onclick=()=>modalConteo(inv.insumos);
+}
+function modalConteo(insumos){
+  modal.innerHTML=`<h3>Conteo físico</h3><div class="sub">Captura lo que hay físicamente. El sistema calcula la merma (lo que falta vs el teórico) y ajusta el stock.</div>
+    <div style="max-height:46vh;overflow:auto;margin:6px 0"><table><thead><tr><th>Insumo</th><th class="num">Teórico</th><th class="num" style="width:96px">Físico</th></tr></thead><tbody>
+    ${insumos.map(i=>`<tr><td>${i.nombre}<div style="font-size:11px;color:var(--muted)">${i.unidad}</div></td><td class="num">${i.stock}</td><td class="num"><input data-ct="${i.id}" type="number" class="mono" inputmode="decimal" value="${i.stock}" style="width:84px;padding:8px;text-align:right"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div id="mermaPrev" style="font-size:14px;color:var(--muted);margin:6px 0"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="ctCancel">Cancelar</button><button class="btn-primary" id="ctOk">Aplicar conteo</button></div>`;
+  ov.classList.add('show');
+  const byId={};insumos.forEach(i=>byId[i.id]=i);
+  const recalc=()=>{let m=0;modal.querySelectorAll('[data-ct]').forEach(inp=>{const i=byId[inp.dataset.ct];const fis=parseFloat(inp.value);if(!isNaN(fis))m+=(i.stock-fis)*i.costoUnitario;});
+    $('#mermaPrev').innerHTML=m>0?`Merma estimada: <b style="color:var(--red)">${money(m)}</b>`:m<0?`Sobrante: <b style="color:var(--accent-ink)">${money(-m)}</b>`:'Todo cuadra ✓';};
+  modal.querySelectorAll('[data-ct]').forEach(inp=>inp.oninput=recalc);recalc();
+  $('#ctCancel').onclick=closeModal;
+  $('#ctOk').onclick=async()=>{const conteos=[...modal.querySelectorAll('[data-ct]')].map(inp=>({insumoId:inp.dataset.ct,fisico:parseFloat(inp.value)})).filter(c=>!isNaN(c.fisico));
+    try{const r=await API.post('/api/inventario/conteo',{conteos});closeModal();toast(r.mermaTotal>0?`Conteo aplicado · merma ${money(r.mermaTotal)}`:'Conteo aplicado · todo cuadra');vInventario();}catch(e){toast(e.message);}};
 }
 function modalEntrada(id,nombre){
   modal.innerHTML=`<h3>Entrada de stock</h3><div class="sub">${nombre||''}</div>
@@ -613,7 +643,44 @@ async function vReportes(){
     <div class="panel"><h3>Por método de pago</h3>${['efectivo','tarjeta','transferencia'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porPago[k]/(res.venta||1)*100}%;background:${k==='efectivo'?'var(--green)':k==='tarjeta'?'var(--blue)':'var(--accent)'}"></div></div><div class="bv">${money(res.porPago[k])}</div></div>`).join('')}</div></div>
   <div class="panel" style="margin-top:16px"><h3>Cortes de caja</h3>${cortes.length?`<table><thead><tr><th>Cierre</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th><th>Resultado</th></tr></thead><tbody>
     ${cortes.map(t=>`<tr><td>${new Date(t.cerrado).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(t.esperado.efectivo)}</td><td class="num">${money(t.conteo)}</td><td class="num" style="color:${t.diferencia<0?'var(--red)':t.diferencia>0?'var(--accent-ink)':'var(--green)'}">${money(t.diferencia)}</td><td><span class="chip ${t.resultado==='faltante'?'low':t.resultado==='cuadrado'?'ok':''}">${t.resultado}</span></td></tr>`).join('')}
-  </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>`;
+  </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>
+  <div id="finBlock"></div>`;
+  if(app.rol==='admin')renderFinanciero();
+}
+async function renderFinanciero(){
+  let fin;try{fin=await API.get('/api/reportes/financiero?sucursalId='+app.sucursalId);}catch{return;}
+  const col=v=>v<=35?'var(--green)':v<=45?'var(--accent-ink)':'var(--red)';
+  const r=fin.rentabilidad||[];
+  $('#finBlock').innerHTML=`
+  <div style="margin:22px 0 10px;font-family:'Bricolage Grotesque';font-weight:700;font-size:20px">Análisis financiero</div>
+  <div class="kpis">
+    <div class="kpi accent"><div class="lab">Ingresos</div><div class="val">${money(fin.ingresos)}</div></div>
+    <div class="kpi"><div class="lab">Costo de insumos (COGS)</div><div class="val">${money(fin.cogs)}</div></div>
+    <div class="kpi"><div class="lab">Margen bruto</div><div class="val">${money(fin.margenBruto)}</div><div class="lab" style="margin-top:2px">${fin.margenBrutoPct}%</div></div>
+    <div class="kpi"><div class="lab">Food cost %</div><div class="val" style="color:${col(fin.foodCostPct)}">${fin.foodCostPct}%</div><div class="lab" style="margin-top:2px">meta 28–35%</div></div>
+  </div>
+  <div class="kpis" style="margin-top:0">
+    <div class="kpi"><div class="lab">Ticket promedio</div><div class="val">${money(fin.ticketPromedio)}</div></div>
+    <div class="kpi"><div class="lab">Descuentos otorgados</div><div class="val">${money(fin.descuentos)}</div></div>
+    <div class="kpi"><div class="lab">Pedidos cobrados</div><div class="val">${fin.pedidos}</div></div>
+  </div>
+  <div class="cols" style="margin-top:16px">
+    <div class="panel"><h3>Prime cost <span class="small">la métrica que más se vigila · meta 55–65%</span></h3>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Captura tu nómina del periodo para calcular el prime cost (insumos + nómina ÷ ventas).</div>
+      <div class="field"><label>Costo de nómina del periodo</label><input id="nomina" type="number" class="mono" inputmode="decimal" placeholder="0.00"></div>
+      <div id="primeOut" style="font-size:14px;color:var(--muted)">Ingresa la nómina para ver el resultado.</div></div>
+    <div class="panel"><h3>Resumen del margen</h3>
+      <div class="bar-row"><div class="bn">Insumos (COGS)</div><div class="bt"><div class="bf" style="width:${fin.foodCostPct}%;background:var(--accent)"></div></div><div class="bv">${fin.foodCostPct}%</div></div>
+      <div class="bar-row"><div class="bn">Margen bruto</div><div class="bt"><div class="bf" style="width:${fin.margenBrutoPct}%;background:var(--green)"></div></div><div class="bv">${fin.margenBrutoPct}%</div></div>
+      <div style="color:var(--muted);font-size:13px;margin-top:10px">El margen bruto debe cubrir nómina, renta, servicios y dejar utilidad.</div></div>
+  </div>
+  <div class="panel" style="margin-top:16px"><h3>Rentabilidad por producto <span class="small">menu engineering · ordenado por margen que aporta</span></h3>
+    ${r.length?`<table><thead><tr><th>Producto</th><th class="num">Unidades</th><th class="num">Ingreso</th><th class="num">Costo</th><th class="num">Margen</th><th class="num">Margen %</th></tr></thead><tbody>
+    ${r.map(x=>`<tr><td>${x.nombre}</td><td class="num">${x.unidades}</td><td class="num">${money(x.ingreso)}</td><td class="num">${money(x.costo)}</td><td class="num" style="font-weight:600">${money(x.margen)}</td><td class="num" style="color:${x.margenPct>=60?'var(--green)':x.margenPct>=45?'var(--accent-ink)':'var(--red)'}">${x.margenPct}%</td></tr>`).join('')}
+    </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas para analizar.</div>'}</div>`;
+  $('#nomina').oninput=e=>{const nom=parseFloat(e.target.value)||0;const out=$('#primeOut');if(!nom||!fin.ingresos){out.innerHTML='Ingresa la nómina para ver el resultado.';return;}
+    const prime=fin.cogs+nom;const pct=+(prime/fin.ingresos*100).toFixed(1);const c=pct<=65?'var(--green)':pct<=72?'var(--accent-ink)':'var(--red)';
+    out.innerHTML=`<div style="font-size:13px;color:var(--muted)">Prime cost (insumos + nómina)</div><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:28px;color:${c}">${pct}%</div><div style="font-size:13px;color:var(--muted)">${pct<=65?'Saludable ✓':pct<=72?'En el límite, vigílalo':'Alto — revisa nómina y food cost'}</div>`;};
 }
 
 // ===========================================================================
@@ -691,6 +758,41 @@ function modalNuevoUsuario(){
     <div class="modal-foot"><button class="btn-ghost" id="usCancel">Cancelar</button><button class="btn-primary" id="usOk">Crear</button></div>`;
   ov.classList.add('show');$('#usCancel').onclick=closeModal;
   $('#usOk').onclick=async()=>{const u=$('#usU').value.trim(),p=$('#usP').value;if(!u||!p){toast('Falta usuario o contraseña');return;}try{await API.post('/api/usuarios',{username:u,password:p,rol:$('#usR').value,sucursalId:$('#usS').value||null});closeModal();toast('Usuario creado');vAjustes();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  SUPER ADMIN  — crea y administra restaurantes (como CobraPro)
+// ===========================================================================
+function renderSuper(){
+  $('#app').innerHTML=`<div class="shell">
+    <nav class="sidebar"><div class="logo"><span class="brandtext">Comanda<b>Pro</b></span></div>
+      <div class="nav"><button class="active">${IC.ajustes}<span>Restaurantes</span></button></div>
+      <div class="side-foot"><span>Super Admin</span><button id="logout">Salir</button></div></nav>
+    <div class="app-main"><div class="topbar"><div class="vtitle">Restaurantes</div><div class="spacer"></div>
+      <button class="btn accent" id="newTenant">+ Crear restaurante</button></div>
+      <div class="view" id="view"><div class="loading">Cargando…</div></div></div></div>`;
+  $('#logout').onclick=()=>{API.token=null;app.rol=null;app.tenant=null;boot();};
+  $('#newTenant').onclick=modalNuevoTenant;
+  vSuperTenants();
+}
+async function vSuperTenants(){
+  const tenants=await API.get('/api/super/tenants');
+  $('#view').innerHTML=`<div class="kpis"><div class="kpi accent"><div class="lab">Restaurantes</div><div class="val">${tenants.length}</div></div>
+    <div class="kpi"><div class="lab">Sucursales totales</div><div class="val">${tenants.reduce((s,t)=>s+t.sucursales,0)}</div></div>
+    <div class="kpi"><div class="lab">Usuarios totales</div><div class="val">${tenants.reduce((s,t)=>s+t.usuarios,0)}</div></div></div>
+   <div class="panel"><h3>Restaurantes en la plataforma</h3>
+    ${tenants.length?`<table><thead><tr><th>Restaurante</th><th class="num">Sucursales</th><th class="num">Usuarios</th></tr></thead><tbody>
+    ${tenants.map(t=>`<tr><td style="font-weight:600">${t.nombre}</td><td class="num">${t.sucursales}</td><td class="num">${t.usuarios}</td></tr>`).join('')}
+    </tbody></table>`:'<div class="empty">Aún no hay restaurantes. Crea el primero con el botón de arriba.</div>'}</div>`;
+}
+function modalNuevoTenant(){
+  modal.innerHTML=`<h3>Crear restaurante</h3><div class="sub">Se crea con su menú base, 2 sucursales y un usuario administrador</div>
+   <div class="field"><label>Nombre del restaurante</label><input id="tNom" placeholder="Ej. Tacos El Güero"></div>
+   <div class="field"><label>Usuario administrador</label><input id="tUser" autocomplete="off" placeholder="dueño"></div>
+   <div class="field"><label>Contraseña</label><input id="tPass" type="text" autocomplete="off"></div>
+   <div class="modal-foot"><button class="btn-ghost" id="tCancel">Cancelar</button><button class="btn-primary" id="tOk">Crear</button></div>`;
+  ov.classList.add('show');$('#tCancel').onclick=closeModal;
+  $('#tOk').onclick=async()=>{const n=$('#tNom').value.trim(),u=$('#tUser').value.trim(),p=$('#tPass').value;if(!n||!u||!p){toast('Faltan datos');return;}try{await API.post('/api/super/tenants',{nombre:n,adminUser:u,adminPass:p});closeModal();toast('Restaurante creado');vSuperTenants();}catch(e){toast(e.message);}};
 }
 
 // ===========================================================================
