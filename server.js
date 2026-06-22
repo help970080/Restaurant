@@ -207,6 +207,92 @@ app.delete('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
 }));
 
 // ---------------------------------------------------------------------------
+//  RH / PERSONAL  (admin)
+// ---------------------------------------------------------------------------
+app.get('/api/rh/empleados', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  res.json(Object.values(e.empleados || {}));
+}));
+app.post('/api/rh/empleados', soloAdmin, wrap(async (req, res) => {
+  const b = req.body || {};
+  if (!b.nombre) throw bad('Falta nombre');
+  const emp = await withState((e) => { if (!e.empleados) e.empleados = {}; const x = M.crearEmpleado(b); e.empleados[x.id] = x; return x; });
+  res.json(emp);
+}));
+app.patch('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
+  const b = req.body || {};
+  const emp = await withState((e) => {
+    const x = (e.empleados || {})[req.params.id];
+    if (!x) throw bad('Empleado inexistente', 404);
+    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username']) if (k in b) x[k] = b[k];
+    if ('salarioBase' in b) x.salarioBase = M.r2(+b.salarioBase);
+    if ('comisionPct' in b) x.comisionPct = M.r2(+b.comisionPct);
+    if ('activo' in b) { x.activo = !!b.activo; x.fechaBaja = b.activo ? null : new Date().toISOString().slice(0, 10); }
+    return x;
+  });
+  res.json(emp);
+}));
+app.delete('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
+  await withState((e) => { if (e.empleados) delete e.empleados[req.params.id]; });
+  res.json({ ok: true });
+}));
+app.get('/api/rh/resumen', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  const empleados = Object.values(e.empleados || {});
+  const activos = empleados.filter((x) => x.activo);
+  const hoy = new Date();
+  // Cumpleaños próximos (31 días)
+  const cumples = [];
+  for (const x of activos) {
+    if (!x.cumple) continue;
+    const c = String(x.cumple).trim();
+    let mes, dia;
+    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(c)) { const d = new Date(c.slice(0, 10) + 'T00:00:00'); mes = d.getMonth() + 1; dia = d.getDate(); }
+    else if (/^\d{1,2}[/-]\d{1,2}$/.test(c)) { const [a, b] = c.split(/[/-]/).map(Number); dia = a; mes = b; } // DD/MM
+    else continue;
+    if (!mes || !dia) continue;
+    let prox = new Date(hoy.getFullYear(), mes - 1, dia);
+    if (prox < new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) prox = new Date(hoy.getFullYear() + 1, mes - 1, dia);
+    const dias = Math.round((prox - new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) / 86400000);
+    if (dias <= 31) cumples.push({ nombre: x.nombre, puesto: x.puesto, fecha: `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}`, dias });
+  }
+  cumples.sort((a, b) => a.dias - b.dias);
+  // Ranking de vendedores (por usuario que cobró) + ranking por sucursal
+  const cobrados = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado');
+  const porVend = {}, porSuc = {};
+  for (const p of cobrados) {
+    const u = p.creadoPor || 'sistema';
+    porVend[u] = porVend[u] || { ventas: 0, pedidos: 0 };
+    porVend[u].ventas = M.r2(porVend[u].ventas + p.total); porVend[u].pedidos++;
+    const s = p.sucursalId;
+    porSuc[s] = porSuc[s] || { ventas: 0, pedidos: 0 };
+    porSuc[s].ventas = M.r2(porSuc[s].ventas + p.total); porSuc[s].pedidos++;
+  }
+  const empByUser = {}; empleados.forEach((x) => { if (x.username) empByUser[x.username] = x; });
+  const vendedores = Object.entries(porVend).map(([usuario, d]) => {
+    const emp = empByUser[usuario];
+    const comisionPct = emp ? emp.comisionPct : 0;
+    return { usuario, nombre: emp ? emp.nombre : usuario, ventas: d.ventas, pedidos: d.pedidos, comisionPct, comisionEstimada: M.r2(d.ventas * comisionPct / 100) };
+  }).sort((a, b) => b.ventas - a.ventas);
+  const sucursales = Object.entries(porSuc).map(([sid, d]) => ({ sucursalId: sid, nombre: (e.sucursales[sid] || {}).nombre || sid, ventas: d.ventas, pedidos: d.pedidos })).sort((a, b) => b.ventas - a.ventas);
+  // Rotación
+  const bajas = empleados.filter((x) => !x.activo);
+  const bajas90 = bajas.filter((x) => x.fechaBaja && (hoy - new Date(x.fechaBaja)) / 86400000 <= 90).length;
+  const antig = activos.filter((x) => x.ingreso).map((x) => (hoy - new Date(x.ingreso)) / 86400000 / 30.44);
+  const antiguedadPromMeses = antig.length ? M.r2(antig.reduce((s, v) => s + v, 0) / antig.length) : 0;
+  const tasaRotacion = (activos.length + bajas90) ? M.r2(bajas90 / (activos.length + bajas90) * 100) : 0;
+  // Nómina
+  const nominaBase = M.r2(activos.reduce((s, x) => s + x.salarioBase, 0));
+  const comisionesEstimadas = M.r2(vendedores.reduce((s, v) => s + v.comisionEstimada, 0));
+  res.json({
+    activos: activos.length, totalEmpleados: empleados.length,
+    cumples, vendedores, sucursales,
+    rotacion: { activos: activos.length, bajas90, antiguedadPromMeses, tasaRotacion },
+    nomina: { base: nominaBase, comisionesEstimadas, total: M.r2(nominaBase + comisionesEstimadas) },
+  });
+}));
+
+// ---------------------------------------------------------------------------
 //  CANALES DE VENTA / DELIVERY  (DiDi Food, Rappi, Uber Eats, propio…)
 // ---------------------------------------------------------------------------
 async function ensureCanales() {
