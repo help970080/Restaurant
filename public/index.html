@@ -110,7 +110,7 @@
   .prod .row{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
   .prod .pr{font-family:var(--mono);font-weight:600;color:var(--accent-ink)}
   .prod .dest{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-  .ticket{background:var(--card);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .ticket{background:var(--card);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;min-height:0;overflow-y:auto}
   .thead{padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;display:flex;justify-content:space-between;align-items:center}
   .thead .mfolio{font-family:var(--mono);font-size:13px;color:var(--muted)}
   .thead a{color:var(--accent-ink);font-size:12px;cursor:pointer;font-weight:600}
@@ -121,14 +121,14 @@
   .canalchip{padding:8px 12px;font-size:12px;font-weight:600;border-radius:999px;background:var(--paper);color:var(--muted);border:1px solid var(--line)}
   .canalchip.active{background:var(--accent);color:#fff;border-color:var(--accent)}
   .cli{padding:10px 14px 0}.cli input{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px;font-size:13px}
-  .lines{flex:1;overflow-y:auto;padding:12px 14px;min-height:50px}
+  .lines{flex:1 1 auto;padding:12px 14px;min-height:40px}
   .empty{color:var(--muted);text-align:center;padding:30px 8px;font-size:14px;line-height:1.5}
   .line{border-bottom:1px dashed var(--line);padding:10px 0;display:flex;gap:8px}
   .line .lname{font-weight:600;font-size:14px}.line .lmod{font-size:12px;color:var(--muted);margin-top:2px}
   .line .lnote{font-size:12px;color:var(--accent-ink);font-style:italic;margin-top:2px}
   .line .lprice{font-family:var(--mono);font-weight:600;font-size:14px;white-space:nowrap}
   .line .rm{background:none;color:var(--muted);font-size:16px;padding:0 4px;align-self:flex-start}.line .rm:hover{color:var(--red)}
-  .totals{padding:12px 14px;border-top:2px solid var(--ink)}
+  .totals{padding:12px 14px;border-top:2px solid var(--ink);position:sticky;bottom:0;background:var(--card);z-index:2}
   .trow{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:var(--muted)}
   .trow.tot{font-size:19px;font-weight:700;color:var(--ink);padding-top:8px}
   .extra-btns{display:flex;gap:6px;margin:8px 0}
@@ -267,7 +267,8 @@ const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
   ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
   rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'};
 const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['reportes','Reportes']];
-function NAV(){return app.rol==='admin'?[...NAV_BASE,['promociones','Promociones'],['rh','Personal'],['ajustes','Ajustes']]:NAV_BASE;}
+function esAdmin(){return app.rol==='admin'||app.rol==='gerente';}
+function NAV(){return esAdmin()?[...NAV_BASE,['promociones','Promociones'],['rh','Personal'],['ajustes','Ajustes']]:NAV_BASE;}
 
 // ===========================================================================
 //  Boot / login
@@ -310,7 +311,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.2 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.6 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -566,22 +567,22 @@ function modalNuevoProducto(){
 // ===========================================================================
 async function vInventario(){
   const inv=await API.get('/api/inventario');
-  const esAdmin=app.rol==='admin';
-  let auds=[];if(esAdmin){try{auds=await API.get('/api/inventario/auditorias');}catch{}}
+  const esAdmin2=esAdmin();
+  let auds=[];if(esAdmin2){try{auds=await API.get('/api/inventario/auditorias');}catch{}}
   const bajos=inv.insumos.filter(i=>i.bajo).length;
   $('#view').innerHTML=`<div class="kpis">
       <div class="kpi accent"><div class="lab">Valor del inventario</div><div class="val">${money(inv.valuacion)}</div></div>
       <div class="kpi"><div class="lab">Insumos por reabastecer</div><div class="val" style="color:${bajos?'var(--red)':'var(--green)'}">${bajos}</div></div>
       <div class="kpi"><div class="lab">Último conteo</div><div class="val" style="font-size:18px">${auds.length?new Date(auds[0].fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'}):'—'}</div>${auds.length?`<div class="lab" style="margin-top:2px;color:${auds[0].mermaTotal>0?'var(--red)':'var(--green)'}">merma ${money(auds[0].mermaTotal)}</div>`:''}</div>
     </div>
-    <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin?`<span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="newInsumo" style="font-size:13px">+ Insumo</button><button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button></span>`:''}</h3>
+    <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin2?`<span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="newInsumo" style="font-size:13px">+ Insumo</button><button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button></span>`:''}</h3>
     <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
-    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 11px;font-size:12px;min-height:auto">+ Entrada</button>${esAdmin?` <button class="btn" data-edit='${i.id}' style="padding:8px 11px;font-size:12px;min-height:auto">Editar</button>`:''}</td></tr>`).join('')}
+    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 11px;font-size:12px;min-height:auto">+ Entrada</button>${esAdmin2?` <button class="btn" data-edit='${i.id}' style="padding:8px 11px;font-size:12px;min-height:auto">Editar</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>
-    ${esAdmin&&auds.length?`<div class="panel" style="margin-bottom:16px"><h3>Mermas recientes <span class="small">teórico vs físico</span></h3><table><thead><tr><th>Fecha</th><th>Por</th><th class="num">Insumos contados</th><th class="num">Merma ($)</th></tr></thead><tbody>
+    ${esAdmin2&&auds.length?`<div class="panel" style="margin-bottom:16px"><h3>Mermas recientes <span class="small">teórico vs físico</span></h3><table><thead><tr><th>Fecha</th><th>Por</th><th class="num">Insumos contados</th><th class="num">Merma ($)</th></tr></thead><tbody>
     ${auds.map(a=>`<tr><td>${new Date(a.fecha).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td>${a.usuario||'—'}</td><td class="num">${a.lineas.length}</td><td class="num" style="color:${a.mermaTotal>0?'var(--red)':a.mermaTotal<0?'var(--accent-ink)':'var(--green)'};font-weight:600">${money(a.mermaTotal)}</td></tr>`).join('')}
     </tbody></table></div>`:''}
-    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Food cost por producto <span class="small">costo de receta vs precio</span>${esAdmin?`<button class="btn dark" id="aplicarMargen" style="font-size:13px;margin-left:auto">Aplicar margen a todos</button>`:''}</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
+    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Food cost por producto <span class="small">costo de receta vs precio</span>${esAdmin2?`<button class="btn dark" id="aplicarMargen" style="font-size:13px;margin-left:auto">Aplicar margen a todos</button>`:''}</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
     ${inv.foodCost.map(f=>`<tr><td>${f.nombre}</td><td class="num">${money(f.costo)}</td><td class="num">${money(f.precio)}</td><td class="num" style="color:${f.foodCostPct>40?'var(--red)':f.foodCostPct>35?'var(--accent-ink)':'var(--green)'};font-weight:600">${f.foodCostPct.toFixed(0)}%</td></tr>`).join('')}
     </tbody></table></div>`;
   document.querySelectorAll('[data-ent]').forEach(b=>b.onclick=()=>modalEntrada(b.dataset.ent,b.dataset.nom));
@@ -699,7 +700,7 @@ async function vReportes(){
     ${cortes.map(t=>`<tr><td>${new Date(t.cerrado).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(t.esperado.efectivo)}</td><td class="num">${money(t.conteo)}</td><td class="num" style="color:${t.diferencia<0?'var(--red)':t.diferencia>0?'var(--accent-ink)':'var(--green)'}">${money(t.diferencia)}</td><td><span class="chip ${t.resultado==='faltante'?'low':t.resultado==='cuadrado'?'ok':''}">${t.resultado}</span></td></tr>`).join('')}
   </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>
   <div id="finBlock"></div>`;
-  if(app.rol==='admin')renderFinanciero();
+  if(esAdmin())renderFinanciero();
 }
 async function renderFinanciero(){
   let fin;try{fin=await API.get('/api/reportes/financiero?sucursalId='+app.sucursalId);}catch{return;}
@@ -799,7 +800,7 @@ async function vAjustes(){
       <button class="btn accent" id="cfgSave">Guardar marca</button></div>
     <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center">Usuarios <button class="btn" id="addUser" style="font-size:13px">+ Usuario</button></h3>
       <table><thead><tr><th>Usuario</th><th>Rol</th><th></th></tr></thead><tbody>
-      ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${u.rol==='admin'?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
+      ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
   <div class="panel" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Canales de delivery <span class="small">la comisión se descuenta para tu venta neta · incluye 16% IVA sobre la comisión</span><button class="btn" id="addCanal" style="font-size:13px;margin-left:auto">+ Canal</button></h3>
@@ -829,7 +830,7 @@ function modalNuevoUsuario(){
   modal.innerHTML=`<h3>Nuevo usuario</h3><div class="sub">El nombre de usuario debe ser único</div>
     <div class="field"><label>Usuario</label><input id="usU" autocomplete="off"></div>
     <div class="field"><label>Contraseña</label><input id="usP" type="text" autocomplete="off"></div>
-    <div class="field"><label>Rol</label><select id="usR"><option value="cajero">Cajero (vende, no edita menú)</option><option value="admin">Administrador (todo)</option></select></div>
+    <div class="field"><label>Rol</label><select id="usR"><option value="cajero">Cajero — vende y maneja caja</option><option value="mesero">Mesero — mesas y comandas</option><option value="cocinero">Cocinero — pantalla de cocina</option><option value="repartidor">Repartidor — domicilios</option><option value="gerente">Gerente — gestión completa</option><option value="admin">Administrador — todo</option></select></div>
     <div class="field"><label>Sucursal (opcional)</label><select id="usS"><option value="">Todas</option>${app.sucursales.map(s=>`<option value="${s.id}">${s.nombre}</option>`).join('')}</select></div>
     <div class="modal-foot"><button class="btn-ghost" id="usCancel">Cancelar</button><button class="btn-primary" id="usOk">Crear</button></div>`;
   ov.classList.add('show');$('#usCancel').onclick=closeModal;
