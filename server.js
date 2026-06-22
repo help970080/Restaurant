@@ -207,6 +207,71 @@ app.delete('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
 }));
 
 // ---------------------------------------------------------------------------
+//  CANALES DE VENTA / DELIVERY  (DiDi Food, Rappi, Uber Eats, propio…)
+// ---------------------------------------------------------------------------
+async function ensureCanales() {
+  return withState((e) => {
+    if (!e.config.canales || !Object.keys(e.config.canales).length) e.config.canales = M.canalesDefault();
+    return e.config.canales;
+  });
+}
+app.get('/api/canales', wrap(async (req, res) => {
+  const canales = await ensureCanales();
+  res.json(Object.values(canales));
+}));
+app.post('/api/canales', soloAdmin, wrap(async (req, res) => {
+  const { nombre, comisionPct = 0 } = req.body || {};
+  if (!nombre) throw bad('Falta nombre');
+  const ch = await withState((e) => {
+    if (!e.config.canales) e.config.canales = M.canalesDefault();
+    const c = M.crearCanal({ nombre, comisionPct });
+    e.config.canales[c.id] = c; return c;
+  });
+  res.json(ch);
+}));
+app.patch('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
+  const patch = req.body || {};
+  const ch = await withState((e) => {
+    const c = (e.config.canales || {})[req.params.id];
+    if (!c) throw bad('Canal inexistente', 404);
+    if (patch.nombre != null) c.nombre = patch.nombre;
+    if (patch.comisionPct != null) c.comisionPct = M.r2(+patch.comisionPct);
+    if (patch.activo != null) c.activo = !!patch.activo;
+    return c;
+  });
+  res.json(ch);
+}));
+app.delete('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
+  if (req.params.id === 'local') throw bad('No se puede eliminar el canal local');
+  await withState((e) => { if (e.config.canales) delete e.config.canales[req.params.id]; });
+  res.json({ ok: true });
+}));
+
+// Webhook para inyectar pedidos desde una plataforma (requiere convenio de socio).
+// Protegido con el token de integración del restaurante (config.integracionToken).
+app.post('/api/integraciones/:canal/webhook', soloAdmin, wrap(async (req, res) => {
+  // Nota: en producción este endpoint se expone con un token por-restaurante y lo llama
+  // la plataforma (Uber/Rappi/DiDi) tras firmar convenio. Aquí crea un pedido normalizado.
+  const { sucursalId, items = [], cliente = null, externoId = null } = req.body || {};
+  if (!sucursalId || !items.length) throw bad('Falta sucursalId o items');
+  const canalId = req.params.canal;
+  const ped = await withState((e, c) => {
+    const suc = e.sucursales[sucursalId];
+    if (!suc) throw bad('Sucursal inexistente');
+    const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio: 'domicilio', cliente, usuario: 'integracion', canalId });
+    p.externoId = externoId;
+    for (const it of items) {
+      const prod = e.menu.productos[it.productoId];
+      if (prod) p.lineas.push(M.crearLinea(prod, e, { cantidad: it.cantidad || 1, modsElegidos: it.modsElegidos || [], notas: it.notas || '' }));
+    }
+    M.recalcularPedido(p);
+    M.mandarComanda(p); // entra directo a cocina
+    return p;
+  });
+  res.json({ ok: true, folio: ped.folio });
+}));
+
+// ---------------------------------------------------------------------------
 //  MENÚ
 // ---------------------------------------------------------------------------
 app.get('/api/menu', wrap(async (req, res) => {
@@ -308,7 +373,7 @@ app.get('/api/caja/cortes', wrap(async (req, res) => {
 //  PEDIDOS
 // ---------------------------------------------------------------------------
 app.post('/api/pedidos', wrap(async (req, res) => {
-  const { sucursalId, tipoServicio = 'mostrador', mesaId = null, cliente = null } = req.body || {};
+  const { sucursalId, tipoServicio = 'mostrador', mesaId = null, cliente = null, canalId = 'local' } = req.body || {};
   if (!sucursalId) throw bad('Falta sucursalId');
   const ped = await withState((e, c) => {
     const suc = e.sucursales[sucursalId];
@@ -318,11 +383,11 @@ app.post('/api/pedidos', wrap(async (req, res) => {
       if (!mesa) throw bad('Mesa inexistente');
       if (mesa.pedidoFolio && e.pedidos[mesa.pedidoFolio] && e.pedidos[mesa.pedidoFolio].estado === 'abierto')
         return e.pedidos[mesa.pedidoFolio]; // ya tiene cuenta abierta
-      const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, mesaId, cliente, usuario: c.username });
+      const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, mesaId, cliente, usuario: c.username, canalId: 'local' });
       mesa.estado = 'ocupada'; mesa.pedidoFolio = p.folio;
       return p;
     }
-    return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username });
+    return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username, canalId });
   });
   res.json(ped);
 }));
@@ -356,7 +421,7 @@ app.delete('/api/pedidos/:folio/lineas/:lineaId', wrap(async (req, res) => {
 
 app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
   const { folio } = req.params;
-  const { costoEnvio, propina, descuento, cliente } = req.body || {};
+  const { costoEnvio, propina, descuento, cliente, canalId } = req.body || {};
   const ped = await withState((e) => {
     const p = e.pedidos[folio];
     if (!p) throw bad('Pedido inexistente', 404);
@@ -364,6 +429,7 @@ app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
     if (propina != null) p.propina = propina;
     if (descuento !== undefined) p.descuento = descuento;
     if (cliente !== undefined) p.cliente = cliente;
+    if (canalId !== undefined) p.canalId = canalId;
     return M.recalcularPedido(p);
   });
   res.json(ped);
@@ -601,10 +667,16 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
   const e = await readState();
   const { sucursalId } = req.query;
   const peds = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado' && (!sucursalId || p.sucursalId === sucursalId));
+  const canales = e.config.canales || M.canalesDefault();
   let ingresos = 0, cogs = 0, descuentos = 0;
   const porProd = {};
+  const porCanal = {};
   for (const p of peds) {
     ingresos = M.r2(ingresos + p.total);
+    const cid = p.canalId || 'local';
+    porCanal[cid] = porCanal[cid] || { ventas: 0, pedidos: 0 };
+    porCanal[cid].ventas = M.r2(porCanal[cid].ventas + p.total);
+    porCanal[cid].pedidos++;
     if (p.descuento) {
       const subt = p.lineas.reduce((s, l) => s + l.importe, 0);
       const d = p.descuento.tipo === 'porcentaje' ? subt * p.descuento.valor / 100 : p.descuento.valor;
@@ -622,6 +694,13 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     }
   }
   const margenBruto = M.r2(ingresos - cogs);
+  const canalesOut = Object.entries(porCanal).map(([cid, d]) => {
+    const ch = canales[cid] || { nombre: cid, comisionPct: 0 };
+    const comision = M.r2(d.ventas * ch.comisionPct / 100);
+    const comisionConIVA = M.r2(comision * 1.16); // 16% IVA sobre la comisión
+    return { canalId: cid, nombre: ch.nombre, comisionPct: ch.comisionPct, ventas: d.ventas, pedidos: d.pedidos, comision: comisionConIVA, neto: M.r2(d.ventas - comisionConIVA) };
+  }).sort((a, b) => b.ventas - a.ventas);
+  const comisionTotal = M.r2(canalesOut.reduce((s, c) => s + c.comision, 0));
   const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
     nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
     margen: M.r2(d.ingreso - d.costo), margenPct: d.ingreso ? M.r2((d.ingreso - d.costo) / d.ingreso * 100) : 0,
@@ -632,6 +711,8 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     foodCostPct: ingresos ? M.r2(cogs / ingresos * 100) : 0,
     descuentos, pedidos: peds.length,
     ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
+    comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
+    canales: canalesOut,
     rentabilidad,
   });
 }));
