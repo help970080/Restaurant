@@ -323,7 +323,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.1 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -652,7 +652,9 @@ async function vInventario(){
     ${faltantes.length?`<div class="panel" style="margin-bottom:16px;border-color:var(--red)"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">🛒 Lista de compras <span class="small">${faltantes.length} insumo(s) en o bajo el mínimo</span><span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="copiarCompra" style="font-size:13px">Copiar</button><button class="btn dark" id="imprimirCompra" style="font-size:13px">Imprimir</button></span></h3>
       <table><thead><tr><th>Insumo</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Sugerido</th><th class="num">Costo est.</th></tr></thead><tbody>
       ${faltantes.map(i=>`<tr><td style="font-weight:600">${i.nombre}</td><td class="num" style="color:var(--red)">${i.stock} ${i.unidad}</td><td class="num">${i.stockMin}</td><td class="num" style="font-weight:600">${i.sug} ${i.unidad}</td><td class="num">${money(i.costoSug)}</td></tr>`).join('')}
-      </tbody><tfoot><tr><td colspan="4" class="num"><b>Total estimado</b></td><td class="num"><b>${money(totalCompra)}</b></td></tr></tfoot></table></div>`:''}
+      </tbody><tfoot><tr><td colspan="4" class="num"><b>Total estimado</b></td><td class="num"><b>${money(totalCompra)}</b></td></tr></tfoot></table></div>`
+    :`<div class="panel" style="margin-bottom:16px"><h3>🛒 Lista de compras <span class="small">insumos por comprar según tu stock mínimo</span></h3>
+      <div class="empty" style="color:var(--green)">✓ Todo tu inventario está sobre el mínimo. Aquí aparecerán automáticamente los insumos a comprar cuando alguno baje de su stock mínimo (con cantidad sugerida y costo estimado).</div></div>`}
     <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin2?`<span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="newInsumo" style="font-size:13px">+ Insumo</button><button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button></span>`:''}</h3>
     <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
     ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 11px;font-size:12px;min-height:auto">+ Entrada</button>${esAdmin2?` <button class="btn" data-edit='${i.id}' style="padding:8px 11px;font-size:12px;min-height:auto">Editar</button>`:''}</td></tr>`).join('')}
