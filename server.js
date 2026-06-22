@@ -35,6 +35,7 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   const u = sys.usuarios[username];
   if (!u || !bcrypt.compareSync(password, u.passHash)) throw bad('Usuario o contraseña incorrectos', 401);
   const token = firmarToken({ row: u.row, rol: u.rol, username, sucursalId: u.sucursalId || null });
+  if (u.rol === 'superadmin') return res.json({ token, tenant: { nombre: 'Super Admin', logo: null, rol: 'superadmin' } });
   const tdoc = await db.loadState(u.row);
   res.json({ token, tenant: { nombre: tdoc ? tdoc.meta.nombre : '', logo: (tdoc && tdoc.config && tdoc.config.logo) || null, rol: u.rol } });
 }));
@@ -60,6 +61,18 @@ app.post('/api/admin/provision', wrap(async (req, res) => {
   res.json({ ok: true, row, nombre, sucursales: Object.values(doc.sucursales).map((s) => ({ id: s.id, nombre: s.nombre, codigo: s.codigo })) });
 }));
 
+// Crear el SUPER ADMIN (protegido por SETUP_TOKEN). No pertenece a ningún restaurante.
+app.post('/api/super/provision', wrap(async (req, res) => {
+  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
+  const { username, password } = req.body || {};
+  if (!username || !password) throw bad('Falta usuario o contraseña');
+  const sys = await db.loadSys();
+  if (sys.usuarios[username]) throw bad('Ese usuario ya existe', 409);
+  sys.usuarios[username] = { row: 0, rol: 'superadmin', passHash: bcrypt.hashSync(password, 10) };
+  await db.saveSys(sys);
+  res.json({ ok: true, username });
+}));
+
 // A partir de aquí, todo requiere JWT y corre dentro del contexto del tenant
 app.use('/api', auth);
 
@@ -68,12 +81,47 @@ function soloAdmin(req, res, next) {
   if (ctx().rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
   next();
 }
+function soloSuper(req, res, next) {
+  if (ctx().rol !== 'superadmin') return res.status(403).json({ error: 'Solo super admin' });
+  next();
+}
+
+// ---------------------------------------------------------------------------
+//  SUPER ADMIN — gestiona restaurantes (tenants)
+// ---------------------------------------------------------------------------
+app.get('/api/super/tenants', soloSuper, wrap(async (req, res) => {
+  const sys = await db.loadSys();
+  const out = [];
+  for (const [row, t] of Object.entries(sys.tenants)) {
+    const usuarios = Object.values(sys.usuarios).filter((u) => u.row === +row).length;
+    let sucursales = 0;
+    try { const doc = await db.loadState(+row); sucursales = doc ? Object.keys(doc.sucursales).length : 0; } catch {}
+    out.push({ row: +row, nombre: t.nombre, usuarios, sucursales });
+  }
+  res.json(out);
+}));
+app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
+  const { nombre, adminUser, adminPass } = req.body || {};
+  if (!nombre || !adminUser || !adminPass) throw bad('Falta nombre, adminUser o adminPass');
+  const sys = await db.loadSys();
+  if (sys.usuarios[adminUser]) throw bad('Ese usuario admin ya existe', 409);
+  const row = sys.nextRow || 1;
+  const doc = buildTenantDoc(nombre);
+  await db.insertState(row, doc);
+  sys.tenants[row] = { nombre };
+  sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
+  sys.nextRow = row + 1;
+  await db.saveSys(sys);
+  res.json({ ok: true, row, nombre });
+}));
 
 // ---------------------------------------------------------------------------
 //  IDENTIDAD
 // ---------------------------------------------------------------------------
 app.get('/api/me', wrap(async (req, res) => {
-  const c = ctx(); const e = await readState();
+  const c = ctx();
+  if (c.rol === 'superadmin') return res.json({ username: c.username, rol: 'superadmin', sucursalId: null, tenant: { nombre: 'Super Admin', logo: null } });
+  const e = await readState();
   res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null } });
 }));
 
@@ -401,9 +449,38 @@ app.post('/api/cocina/:folio/entregar', wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/inventario', wrap(async (req, res) => {
   const e = await readState();
-  const insumos = Object.values(e.insumos).map((i) => ({ ...i, bajo: i.stock <= i.stockMin }));
+  const insumos = Object.values(e.insumos).map((i) => ({ ...i, bajo: i.stock <= i.stockMin, valor: M.r2(i.stock * i.costoUnitario) }));
   const foodCost = Object.values(e.menu.productos).filter((p) => p.receta.length).map((p) => ({ id: p.id, nombre: p.nombre, costo: M.costoReceta(e, p), precio: p.precioBase, foodCostPct: M.foodCostPct(e, p) }));
-  res.json({ insumos, foodCost });
+  const valuacion = M.r2(insumos.reduce((s, i) => s + i.valor, 0));
+  res.json({ insumos, foodCost, valuacion });
+}));
+// Conteo físico: compara teórico vs físico, calcula merma en $ y ajusta el stock
+app.post('/api/inventario/conteo', soloAdmin, wrap(async (req, res) => {
+  const { conteos = [] } = req.body || {};
+  if (!conteos.length) throw bad('No hay conteos');
+  const out = await withState((e, c) => {
+    if (!e.conteos) e.conteos = [];
+    const lineas = []; let mermaTotal = 0;
+    for (const ct of conteos) {
+      const i = e.insumos[ct.insumoId];
+      if (!i || ct.fisico == null) continue;
+      const teorico = i.stock, fisico = M.r2(ct.fisico);
+      const diff = M.r2(fisico - teorico);
+      const valor = M.r2((teorico - fisico) * i.costoUnitario); // positivo = merma (pérdida)
+      lineas.push({ insumoId: i.id, nombre: i.nombre, teorico, fisico, diff, valor });
+      mermaTotal = M.r2(mermaTotal + valor);
+      i.stock = fisico; // ajustar a lo contado
+    }
+    const audit = { id: M.uid('aud'), fecha: new Date().toISOString(), usuario: c.username, mermaTotal, lineas };
+    e.conteos.unshift(audit);
+    if (e.conteos.length > 60) e.conteos = e.conteos.slice(0, 60);
+    return audit;
+  });
+  res.json(out);
+}));
+app.get('/api/inventario/auditorias', wrap(async (req, res) => {
+  const e = await readState();
+  res.json((e.conteos || []).slice(0, 20));
 }));
 app.post('/api/inventario/insumos', wrap(async (req, res) => {
   const { nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 } = req.body || {};
@@ -473,6 +550,48 @@ app.get('/api/reportes/resumen', wrap(async (req, res) => {
 
 // estado completo (debug / export)
 app.get('/api/estado', wrap(async (req, res) => { res.json(await readState()); }));
+
+// ---------------------------------------------------------------------------
+//  REPORTE FINANCIERO (admin)  — COGS teórico, margen, food cost, rentabilidad
+// ---------------------------------------------------------------------------
+app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId } = req.query;
+  const peds = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado' && (!sucursalId || p.sucursalId === sucursalId));
+  let ingresos = 0, cogs = 0, descuentos = 0;
+  const porProd = {};
+  for (const p of peds) {
+    ingresos = M.r2(ingresos + p.total);
+    if (p.descuento) {
+      const subt = p.lineas.reduce((s, l) => s + l.importe, 0);
+      const d = p.descuento.tipo === 'porcentaje' ? subt * p.descuento.valor / 100 : p.descuento.valor;
+      descuentos = M.r2(descuentos + d);
+    }
+    for (const l of p.lineas) {
+      const prod = e.menu.productos[l.productoId];
+      const costoLinea = prod ? M.r2(M.costoReceta(e, prod) * l.cantidad) : 0;
+      cogs = M.r2(cogs + costoLinea);
+      const k = l.nombre;
+      porProd[k] = porProd[k] || { unidades: 0, ingreso: 0, costo: 0 };
+      porProd[k].unidades += l.cantidad;
+      porProd[k].ingreso = M.r2(porProd[k].ingreso + l.importe);
+      porProd[k].costo = M.r2(porProd[k].costo + costoLinea);
+    }
+  }
+  const margenBruto = M.r2(ingresos - cogs);
+  const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
+    nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
+    margen: M.r2(d.ingreso - d.costo), margenPct: d.ingreso ? M.r2((d.ingreso - d.costo) / d.ingreso * 100) : 0,
+  })).sort((a, b) => b.margen - a.margen);
+  res.json({
+    ingresos, cogs, margenBruto,
+    margenBrutoPct: ingresos ? M.r2(margenBruto / ingresos * 100) : 0,
+    foodCostPct: ingresos ? M.r2(cogs / ingresos * 100) : 0,
+    descuentos, pedidos: peds.length,
+    ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
+    rentabilidad,
+  });
+}));
 
 // Fallback SPA: cualquier ruta que no sea /api sirve el frontend
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
