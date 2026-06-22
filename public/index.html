@@ -117,6 +117,9 @@
   .svc{display:flex;gap:6px;padding:12px 14px 0}
   .svc button{flex:1;padding:9px;font-weight:600;font-size:13px;background:var(--paper);color:var(--muted);border:1px solid var(--line)}
   .svc button.active{background:var(--ink);color:#e8e3d8;border-color:var(--ink)}
+  .canalsel{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px 0}
+  .canalchip{padding:8px 12px;font-size:12px;font-weight:600;border-radius:999px;background:var(--paper);color:var(--muted);border:1px solid var(--line)}
+  .canalchip.active{background:var(--accent);color:#fff;border-color:var(--accent)}
   .cli{padding:10px 14px 0}.cli input{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px;font-size:13px}
   .lines{flex:1;overflow-y:auto;padding:12px 14px;min-height:50px}
   .empty{color:var(--muted);text-align:center;padding:30px 8px;font-size:14px;line-height:1.5}
@@ -250,7 +253,7 @@ function mesaArt(estado){
 //  Estado de la app
 // ===========================================================================
 const app={tenant:null,rol:null,sucursales:[],sucursalId:null,turno:null,menu:null,vista:'resumen',
-  pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null}};
+  pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null,canalId:'local'}};
 let kdsTimer=null;
 
 const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
@@ -279,6 +282,7 @@ async function boot(){
     if(!app.sucursalId)app.sucursalId=app.miSucursal||app.sucursales[0].id;
     await refreshTurno();
     app.menu=await API.get('/api/menu');
+    try{app.canales=await API.get('/api/canales');}catch{app.canales=[];}
     renderShell();go('resumen');
   }catch(e){API.token=null;renderLogin();}
 }
@@ -379,6 +383,7 @@ function vPOS(){
       <div class="pgrid">${prodsDe(app.pos.cat).map(p=>`<button class="prod" data-prod="${p.id}">${prodArt(p,cat.nombre)}<div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`).join('')}</div></div>
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}${c.comisionPct?` · ${c.comisionPct}%`:''}</button>`).join('')}</div>`:''}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="cli"><input id="cliNombre" placeholder="Cliente" value="${ped&&ped.cliente?ped.cliente.nombre||'':''}"><input id="cliDir" placeholder="Dirección" value="${ped&&ped.cliente?ped.cliente.direccion||'':''}"><input id="cliEnvio" type="number" placeholder="Costo de envío" value="${ped?ped.costoEnvio||'':''}"></div>`:''}
       <div class="lines" id="lines"></div>
       <div class="totals">
@@ -391,6 +396,7 @@ function vPOS(){
       </div></div></div>`;
   document.querySelectorAll('.cat').forEach(b=>b.onclick=()=>{app.pos.cat=b.dataset.cat;vPOS();});
   document.querySelectorAll('.svc button').forEach(b=>b.onclick=()=>onSvc(b.dataset.svc));
+  document.querySelectorAll('[data-canal]').forEach(b=>b.onclick=()=>onCanal(b.dataset.canal));
   document.querySelectorAll('.prod').forEach(b=>b.onclick=()=>onProducto(app.menu.productos[b.dataset.prod]));
   if($('#salirMesa'))$('#salirMesa').onclick=()=>{app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat};vPOS();};
   if($('#cliEnvio'))$('#cliEnvio').addEventListener('change',saveCliente);
@@ -406,10 +412,16 @@ function onSvc(s){
   if(app.pos.pedido&&app.pos.pedido.lineas.length){toast('Cobra o vacía el pedido actual antes de cambiar');return;}
   app.pos.tipoServicio=s;app.pos.folio=null;app.pos.pedido=null;vPOS();
 }
+async function onCanal(id){
+  app.pos.canalId=id;
+  if(app.pos.pedido){try{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{canalId:id});}catch(e){}}
+  document.querySelectorAll('[data-canal]').forEach(b=>b.classList.toggle('active',b.dataset.canal===id));
+}
 async function asegurarPedido(){
   if(app.pos.pedido)return app.pos.pedido;
   const body={sucursalId:app.sucursalId,tipoServicio:app.pos.tipoServicio};
   if(app.pos.tipoServicio==='mesa')body.mesaId=app.pos.mesaId;
+  else body.canalId=app.pos.canalId||'local';
   const p=await API.post('/api/pedidos',body);app.pos.folio=p.folio;app.pos.pedido=p;return p;
 }
 async function onProducto(prod){
@@ -712,6 +724,11 @@ async function renderFinanciero(){
       <div class="bar-row"><div class="bn">Margen bruto</div><div class="bt"><div class="bf" style="width:${fin.margenBrutoPct}%;background:var(--green)"></div></div><div class="bv">${fin.margenBrutoPct}%</div></div>
       <div style="color:var(--muted);font-size:13px;margin-top:10px">El margen bruto debe cubrir nómina, renta, servicios y dejar utilidad.</div></div>
   </div>
+  ${(fin.canales&&fin.canales.length)?`<div class="panel" style="margin-top:16px"><h3>Ventas por canal <span class="small">comisión incluye 16% IVA · venta neta = lo que te queda</span></h3>
+    <div class="kpis" style="margin:0 0 12px"><div class="kpi"><div class="lab">Comisión total (delivery)</div><div class="val" style="color:var(--red)">${money(fin.comisionTotal)}</div></div><div class="kpi accent"><div class="lab">Venta neta</div><div class="val">${money(fin.ventaNeta)}</div></div></div>
+    <table><thead><tr><th>Canal</th><th class="num">Pedidos</th><th class="num">Ventas</th><th class="num">Comisión</th><th class="num">Neto</th></tr></thead><tbody>
+    ${fin.canales.map(c=>`<tr><td style="font-weight:600">${c.nombre}${c.comisionPct?` <span class="small">${c.comisionPct}%</span>`:''}</td><td class="num">${c.pedidos}</td><td class="num">${money(c.ventas)}</td><td class="num" style="color:${c.comision>0?'var(--red)':'inherit'}">${money(c.comision)}</td><td class="num" style="font-weight:600">${money(c.neto)}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
   <div class="panel" style="margin-top:16px"><h3>Rentabilidad por producto <span class="small">menu engineering · ordenado por margen que aporta</span></h3>
     ${r.length?`<table><thead><tr><th>Producto</th><th class="num">Unidades</th><th class="num">Ingreso</th><th class="num">Costo</th><th class="num">Margen</th><th class="num">Margen %</th></tr></thead><tbody>
     ${r.map(x=>`<tr><td>${x.nombre}</td><td class="num">${x.unidades}</td><td class="num">${money(x.ingreso)}</td><td class="num">${money(x.costo)}</td><td class="num" style="font-weight:600">${money(x.margen)}</td><td class="num" style="color:${x.margenPct>=60?'var(--green)':x.margenPct>=45?'var(--accent-ink)':'var(--red)'}">${x.margenPct}%</td></tr>`).join('')}
@@ -765,7 +782,7 @@ function modalNuevoCombo(){
 //  AJUSTES  (marca + usuarios) (admin)
 // ===========================================================================
 async function vAjustes(){
-  const [cfg,usuarios]=await Promise.all([API.get('/api/config'),API.get('/api/usuarios')]);
+  const [cfg,usuarios,canales]=await Promise.all([API.get('/api/config'),API.get('/api/usuarios'),API.get('/api/canales')]);
   $('#view').innerHTML=`
   <div class="cols">
     <div class="panel"><h3>Marca del restaurante</h3>
@@ -780,12 +797,29 @@ async function vAjustes(){
       <table><thead><tr><th>Usuario</th><th>Rol</th><th></th></tr></thead><tbody>
       ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${u.rol==='admin'?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
-  </div>`;
+  </div>
+  <div class="panel" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Canales de delivery <span class="small">la comisión se descuenta para tu venta neta · incluye 16% IVA sobre la comisión</span><button class="btn" id="addCanal" style="font-size:13px;margin-left:auto">+ Canal</button></h3>
+    <table><thead><tr><th>Canal</th><th class="num">Comisión</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${canales.map(c=>`<tr><td style="font-weight:600">${c.nombre}${c.esApp?' <span class="small">app</span>':''}</td><td class="num"><input data-com="${c.id}" type="number" class="mono" value="${c.comisionPct}" style="width:72px;padding:7px;text-align:right">%</td><td><span class="chip ${c.activo?'ok':'low'}">${c.activo?'Activo':'Inactivo'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-toggleCanal="${c.id}" data-act="${c.activo}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">${c.activo?'Desactivar':'Activar'}</button>${c.id!=='local'?`<button class="btn" data-delCanal="${c.id}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`:''}</td></tr>`).join('')}
+    </tbody></table>
+    <div style="color:var(--muted);font-size:13px;margin-top:10px">Comisiones típicas 2026: DiDi Food 15–30%, Rappi 20–35%, Uber Eats 25–35%. Recibir pedidos en automático desde la app requiere convenio de socio con la plataforma.</div></div>`;
   let logoData=cfg.logo||null;
   $('#logoFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>700000){toast('La imagen es muy pesada (máx ~700KB)');return;}const rd=new FileReader();rd.onload=()=>{logoData=rd.result;$('#logoPrev').src=logoData;$('#logoPrev').style.display='';$('#logoEmpty').style.display='none';};rd.readAsDataURL(f);};
   $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
   $('#addUser').onclick=modalNuevoUsuario;
   document.querySelectorAll('[data-du]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar usuario '+b.dataset.du+'?'))return;try{await API.del('/api/usuarios/'+encodeURIComponent(b.dataset.du));toast('Usuario eliminado');vAjustes();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-com]').forEach(inp=>inp.onchange=async()=>{try{await API.patch('/api/canales/'+inp.dataset.com,{comisionPct:+inp.value||0});app.canales=await API.get('/api/canales');toast('Comisión actualizada');}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-togglecanal]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/canales/'+b.dataset.togglecanal,{activo:b.dataset.act!=='true'});app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-delcanal]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar este canal?'))return;try{await API.del('/api/canales/'+b.dataset.delcanal);app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
+  $('#addCanal').onclick=modalNuevoCanal;
+}
+function modalNuevoCanal(){
+  modal.innerHTML=`<h3>Nuevo canal</h3><div class="sub">Una plataforma o forma de venta con su comisión</div>
+    <div class="field"><label>Nombre</label><input id="caNom" placeholder="Ej. iFood, Pedidos propios"></div>
+    <div class="field"><label>Comisión (%)</label><input id="caCom" type="number" class="mono" value="0"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="caCancel">Cancelar</button><button class="btn-primary" id="caOk">Crear</button></div>`;
+  ov.classList.add('show');$('#caCancel').onclick=closeModal;
+  $('#caOk').onclick=async()=>{const n=$('#caNom').value.trim();if(!n){toast('Falta nombre');return;}try{await API.post('/api/canales',{nombre:n,comisionPct:+$('#caCom').value||0});app.canales=await API.get('/api/canales');closeModal();toast('Canal creado');vAjustes();}catch(e){toast(e.message);}};
 }
 function modalNuevoUsuario(){
   modal.innerHTML=`<h3>Nuevo usuario</h3><div class="sub">El nombre de usuario debe ser único</div>
