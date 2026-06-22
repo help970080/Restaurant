@@ -78,7 +78,8 @@ app.use('/api', auth);
 
 // Solo administradores
 function soloAdmin(req, res, next) {
-  if (ctx().rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
+  const r = ctx().rol;
+  if (r !== 'admin' && r !== 'gerente') return res.status(403).json({ error: 'Solo administradores o gerentes' });
   next();
 }
 function soloSuper(req, res, next) {
