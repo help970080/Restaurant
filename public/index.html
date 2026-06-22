@@ -1,878 +1,1191 @@
-'use strict';
-// ============================================================================
-//  server.js — API de ComandaPro
-// ============================================================================
-
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const bcrypt = require('bcryptjs');
-const db = require('./db');
-const M = require('./model');
-const { firmarToken, auth, ctx, readState, withState } = require('./context');
-const { buildTenantDoc } = require('./seed');
-
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '4mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
-  if (!err.status || err.status >= 500) console.error(err);
-  res.status(err.status || 500).json({ error: err.message || 'Error interno' });
-});
-const bad = (msg, status = 400) => { const e = new Error(msg); e.status = status; return e; };
-
-app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
-
-// ---------------------------------------------------------------------------
-//  AUTH
-// ---------------------------------------------------------------------------
-app.post('/api/auth/login', wrap(async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) throw bad('Faltan credenciales');
-  const sys = await db.loadSys();
-  const u = sys.usuarios[username];
-  if (!u || !bcrypt.compareSync(password, u.passHash)) throw bad('Usuario o contraseña incorrectos', 401);
-  const token = firmarToken({ row: u.row, rol: u.rol, username, sucursalId: u.sucursalId || null });
-  if (u.rol === 'superadmin') return res.json({ token, tenant: { nombre: 'Super Admin', logo: null, rol: 'superadmin' } });
-  const tdoc = await db.loadState(u.row);
-  res.json({ token, tenant: { nombre: tdoc ? tdoc.meta.nombre : '', logo: (tdoc && tdoc.config && tdoc.config.logo) || null, rol: u.rol } });
-}));
-
-// ---------------------------------------------------------------------------
-//  PROVISIÓN DE TENANT  (protegido por SETUP_TOKEN, no por JWT)
-// ---------------------------------------------------------------------------
-app.post('/api/admin/provision', wrap(async (req, res) => {
-  const setup = process.env.SETUP_TOKEN;
-  if (!setup) throw bad('SETUP_TOKEN no configurado', 500);
-  if (req.headers['x-setup-token'] !== setup) throw bad('No autorizado', 401);
-  const { nombre = 'Jefe Burgers', adminUser, adminPass } = req.body || {};
-  if (!adminUser || !adminPass) throw bad('Falta adminUser/adminPass');
-  const sys = await db.loadSys();
-  if (sys.usuarios[adminUser]) throw bad('Ese usuario ya existe', 409);
-  const row = sys.nextRow || 1;
-  const doc = buildTenantDoc(nombre);
-  await db.insertState(row, doc);
-  sys.tenants[row] = { nombre };
-  sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
-  sys.nextRow = row + 1;
-  await db.saveSys(sys);
-  res.json({ ok: true, row, nombre, sucursales: Object.values(doc.sucursales).map((s) => ({ id: s.id, nombre: s.nombre, codigo: s.codigo })) });
-}));
-
-// Crear el SUPER ADMIN (protegido por SETUP_TOKEN). No pertenece a ningún restaurante.
-app.post('/api/super/provision', wrap(async (req, res) => {
-  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
-  const { username, password } = req.body || {};
-  if (!username || !password) throw bad('Falta usuario o contraseña');
-  const sys = await db.loadSys();
-  if (sys.usuarios[username]) throw bad('Ese usuario ya existe', 409);
-  sys.usuarios[username] = { row: 0, rol: 'superadmin', passHash: bcrypt.hashSync(password, 10) };
-  await db.saveSys(sys);
-  res.json({ ok: true, username });
-}));
-
-// A partir de aquí, todo requiere JWT y corre dentro del contexto del tenant
-app.use('/api', auth);
-
-// Solo administradores
-function soloAdmin(req, res, next) {
-  const r = ctx().rol;
-  if (r !== 'admin' && r !== 'gerente') return res.status(403).json({ error: 'Solo administradores o gerentes' });
-  next();
-}
-function soloSuper(req, res, next) {
-  if (ctx().rol !== 'superadmin') return res.status(403).json({ error: 'Solo super admin' });
-  next();
-}
-
-// ---------------------------------------------------------------------------
-//  SUPER ADMIN — gestiona restaurantes (tenants)
-// ---------------------------------------------------------------------------
-app.get('/api/super/tenants', soloSuper, wrap(async (req, res) => {
-  const sys = await db.loadSys();
-  const out = [];
-  for (const [row, t] of Object.entries(sys.tenants)) {
-    const usuarios = Object.values(sys.usuarios).filter((u) => u.row === +row).length;
-    let sucursales = 0;
-    try { const doc = await db.loadState(+row); sucursales = doc ? Object.keys(doc.sucursales).length : 0; } catch {}
-    out.push({ row: +row, nombre: t.nombre, usuarios, sucursales });
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jefe Burgers — Consola</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#17150f;--ink2:#221f17;--paper:#f4f1ea;--card:#fff;--line:#e5dfd2;
+    --accent:#e0841a;--accent-ink:#7a4708;--accent-bg:#fbeed8;
+    --green:#2f8f4e;--green-bg:#e7f3ea;--red:#c8472f;--red-bg:#fbe9e4;
+    --blue:#3b6ea5;--blue-bg:#e7eef6;--muted:#8c857a;--mono:'Spline Sans Mono',monospace;
   }
-  res.json(out);
-}));
-app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
-  const { nombre, adminUser, adminPass } = req.body || {};
-  if (!nombre || !adminUser || !adminPass) throw bad('Falta nombre, adminUser o adminPass');
-  const sys = await db.loadSys();
-  if (sys.usuarios[adminUser]) throw bad('Ese usuario admin ya existe', 409);
-  const row = sys.nextRow || 1;
-  const doc = buildTenantDoc(nombre);
-  await db.insertState(row, doc);
-  sys.tenants[row] = { nombre };
-  sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
-  sys.nextRow = row + 1;
-  await db.saveSys(sys);
-  res.json({ ok: true, row, nombre });
-}));
+  *{box-sizing:border-box}html,body{margin:0;height:100%}
+  body{font-family:'Inter',system-ui,sans-serif;color:var(--ink);background:var(--paper);font-size:15px;height:100vh;overflow:hidden}
+  button{font-family:inherit;cursor:pointer;border:none;border-radius:8px}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  #app{height:100%}
 
-// ---------------------------------------------------------------------------
-//  IDENTIDAD
-// ---------------------------------------------------------------------------
-app.get('/api/me', wrap(async (req, res) => {
-  const c = ctx();
-  if (c.rol === 'superadmin') return res.json({ username: c.username, rol: 'superadmin', sucursalId: null, tenant: { nombre: 'Super Admin', logo: null } });
-  const e = await readState();
-  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null } });
-}));
+  /* LOGIN */
+  .login{height:100%;display:flex;align-items:center;justify-content:center;background:var(--ink)}
+  .login-card{background:var(--card);border-radius:20px;padding:34px 30px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+  .login-card .logo{font-family:'Bricolage Grotesque';font-weight:700;font-size:30px;text-align:center;margin-bottom:4px}
+  .login-card .logo b{color:var(--accent)}
+  .login-card .tg{text-align:center;color:var(--muted);font-size:13px;margin-bottom:22px}
+  .login-card label{display:block;font-weight:600;font-size:13px;margin:12px 0 5px}
+  .login-card input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font-family:inherit;font-size:15px}
+  .login-card button{width:100%;padding:13px;background:var(--accent);color:#2c1c04;font-weight:700;font-size:16px;margin-top:20px}
+  .login-card .err{color:var(--red);font-size:13px;text-align:center;margin-top:12px;min-height:18px}
 
-// ---------------------------------------------------------------------------
-//  USUARIOS (admin) — viven en la fila SYS
-// ---------------------------------------------------------------------------
-app.get('/api/usuarios', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const sys = await db.loadSys();
-  const arr = Object.entries(sys.usuarios).filter(([, d]) => d.row === c.row).map(([u, d]) => ({ username: u, rol: d.rol, sucursalId: d.sucursalId || null }));
-  res.json(arr);
-}));
-app.post('/api/usuarios', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const { username, password, rol = 'cajero', sucursalId = null } = req.body || {};
-  if (!username || !password) throw bad('Falta usuario o contraseña');
-  const sys = await db.loadSys();
-  if (sys.usuarios[username]) throw bad('Ese usuario ya existe (debe ser único)', 409);
-  sys.usuarios[username] = { row: c.row, rol, passHash: bcrypt.hashSync(password, 10), sucursalId };
-  await db.saveSys(sys);
-  res.json({ username, rol, sucursalId });
-}));
-app.patch('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const u = req.params.username; const { password, rol, sucursalId } = req.body || {};
-  const sys = await db.loadSys(); const d = sys.usuarios[u];
-  if (!d || d.row !== c.row) throw bad('Usuario inexistente', 404);
-  if (password) d.passHash = bcrypt.hashSync(password, 10);
-  if (rol) d.rol = rol;
-  if (sucursalId !== undefined) d.sucursalId = sucursalId;
-  await db.saveSys(sys);
-  res.json({ ok: true });
-}));
-app.delete('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const u = req.params.username;
-  if (u === c.username) throw bad('No puedes eliminar tu propio usuario');
-  const sys = await db.loadSys(); const d = sys.usuarios[u];
-  if (!d || d.row !== c.row) throw bad('Usuario inexistente', 404);
-  delete sys.usuarios[u]; await db.saveSys(sys);
-  res.json({ ok: true });
-}));
+  /* SHELL */
+  .shell{display:flex;height:100%}
+  .sidebar{width:218px;background:var(--ink);color:#e8e3d8;display:flex;flex-direction:column;flex:0 0 auto}
+  .logo{font-family:'Bricolage Grotesque';font-weight:700;font-size:21px;letter-spacing:-.02em;padding:18px 20px 14px}
+  .logo b{color:var(--accent)}
+  .brandlogo{max-height:40px;max-width:172px;display:block;object-fit:contain}
+  .brandtext{font-family:'Bricolage Grotesque';font-weight:700;font-size:20px;line-height:1.1;display:block}
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .checagrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+  .checacard{text-align:left;padding:16px;border-radius:14px;border:1px solid var(--line);background:var(--card);display:flex;flex-direction:column;gap:3px;transition:transform .08s}
+  .checacard:active{transform:scale(.97)}
+  .checacard.on{border-color:var(--green);background:#eef7f0}
+  .checacard .cknom{font-family:'Bricolage Grotesque';font-weight:700;font-size:17px}
+  .checacard .ckpue{font-size:12px;color:var(--muted)}
+  .checacard .ckstat{font-size:12px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:5px}
+  .checacard.on .ckstat{color:var(--green);font-weight:600}
+  .checacard .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block}
+  .checacard .ckact{margin-top:8px;font-size:13px;font-weight:600;color:var(--accent-ink)}
+  .checacard.on .ckact{color:var(--green)}
+  .nav{flex:1;padding:6px 10px;overflow-y:auto}
+  .nav button{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;color:#b7b0a2;padding:10px 12px;border-radius:9px;font-size:14px;font-weight:500;margin-bottom:2px}
+  .nav button:hover{background:#272318;color:#e8e3d8}
+  .nav button.active{background:var(--accent);color:#2c1c04;font-weight:600}
+  .nav svg{width:18px;height:18px;flex:0 0 auto}
+  .nav .badge{margin-left:auto;background:var(--red);color:#fff;font-size:11px;font-family:var(--mono);padding:1px 7px;border-radius:999px;font-weight:600}
+  .nav button.active .badge{background:#2c1c04;color:var(--accent)}
+  .side-foot{padding:12px 16px;border-top:1px solid #2a261b;font-size:12px;color:#8c857a;display:flex;justify-content:space-between;align-items:center}
+  .side-foot button{background:none;color:#b7b0a2;font-size:12px;padding:4px 8px}
+  .side-foot button:hover{color:#e8e3d8}
 
-// ---------------------------------------------------------------------------
-//  CONFIGURACIÓN / MARCA (logo + nombre)
-// ---------------------------------------------------------------------------
-app.get('/api/config', wrap(async (req, res) => {
-  const e = await readState();
-  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda });
-}));
-app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
-  const { nombre, logo } = req.body || {};
-  const out = await withState((e) => {
-    if (nombre) e.meta.nombre = nombre;
-    if (logo !== undefined) e.config.logo = logo;
-    return { nombre: e.meta.nombre, logo: e.config.logo || null };
-  });
-  res.json(out);
-}));
+  .app-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .topbar{display:flex;align-items:center;gap:13px;padding:12px 22px;background:var(--card);border-bottom:1px solid var(--line);flex:0 0 auto}
+  .vtitle{font-family:'Bricolage Grotesque';font-weight:700;font-size:22px}
+  .spacer{flex:1}
+  select.suc{padding:8px 12px;border:1px solid var(--line);border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;background:var(--card)}
+  .turno-pill{font-size:13px;padding:7px 13px;border-radius:999px;font-weight:600;font-family:var(--mono)}
+  .turno-pill.off{background:var(--paper);color:var(--muted)}
+  .turno-pill.on{background:var(--green-bg);color:var(--green)}
+  .btn{padding:9px 15px;font-weight:600;font-size:14px;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+  .btn:hover{background:#ece7dc}
+  .btn.accent{background:var(--accent);color:#2c1c04;border-color:var(--accent)}
+  .btn.dark{background:var(--ink);color:#e8e3d8;border-color:var(--ink)}
+  .view{flex:1;overflow-y:auto;padding:22px;min-height:0}
+  .loading{color:var(--muted);text-align:center;padding:60px}
 
-// ---------------------------------------------------------------------------
-//  PROMOCIONES
-// ---------------------------------------------------------------------------
-app.get('/api/promociones', wrap(async (req, res) => {
-  const e = await readState();
-  res.json(Object.values(e.promociones || {}));
-}));
-app.post('/api/promociones', soloAdmin, wrap(async (req, res) => {
-  const { nombre, tipo = 'porcentaje', valor } = req.body || {};
-  if (!nombre || valor == null) throw bad('Falta nombre o valor');
-  const p = await withState((e) => { if (!e.promociones) e.promociones = {}; const pr = M.crearPromocion({ nombre, tipo, valor }); e.promociones[pr.id] = pr; return pr; });
-  res.json(p);
-}));
-app.patch('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
-  const patch = req.body || {};
-  const p = await withState((e) => {
-    const pr = (e.promociones || {})[req.params.id];
-    if (!pr) throw bad('Promoción inexistente', 404);
-    for (const k of ['nombre', 'tipo', 'valor', 'activo']) if (k in patch) pr[k] = patch[k];
-    return pr;
-  });
-  res.json(p);
-}));
-app.delete('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
-  await withState((e) => { if (e.promociones) delete e.promociones[req.params.id]; });
-  res.json({ ok: true });
-}));
+  /* CARDS / GRID */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .kpi .lab{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+  .kpi .val{font-family:var(--mono);font-size:28px;font-weight:600;margin-top:6px}
+  .kpi .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .kpi.accent{background:var(--accent-bg);border-color:#eccfa0}.kpi.accent .val{color:var(--accent-ink)}
+  .cols{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
+  @media(max-width:1000px){.cols{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .panel h3{font-family:'Bricolage Grotesque';font-size:17px;margin:0 0 14px}
+  .panel h3 .small{font-family:'Inter';font-size:12px;color:var(--muted);font-weight:400;margin-left:8px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 8px;font-size:14px;border-bottom:1px solid var(--line)}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+  td.num,th.num{text-align:right;font-family:var(--mono)}tr:last-child td{border-bottom:none}
+  .thumb{display:inline-block;width:50px;height:38px;border-radius:8px;overflow:hidden;vertical-align:middle;margin-right:10px;border:1px solid var(--line)}
+  .thumb .art{width:50px;height:38px;display:block}
+  .chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .chip.cocina{background:var(--accent-bg);color:var(--accent-ink)}.chip.barra{background:var(--blue-bg);color:var(--blue)}
+  .chip.ok{background:var(--green-bg);color:var(--green)}.chip.low{background:var(--red-bg);color:var(--red)}
+  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .bar-row .bn{font-size:13px;width:140px;flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar-row .bt{flex:1;height:22px;background:var(--paper);border-radius:6px;overflow:hidden}
+  .bar-row .bf{height:100%;background:var(--accent);border-radius:6px}
+  .bar-row .bv{font-family:var(--mono);font-size:13px;width:70px;text-align:right;flex:0 0 auto}
 
-// ---------------------------------------------------------------------------
-//  RH / PERSONAL  (admin)
-// ---------------------------------------------------------------------------
-app.get('/api/rh/empleados', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  res.json(Object.values(e.empleados || {}));
-}));
-app.post('/api/rh/empleados', soloAdmin, wrap(async (req, res) => {
-  const b = req.body || {};
-  if (!b.nombre) throw bad('Falta nombre');
-  const emp = await withState((e) => { if (!e.empleados) e.empleados = {}; const x = M.crearEmpleado(b); e.empleados[x.id] = x; return x; });
-  res.json(emp);
-}));
-app.patch('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
-  const b = req.body || {};
-  const emp = await withState((e) => {
-    const x = (e.empleados || {})[req.params.id];
-    if (!x) throw bad('Empleado inexistente', 404);
-    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username', 'pin']) if (k in b) x[k] = b[k];
-    if ('salarioBase' in b) x.salarioBase = M.r2(+b.salarioBase);
-    if ('comisionPct' in b) x.comisionPct = M.r2(+b.comisionPct);
-    if ('activo' in b) { x.activo = !!b.activo; x.fechaBaja = b.activo ? null : new Date().toISOString().slice(0, 10); }
-    return x;
-  });
-  res.json(emp);
-}));
-app.delete('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
-  await withState((e) => { if (e.empleados) delete e.empleados[req.params.id]; });
-  res.json({ ok: true });
-}));
-app.get('/api/rh/resumen', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const empleados = Object.values(e.empleados || {});
-  const activos = empleados.filter((x) => x.activo);
-  const hoy = new Date();
-  // Cumpleaños próximos (31 días)
-  const cumples = [];
-  for (const x of activos) {
-    if (!x.cumple) continue;
-    const c = String(x.cumple).trim();
-    let mes, dia;
-    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(c)) { const d = new Date(c.slice(0, 10) + 'T00:00:00'); mes = d.getMonth() + 1; dia = d.getDate(); }
-    else if (/^\d{1,2}[/-]\d{1,2}$/.test(c)) { const [a, b] = c.split(/[/-]/).map(Number); dia = a; mes = b; } // DD/MM
-    else continue;
-    if (!mes || !dia) continue;
-    let prox = new Date(hoy.getFullYear(), mes - 1, dia);
-    if (prox < new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) prox = new Date(hoy.getFullYear() + 1, mes - 1, dia);
-    const dias = Math.round((prox - new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) / 86400000);
-    if (dias <= 31) cumples.push({ nombre: x.nombre, puesto: x.puesto, fecha: `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}`, dias });
-  }
-  cumples.sort((a, b) => a.dias - b.dias);
-  // Ranking de vendedores (por usuario que cobró) + ranking por sucursal
-  const cobrados = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado');
-  const porVend = {}, porSuc = {};
-  for (const p of cobrados) {
-    const u = p.creadoPor || 'sistema';
-    porVend[u] = porVend[u] || { ventas: 0, pedidos: 0 };
-    porVend[u].ventas = M.r2(porVend[u].ventas + p.total); porVend[u].pedidos++;
-    const s = p.sucursalId;
-    porSuc[s] = porSuc[s] || { ventas: 0, pedidos: 0 };
-    porSuc[s].ventas = M.r2(porSuc[s].ventas + p.total); porSuc[s].pedidos++;
-  }
-  const empByUser = {}; empleados.forEach((x) => { if (x.username) empByUser[x.username] = x; });
-  const vendedores = Object.entries(porVend).map(([usuario, d]) => {
-    const emp = empByUser[usuario];
-    const comisionPct = emp ? emp.comisionPct : 0;
-    return { usuario, nombre: emp ? emp.nombre : usuario, ventas: d.ventas, pedidos: d.pedidos, comisionPct, comisionEstimada: M.r2(d.ventas * comisionPct / 100) };
-  }).sort((a, b) => b.ventas - a.ventas);
-  const sucursales = Object.entries(porSuc).map(([sid, d]) => ({ sucursalId: sid, nombre: (e.sucursales[sid] || {}).nombre || sid, ventas: d.ventas, pedidos: d.pedidos })).sort((a, b) => b.ventas - a.ventas);
-  // Rotación
-  const bajas = empleados.filter((x) => !x.activo);
-  const bajas90 = bajas.filter((x) => x.fechaBaja && (hoy - new Date(x.fechaBaja)) / 86400000 <= 90).length;
-  const antig = activos.filter((x) => x.ingreso).map((x) => (hoy - new Date(x.ingreso)) / 86400000 / 30.44);
-  const antiguedadPromMeses = antig.length ? M.r2(antig.reduce((s, v) => s + v, 0) / antig.length) : 0;
-  const tasaRotacion = (activos.length + bajas90) ? M.r2(bajas90 / (activos.length + bajas90) * 100) : 0;
-  // Nómina
-  const nominaBase = M.r2(activos.reduce((s, x) => s + x.salarioBase, 0));
-  const comisionesEstimadas = M.r2(vendedores.reduce((s, v) => s + v.comisionEstimada, 0));
-  res.json({
-    activos: activos.length, totalEmpleados: empleados.length,
-    cumples, vendedores, sucursales,
-    rotacion: { activos: activos.length, bajas90, antiguedadPromMeses, tasaRotacion },
-    nomina: { base: nominaBase, comisionesEstimadas, total: M.r2(nominaBase + comisionesEstimadas) },
-  });
-}));
+  /* POS */
+  .pos{display:grid;grid-template-columns:1fr 360px;gap:16px;height:100%}
+  @media(max-width:900px){.pos{grid-template-columns:1fr}}
+  .pos-menu{overflow-y:auto}
+  .cats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .cat{background:var(--card);border:1px solid var(--line);padding:10px 17px;border-radius:999px;font-weight:600;font-size:15px;color:var(--muted)}
+  .cat.active{background:var(--ink);color:#e8e3d8;border-color:var(--ink)}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:16px}
+  .prod{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-align:left;display:flex;flex-direction:column;transition:transform .08s,box-shadow .12s;padding:0}
+  .prod:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(0,0,0,.09)}
+  .prod:active{transform:scale(.98)}
+  .prod .art{height:134px;width:100%;display:block;object-fit:cover}
+  .prod .meta{padding:12px 14px}
+  .prod .nm{font-weight:600;font-size:16px;line-height:1.25}
+  .prod .row{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+  .prod .pr{font-family:var(--mono);font-weight:600;color:var(--accent-ink)}
+  .prod .dest{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .ticket{background:var(--card);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;min-height:0;overflow-y:auto}
+  .thead{padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;display:flex;justify-content:space-between;align-items:center}
+  .thead .mfolio{font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .thead a{color:var(--accent-ink);font-size:12px;cursor:pointer;font-weight:600}
+  .svc{display:flex;gap:6px;padding:12px 14px 0}
+  .svc button{flex:1;padding:9px;font-weight:600;font-size:13px;background:var(--paper);color:var(--muted);border:1px solid var(--line)}
+  .svc button.active{background:var(--ink);color:#e8e3d8;border-color:var(--ink)}
+  .canalsel{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px 0}
+  .canalchip{padding:8px 12px;font-size:12px;font-weight:600;border-radius:999px;background:var(--paper);color:var(--muted);border:1px solid var(--line)}
+  .canalchip.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .cli{padding:10px 14px 0}.cli input{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px;font-size:13px}
+  .lines{flex:1 1 auto;padding:12px 14px;min-height:40px}
+  .empty{color:var(--muted);text-align:center;padding:30px 8px;font-size:14px;line-height:1.5}
+  .line{border-bottom:1px dashed var(--line);padding:10px 0;display:flex;gap:8px}
+  .line .lname{font-weight:600;font-size:14px}.line .lmod{font-size:12px;color:var(--muted);margin-top:2px}
+  .line .lnote{font-size:12px;color:var(--accent-ink);font-style:italic;margin-top:2px}
+  .line .lprice{font-family:var(--mono);font-weight:600;font-size:14px;white-space:nowrap}
+  .line .rm{background:none;color:var(--muted);font-size:16px;padding:0 4px;align-self:flex-start}.line .rm:hover{color:var(--red)}
+  .totals{padding:12px 14px;border-top:2px solid var(--ink);position:sticky;bottom:0;background:var(--card);z-index:2}
+  .trow{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:var(--muted)}
+  .trow.tot{font-size:19px;font-weight:700;color:var(--ink);padding-top:8px}
+  .extra-btns{display:flex;gap:6px;margin:8px 0}
+  .extra-btns button{flex:1;background:var(--paper);border:1px solid var(--line);padding:7px;font-size:12px;font-weight:600;color:var(--muted)}
+  .pay{width:100%;padding:13px;background:var(--green);color:#fff;font-weight:700;font-size:16px;margin-top:4px}
+  .pay.amber{background:var(--accent);color:#2c1c04}
+  .pay:disabled{background:#cfc9bd;color:#fff;cursor:not-allowed}
+  .paymesa{display:flex;gap:8px;margin-top:4px}.paymesa .pay{margin-top:0}
 
-// ---------------------------------------------------------------------------
-//  ASISTENCIA / CHECADOR
-// ---------------------------------------------------------------------------
-// Lista para el kiosco (cualquier usuario autenticado del restaurante)
-app.get('/api/asistencia/empleados', wrap(async (req, res) => {
-  const e = await readState();
-  const abiertas = {};
-  for (const a of (e.asistencias || [])) if (!a.salida && !abiertas[a.empleadoId]) abiertas[a.empleadoId] = a.entrada;
-  res.json(Object.values(e.empleados || {}).filter((x) => x.activo).map((x) => ({
-    id: x.id, nombre: x.nombre, puesto: x.puesto, requierePin: !!x.pin,
-    trabajando: !!abiertas[x.id], desde: abiertas[x.id] || null,
-  })));
-}));
-// Checar entrada/salida (toggle). Cualquier usuario autenticado (kiosco en sucursal).
-app.post('/api/asistencia/checar', wrap(async (req, res) => {
-  const { empleadoId, pin = '', sucursalId = null } = req.body || {};
-  const out = await withState((e) => {
-    if (!e.asistencias) e.asistencias = [];
-    const emp = (e.empleados || {})[empleadoId];
-    if (!emp || !emp.activo) throw bad('Empleado inexistente', 404);
-    if (emp.pin && String(emp.pin) !== String(pin)) throw bad('PIN incorrecto');
-    const now = new Date().toISOString();
-    const abierto = e.asistencias.find((a) => a.empleadoId === empleadoId && !a.salida);
-    if (abierto) {
-      abierto.salida = now;
-      abierto.horas = M.r2((new Date(now) - new Date(abierto.entrada)) / 3600000);
-      return { accion: 'salida', nombre: emp.nombre, horas: abierto.horas, hora: now };
-    }
-    const rec = { id: M.uid('asis'), empleadoId, nombre: emp.nombre, puesto: emp.puesto, sucursalId: sucursalId || emp.sucursalId || null, entrada: now, salida: null, horas: 0, fecha: now.slice(0, 10) };
-    e.asistencias.unshift(rec);
-    if (e.asistencias.length > 3000) e.asistencias = e.asistencias.slice(0, 3000);
-    return { accion: 'entrada', nombre: emp.nombre, hora: now };
-  });
-  res.json(out);
-}));
-// Reporte (admin / gerente)
-app.get('/api/asistencia', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const all = e.asistencias || [];
-  const sn = (id) => (e.sucursales[id] || {}).nombre || '';
-  const ahora = new Date();
-  const activos = all.filter((a) => !a.salida).map((a) => ({ ...a, sucursal: sn(a.sucursalId), horasParcial: M.r2((ahora - new Date(a.entrada)) / 3600000) }));
-  const hoy = new Date().toISOString().slice(0, 10);
-  const delDia = all.filter((a) => a.fecha === hoy).map((a) => ({ ...a, sucursal: sn(a.sucursalId) }));
-  const recientes = all.slice(0, 60).map((a) => ({ ...a, sucursal: sn(a.sucursalId) }));
-  res.json({ activos, hoy: delDia, recientes });
-}));
+  /* KDS */
+  .kds{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .ko{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .ko.listo{border-color:var(--green)}
+  .ko-head{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;font-weight:600;border-bottom:1px solid var(--line)}
+  .ko-head .folio{font-family:var(--mono)}.ko-head .timer{font-family:var(--mono);font-size:13px}.ko-head .timer.warn{color:var(--red)}
+  .ko-srv{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:0 14px;margin-top:6px}
+  .ko-body{padding:8px 14px;flex:1}
+  .ko-item{font-size:14px;padding:4px 0}.ko-item .m{font-size:12px;color:var(--muted)}.ko-item .n{font-size:12px;color:var(--accent-ink);font-style:italic}
+  .ko-foot{padding:10px 14px;border-top:1px solid var(--line)}.ko-foot button{width:100%;padding:9px;font-weight:600;font-size:13px}
+  .b-listo{background:var(--accent);color:#2c1c04}.b-entregar{background:var(--green);color:#fff}
 
-// ---------------------------------------------------------------------------
-//  CANALES DE VENTA / DELIVERY  (DiDi Food, Rappi, Uber Eats, propio…)
-// ---------------------------------------------------------------------------
-async function ensureCanales() {
-  return withState((e) => {
-    if (!e.config.canales || !Object.keys(e.config.canales).length) e.config.canales = M.canalesDefault();
-    return e.config.canales;
+  /* MESAS */
+  .mesas{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:16px}
+  .mesa{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;text-align:center;transition:transform .08s,box-shadow .12s;display:flex;flex-direction:column}
+  .mesa:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(0,0,0,.09)}
+  .mesa:active{transform:scale(.98)}
+  .mesa .art{width:100%;height:130px;display:block}
+  /* touch: blancos de toque cómodos */
+  .btn,.pay,.cat,.modal-foot button,.modal-foot a,.paytabs button,.svc button,.cuenta-btn{min-height:46px;display:inline-flex;align-items:center;justify-content:center}
+  .mesa .mbody{padding:10px 12px 12px}
+  .mesa .ms{font-size:12px;font-weight:600;margin-top:2px}
+  .mesa.libre .ms{color:var(--green)}.mesa.ocupada .ms{color:var(--accent-ink)}.mesa.cuenta .ms{color:var(--blue)}
+  .mesa .mtot{font-family:var(--mono);font-weight:600;font-size:15px;margin-top:3px}
+  .mesa .cuenta-btn{margin-top:8px;width:100%;background:var(--blue-bg);color:var(--blue);font-weight:600;font-size:12px;padding:6px;border:1px solid var(--blue-bg)}
+
+  /* MODAL */
+  .ov{position:fixed;inset:0;background:rgba(20,18,12,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .ov.show{display:flex}
+  .modal{background:var(--card);border-radius:16px;width:100%;max-width:460px;max-height:88vh;overflow-y:auto;padding:20px}
+  .modal h3{font-family:'Bricolage Grotesque';margin:0 0 2px;font-size:20px}.modal .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+  .grp{margin-bottom:14px}.grp .glabel{font-weight:600;font-size:14px;margin-bottom:6px;display:flex;justify-content:space-between}
+  .grp .req{font-size:11px;color:var(--red);font-weight:600;text-transform:uppercase}
+  .opt{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;cursor:pointer}
+  .opt:hover{border-color:var(--accent)}.opt input{accent-color:var(--accent);width:17px;height:17px}
+  .opt .onm{flex:1;font-size:14px}.opt .od{font-family:var(--mono);font-size:13px;color:var(--accent-ink)}
+  .field{margin-bottom:12px}.field label{display:block;font-weight:600;font-size:13px;margin-bottom:5px}
+  .field input,.field select{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;font-size:15px}
+  .field input.mono{font-family:var(--mono);font-size:18px}
+  .nota{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;font-size:14px}
+  .modal-foot{display:flex;gap:8px;margin-top:14px}.modal-foot button{flex:1;padding:12px;font-weight:700;font-size:15px}
+  .btn-ghost{background:var(--paper);color:var(--ink)}.btn-primary{background:var(--ink);color:#e8e3d8}.btn-primary:disabled{opacity:.4;cursor:not-allowed}
+  .paytabs{display:flex;gap:6px;margin-bottom:12px}.paytabs button{flex:1;padding:9px;font-size:13px;font-weight:600;background:var(--paper);border:1px solid var(--line);color:var(--muted)}
+  .paytabs button.active{background:var(--ink);color:#e8e3d8;border-color:var(--ink)}
+  .bignum{font-family:var(--mono);font-size:30px;font-weight:700;text-align:center;padding:6px 0}
+  .cambio{text-align:center;font-weight:600;font-family:var(--mono);font-size:16px;min-height:22px}
+  .breakdown{background:var(--paper);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-family:var(--mono);font-size:14px}
+  .breakdown .b{display:flex;justify-content:space-between;padding:3px 0}.breakdown .b.hl{border-top:1px dashed var(--line);margin-top:4px;padding-top:6px;font-weight:600}
+  .result{text-align:center;padding:14px;border-radius:10px;font-weight:700;font-size:18px;margin-top:6px}
+  .result.faltante{background:var(--red-bg);color:var(--red)}.result.sobrante{background:#fdf3df;color:var(--accent-ink)}.result.cuadrado{background:var(--green-bg);color:var(--green)}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#e8e3d8;padding:12px 20px;border-radius:10px;font-weight:600;opacity:0;transition:.25s;z-index:60;pointer-events:none;max-width:90vw;text-align:center}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">Cargando…</div></div>
+<div class="ov" id="ov"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===========================================================================
+//  Cliente de API
+// ===========================================================================
+const API = {
+  get token(){return localStorage.getItem('cp_token');},
+  set token(v){v?localStorage.setItem('cp_token',v):localStorage.removeItem('cp_token');},
+  async call(method,path,body){
+    const r=await fetch(path,{method,headers:{'Content-Type':'application/json',...(this.token?{Authorization:'Bearer '+this.token}:{})},body:body?JSON.stringify(body):undefined});
+    if(r.status===401&&this.token){this.token=null;boot();throw new Error('Sesión expirada');}
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(data.error||('Error '+r.status));
+    return data;
+  },
+  get(p){return this.call('GET',p);},post(p,b){return this.call('POST',p,b);},patch(p,b){return this.call('PATCH',p,b);},del(p){return this.call('DELETE',p);},
+};
+const money=n=>'$'+(+(n||0)).toFixed(2);
+const $=s=>document.querySelector(s);
+const ov=$('#ov'),modal=$('#modal');
+function closeModal(){ov.classList.remove('show');modal.innerHTML='';}
+ov.addEventListener('click',e=>{if(e.target===ov)closeModal();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+let tt;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2400);}
+
+// ===========================================================================
+//  Ilustraciones (SVG). Si el producto trae .foto (URL), se usa la imagen.
+// ===========================================================================
+function artBurger(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdf4e2"/><stop offset="1" stop-color="#f6e0bc"/></linearGradient><linearGradient id="btop" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2b765"/><stop offset="1" stop-color="#dd9038"/></linearGradient><linearGradient id="bbot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6a249"/><stop offset="1" stop-color="#cf8a32"/></linearGradient><linearGradient id="bpat" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#824a26"/><stop offset="1" stop-color="#5e3318"/></linearGradient></defs><rect width="160" height="120" fill="url(#bbg)"/><ellipse cx="80" cy="100" rx="54" ry="7" fill="#7a4a10" opacity=".12"/><path d="M28 50c0-23 24-35 52-35s52 12 52 35z" fill="url(#btop)"/><path d="M44 30c9-8 24-11 40-9" stroke="#ffe6b8" stroke-width="3.5" fill="none" stroke-linecap="round" opacity=".55"/><g fill="#fbe3ac"><ellipse cx="62" cy="34" rx="3" ry="1.7" transform="rotate(-18 62 34)"/><ellipse cx="80" cy="28" rx="3" ry="1.7"/><ellipse cx="98" cy="34" rx="3" ry="1.7" transform="rotate(18 98 34)"/><ellipse cx="71" cy="40" rx="3" ry="1.7" transform="rotate(-10 71 40)"/><ellipse cx="90" cy="40" rx="3" ry="1.7" transform="rotate(10 90 40)"/></g><path d="M26 50h108c-6 8-15 4-21 8-6 4-12 0-18 4-6 4-12 0-18 0-6 0-12 4-18 0-6-4-15 0-15-12z" fill="#7cb949"/><path d="M30 58h100v7l-9 8-7-6-9 8-7-6-9 8-7-6-9 8-7-6-9 8-7-6-7 4z" fill="#f4b740"/><rect x="28" y="66" width="104" height="15" rx="7" fill="url(#bpat)"/><rect x="30" y="80" width="100" height="16" rx="8" fill="url(#bbot)"/></svg>`;}
+function artSoda(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="sbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef4fb"/><stop offset="1" stop-color="#dae6f4"/></linearGradient><linearGradient id="cup" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b8362a"/><stop offset=".5" stop-color="#e1503c"/><stop offset="1" stop-color="#b8362a"/></linearGradient></defs><rect width="160" height="120" fill="url(#sbg)"/><ellipse cx="80" cy="104" rx="32" ry="6" fill="#16253f" opacity=".12"/><rect x="94" y="16" width="6" height="36" rx="3" fill="#e8e3d8" transform="rotate(13 97 34)"/><path d="M52 38h56l-7 60a6 6 0 0 1-6 5H65a6 6 0 0 1-6-5z" fill="url(#cup)"/><rect x="50" y="46" width="60" height="13" fill="#f7f4ee"/><rect x="58" y="51" width="44" height="3" rx="1.5" fill="#b8362a" opacity=".55"/><rect x="48" y="30" width="64" height="10" rx="4" fill="#cf3322"/><path d="M60 30c2-8 38-8 40 0z" fill="#d84a38"/></svg>`;}
+function artFries(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="fbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdf4e2"/><stop offset="1" stop-color="#f6e0bc"/></linearGradient><linearGradient id="frb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e1503c"/><stop offset="1" stop-color="#bf3526"/></linearGradient><linearGradient id="fr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8d370"/><stop offset="1" stop-color="#e0a23c"/></linearGradient></defs><rect width="160" height="120" fill="url(#fbg)"/><ellipse cx="80" cy="104" rx="34" ry="6" fill="#7a4a10" opacity=".12"/><g fill="url(#fr)"><rect x="58" y="40" width="7" height="50" rx="3"/><rect x="68" y="30" width="7" height="60" rx="3"/><rect x="78" y="36" width="7" height="54" rx="3"/><rect x="88" y="26" width="7" height="64" rx="3"/><rect x="98" y="42" width="7" height="48" rx="3"/></g><path d="M50 64h60l-6 36a6 6 0 0 1-6 5H62a6 6 0 0 1-6-5z" fill="url(#frb)"/><path d="M50 64h60l-1 11H51z" fill="#a82e21"/></svg>`;}
+function artAgua(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="abg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdeef4"/><stop offset="1" stop-color="#f6d8e4"/></linearGradient><linearGradient id="aliq" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f48fb0"/><stop offset="1" stop-color="#e85f8c"/></linearGradient></defs><rect width="160" height="120" fill="url(#abg)"/><ellipse cx="80" cy="104" rx="28" ry="6" fill="#7a1030" opacity=".12"/><rect x="92" y="20" width="5" height="40" rx="2.5" fill="#fff" opacity=".8" transform="rotate(10 94 40)"/><path d="M58 34h44l-5 60a6 6 0 0 1-6 5H69a6 6 0 0 1-6-5z" fill="#ffffff" opacity=".55"/><path d="M60 48h40l-4 46a5 5 0 0 1-5 4H69a5 5 0 0 1-5-4z" fill="url(#aliq)"/><rect x="66" y="40" width="11" height="11" rx="3" fill="#fff" opacity=".55"/><rect x="84" y="44" width="9" height="9" rx="2.5" fill="#fff" opacity=".5"/><circle cx="100" cy="34" r="9" fill="#8fce4f"/><circle cx="100" cy="34" r="6" fill="#c7e89a"/></svg>`;}
+function artPlato(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="pl" cx="50%" cy="42%" r="60%"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ece7db"/></radialGradient></defs><rect width="160" height="120" fill="#f1efe8"/><ellipse cx="80" cy="64" rx="40" ry="38" fill="#000" opacity=".06"/><circle cx="80" cy="60" r="38" fill="url(#pl)" stroke="#e0d9c8"/><circle cx="80" cy="60" r="24" fill="none" stroke="#e6dfce" stroke-width="2"/><rect x="40" y="44" width="3" height="32" rx="1.5" fill="#c9c1ad"/><rect x="117" y="44" width="3" height="32" rx="1.5" fill="#c9c1ad"/></svg>`;}
+function prodArt(prod,catName){
+  if(prod.foto)return `<img class="art" src="${prod.foto}" alt="${prod.nombre}" onerror="this.outerHTML=prodArtFallback('${(catName||'').replace(/'/g,'')}','${prod.nombre.replace(/'/g,'')}')">`;
+  return prodArtFallback(catName,prod.nombre);
+}
+function prodArtFallback(catName,nombre){
+  const n=(nombre||'').toLowerCase(),c=(catName||'').toLowerCase();
+  if(/agua|limonada|jamaica|horchata/.test(n))return artAgua();
+  if(/refresco|bebida|soda|coca/.test(n)||c.includes('bebida')&&!/agua/.test(n))return artSoda();
+  if(/papa|fries|aro|nugget/.test(n))return artFries();
+  if(/hamburg|burger|bbq|doble|combo|sandwich|pollo/.test(n)||c.includes('hamburg'))return artBurger();
+  if(c.includes('acompa'))return artFries();
+  if(c.includes('bebida'))return artSoda();
+  return artPlato();
+}
+function mesaArt(estado){
+  const col={libre:['#e7f3ea','#2f8f4e'],ocupada:['#fbeed8','#e0841a'],cuenta:['#e7eef6','#3b6ea5']}[estado]||['#f1efe8','#8c857a'];
+  const [bg,c]=col;
+  return `<svg class="art" viewBox="0 0 150 118" xmlns="http://www.w3.org/2000/svg"><rect width="150" height="118" fill="${bg}"/><rect x="40" y="18" width="70" height="14" rx="4" fill="${c}" opacity=".85"/><rect x="40" y="86" width="70" height="14" rx="4" fill="${c}" opacity=".85"/><rect x="22" y="40" width="14" height="38" rx="4" fill="${c}" opacity=".85"/><rect x="114" y="40" width="14" height="38" rx="4" fill="${c}" opacity=".85"/><rect x="44" y="38" width="62" height="42" rx="10" fill="#fff" stroke="${c}" stroke-width="2"/><circle cx="75" cy="59" r="13" fill="${bg}"/></svg>`;}
+
+// ===========================================================================
+//  Estado de la app
+// ===========================================================================
+const app={tenant:null,rol:null,sucursales:[],sucursalId:null,turno:null,menu:null,vista:'resumen',
+  pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null,canalId:'local'}};
+let kdsTimer=null;
+
+const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
+  pos:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+  cocina:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11h16M4 11a8 8 0 0 1 16 0M6 11v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6"/></svg>',
+  menu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>',
+  inventario:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>',
+  mesas:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>',
+  reportes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="6"/><line x1="18" y1="20" x2="18" y2="10"/></svg>',
+  promociones:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8"/><rect x="2" y="7" width="20" height="5" rx="1"/><path d="M12 21V7M12 7S11 3 8.5 3 5 5 7 7h5zM12 7s1-4 3.5-4S19 5 17 7h-5z"/></svg>',
+  ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  asistencia:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'};
+const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['asistencia','Asistencia'],['reportes','Reportes']];
+function esAdmin(){return app.rol==='admin'||app.rol==='gerente';}
+function NAV(){return esAdmin()?[...NAV_BASE,['promociones','Promociones'],['rh','Personal'],['ajustes','Ajustes']]:NAV_BASE;}
+
+// ===========================================================================
+//  Boot / login
+// ===========================================================================
+async function boot(){
+  if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
+  if(!API.token){renderLogin();return;}
+  try{
+    const me=await API.get('/api/me');app.rol=me.rol;app.tenant=me.tenant;app.username=me.username;
+    if(app.rol==='superadmin'){renderSuper();return;}
+    app.miSucursal=me.sucursalId;
+    app.sucursales=await API.get('/api/sucursales');
+    if(!app.sucursalId)app.sucursalId=app.miSucursal||app.sucursales[0].id;
+    await refreshTurno();
+    app.menu=await API.get('/api/menu');
+    try{app.canales=await API.get('/api/canales');}catch{app.canales=[];}
+    renderShell();go('resumen');
+  }catch(e){API.token=null;renderLogin();}
+}
+function renderLogin(){
+  $('#app').innerHTML=`<div class="login"><form class="login-card" id="lf">
+    <div class="logo">Jefe<b>Burgers</b></div><div class="tg">Consola de operación</div>
+    <label>Usuario</label><input id="lu" autocomplete="username" autofocus>
+    <label>Contraseña</label><input id="lp" type="password" autocomplete="current-password">
+    <button type="submit">Entrar</button><div class="err" id="le"></div></form></div>`;
+  $('#lf').onsubmit=async ev=>{ev.preventDefault();$('#le').textContent='';
+    try{const r=await API.post('/api/auth/login',{username:$('#lu').value.trim(),password:$('#lp').value});API.token=r.token;app.tenant=r.tenant;boot();}
+    catch(e){$('#le').textContent=e.message;}};
+}
+async function refreshTurno(){app.turno=await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId);}
+
+// ===========================================================================
+//  Shell
+// ===========================================================================
+function brandSidebar(){
+  if(app.tenant&&app.tenant.logo)return `<img src="${app.tenant.logo}" class="brandlogo" alt="${app.tenant.nombre||''}">`;
+  const nm=app.tenant&&app.tenant.nombre?app.tenant.nombre:'ComandaPro';
+  return `<span class="brandtext">${nm}</span>`;
+}
+function renderShell(){
+  $('#app').innerHTML=`<div class="shell">
+    <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
+      <div class="side-foot"><span>v0.9 · API</span><button id="logout">Salir</button></div></nav>
+    <div class="app-main">
+      <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
+        <select class="suc" id="sucSel"></select>
+        <div class="turno-pill off" id="turnoPill">Turno cerrado</div>
+        <button class="btn accent" id="btnTurno">Abrir turno</button>
+      </div><div class="view" id="view"></div></div></div>`;
+  $('#logout').onclick=()=>{API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
+  $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
+  $('#btnTurno').onclick=()=>app.turno?modalCerrarTurno():modalAbrirTurno();
+  renderTopbar();renderNav();
+}
+function renderTopbar(){
+  $('#sucSel').innerHTML=app.sucursales.map(s=>`<option value="${s.id}" ${s.id===app.sucursalId?'selected':''}>${s.nombre}</option>`).join('');
+  const pill=$('#turnoPill'),btn=$('#btnTurno');
+  if(app.turno){pill.className='turno-pill on';pill.textContent='Turno abierto · '+money(app.turno.fondoInicial);btn.textContent='Cerrar turno';btn.classList.remove('accent');}
+  else{pill.className='turno-pill off';pill.textContent='Turno cerrado';btn.textContent='Abrir turno';btn.classList.add('accent');}
+}
+async function renderNav(){
+  let badge=0;try{badge=(await API.get('/api/cocina?sucursalId='+app.sucursalId)).length;}catch{}
+  $('#nav').innerHTML=NAV().map(([k,l])=>`<button data-v="${k}" class="${k===app.vista?'active':''}">${IC[k]}<span>${l}</span>${k==='cocina'&&badge?`<span class="badge">${badge}</span>`:''}</button>`).join('');
+  document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.v));
+}
+function go(v){app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
+  if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
+  $('#view').innerHTML='<div class="loading">Cargando…</div>';
+  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia}[v])();
+}
+
+// ===========================================================================
+//  RESUMEN
+// ===========================================================================
+async function vResumen(){
+  const [res,inv,peds]=await Promise.all([API.get('/api/reportes/resumen?sucursalId='+app.sucursalId),API.get('/api/inventario'),API.get('/api/pedidos?estado=cobrado&sucursalId='+app.sucursalId)]);
+  const fcAvg=inv.foodCost.length?inv.foodCost.reduce((s,f)=>s+f.foodCostPct,0)/inv.foodCost.length:0;
+  const low=inv.insumos.filter(i=>i.bajo).length;
+  const porHora={};peds.forEach(p=>{const ts=p.pago&&p.pago.timestamp?p.pago.timestamp:p.creado;const h=new Date(ts).getHours();porHora[h]=(porHora[h]||0)+p.total;});
+  const horas=[];for(let h=11;h<=21;h++)horas.push([h,porHora[h]||0]);const maxH=Math.max(1,...horas.map(x=>x[1]));
+  const top=Object.entries(res.porProducto||{}).sort((a,b)=>b[1].q-a[1].q).slice(0,5);const maxT=Math.max(1,...top.map(x=>x[1].q));
+  $('#view').innerHTML=`
+  <div class="kpis">
+    <div class="kpi accent"><div class="lab">Venta del día</div><div class="val">${money(res.venta)}</div><div class="sub">${res.pedidos} pedidos cobrados</div></div>
+    <div class="kpi"><div class="lab">Ticket promedio</div><div class="val">${money(res.ticketPromedio)}</div><div class="sub">por pedido</div></div>
+    <div class="kpi"><div class="lab">Food cost prom.</div><div class="val">${fcAvg.toFixed(1)}%</div><div class="sub">sano: 28–35%</div></div>
+    <div class="kpi"><div class="lab">Insumos bajos</div><div class="val">${low}</div><div class="sub">a reabastecer</div></div></div>
+  <div class="cols">
+    <div class="panel"><h3>Ventas por hora <span class="small">hoy</span></h3>
+      <svg viewBox="0 0 440 160" width="100%">${horas.map((x,i)=>{const bh=x[1]/maxH*120,bx=10+i*40;return `<rect x="${bx}" y="${140-bh}" width="26" height="${bh}" rx="4" fill="var(--accent)"/><text x="${bx+13}" y="154" font-size="10" text-anchor="middle" fill="var(--muted)" font-family="monospace">${x[0]}</text>`;}).join('')}</svg></div>
+    <div class="panel"><h3>Top productos <span class="small">por piezas</span></h3>
+      ${top.length?top.map(([n,d])=>`<div class="bar-row"><div class="bn">${n}</div><div class="bt"><div class="bf" style="width:${d.q/maxT*100}%"></div></div><div class="bv">${d.q}</div></div>`).join(''):'<div class="empty">Sin ventas aún</div>'}</div></div>
+  <div class="cols" style="margin-top:16px">
+    <div class="panel"><h3>Estado de caja</h3>${app.turno?`<table>
+      <tr><td>Fondo inicial</td><td class="num">${money(app.turno.fondoInicial)}</td></tr>
+      <tr><td>Ventas efectivo</td><td class="num">${money(res.porPago.efectivo)}</td></tr>
+      <tr><td>Ventas tarjeta</td><td class="num">${money(res.porPago.tarjeta)}</td></tr>
+      <tr><td>Ventas transferencia</td><td class="num">${money(res.porPago.transferencia)}</td></tr>
+      <tr><td><b>Esperado en cajón</b></td><td class="num"><b>${money(app.turno.fondoInicial+res.porPago.efectivo)}</b></td></tr></table>`:'<div class="empty">Turno cerrado.</div>'}</div>
+    <div class="panel"><h3>Mezcla de pago</h3>${['efectivo','tarjeta','transferencia'].map(k=>{const t=res.porPago.efectivo+res.porPago.tarjeta+res.porPago.transferencia||1;return `<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porPago[k]/t*100}%;background:${k==='efectivo'?'var(--green)':k==='tarjeta'?'var(--blue)':'var(--accent)'}"></div></div><div class="bv">${money(res.porPago[k])}</div></div>`;}).join('')}</div></div>
+  <div class="panel" style="margin-top:16px"><h3>Últimas ventas <span class="small">toca 🖨 para reimprimir el ticket</span></h3>
+    <div id="ultVentas"><div class="empty">Cargando…</div></div></div>`;
+  cargarUltimasVentas();
+}
+async function cargarUltimasVentas(){
+  let ventas=[];try{ventas=await API.get('/api/ventas/recientes?limit=15&sucursalId='+app.sucursalId);}catch{}
+  app._ventas=ventas;
+  const cont=$('#ultVentas');if(!cont)return;
+  if(!ventas.length){cont.innerHTML='<div class="empty">Aún no hay ventas cobradas hoy.</div>';return;}
+  cont.innerHTML=`<table><thead><tr><th>Folio</th><th>Hora</th><th>Servicio</th><th class="num">Total</th><th></th></tr></thead><tbody>
+    ${ventas.map(p=>`<tr><td class="mono">${p.folio}</td><td>${new Date(p.actualizado||p.creado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-transform:capitalize">${p.tipoServicio}</td><td class="num">${money(p.total)}</td><td class="num"><button class="btn" data-print="${p.folio}" style="padding:7px 11px;font-size:13px;min-height:auto">🖨</button></td></tr>`).join('')}
+    </tbody></table>`;
+  document.querySelectorAll('[data-print]').forEach(b=>b.onclick=()=>{const p=app._ventas.find(v=>v.folio===b.dataset.print);if(p)imprimirTicket(p);});
+}
+
+// ===========================================================================
+//  PUNTO DE VENTA
+// ===========================================================================
+function cats(){return Object.values(app.menu.categorias).sort((a,b)=>a.orden-b.orden);}
+function prodsDe(catId){return Object.values(app.menu.productos).filter(p=>p.categoriaId===catId&&p.activo);}
+function vPOS(){
+  if(!app.pos.cat)app.pos.cat=cats()[0].id;
+  const ped=app.pos.pedido;const enMesa=app.pos.tipoServicio==='mesa';const enDom=app.pos.tipoServicio==='domicilio';
+  const cat=app.menu.categorias[app.pos.cat];
+  $('#view').innerHTML=`<div class="pos">
+    <div class="pos-menu"><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
+      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>`<button class="prod" data-prod="${p.id}">${prodArt(p,cat.nombre)}<div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`).join('')}</div></div>
+    <div class="ticket">
+      ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}${c.comisionPct?` · ${c.comisionPct}%`:''}</button>`).join('')}</div>`:''}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="cli"><input id="cliNombre" placeholder="Cliente" value="${ped&&ped.cliente?ped.cliente.nombre||'':''}"><input id="cliDir" placeholder="Dirección" value="${ped&&ped.cliente?ped.cliente.direccion||'':''}"><input id="cliEnvio" type="number" placeholder="Costo de envío" value="${ped?ped.costoEnvio||'':''}"></div>`:''}
+      <div class="lines" id="lines"></div>
+      <div class="totals">
+        <div class="trow"><span>Subtotal</span><span class="mono" id="tSub">$0.00</span></div>
+        <div class="trow" id="tEnvioRow" style="display:none"><span>Envío</span><span class="mono" id="tEnvio">$0.00</span></div>
+        <div class="trow" id="tDescRow" style="display:none;color:var(--green)"><span id="tDescLbl">Descuento</span><span class="mono" id="tDesc">$0.00</span></div>
+        <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
+        <div class="trow tot"><span>Total</span><span class="mono" id="tTotal">$0.00</span></div>
+        ${enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar cuenta</button></div>`:enDom?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar</button></div>`:`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`}
+      </div></div></div>`;
+  document.querySelectorAll('.cat').forEach(b=>b.onclick=()=>{app.pos.cat=b.dataset.cat;vPOS();});
+  document.querySelectorAll('.svc button').forEach(b=>b.onclick=()=>onSvc(b.dataset.svc));
+  document.querySelectorAll('[data-canal]').forEach(b=>b.onclick=()=>onCanal(b.dataset.canal));
+  document.querySelectorAll('.prod').forEach(b=>b.onclick=()=>onProducto(app.menu.productos[b.dataset.prod]));
+  if($('#salirMesa'))$('#salirMesa').onclick=()=>{app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat};vPOS();};
+  if($('#cliEnvio'))$('#cliEnvio').addEventListener('change',saveCliente);
+  if($('#btnNuevo'))$('#btnNuevo').onclick=()=>{app.pos.folio=null;app.pos.pedido=null;if(app.pos.tipoServicio==='mesa'){app.pos.tipoServicio='mostrador';app.pos.mesaId=null;}vPOS();};
+  if($('#btnPromo'))$('#btnPromo').onclick=aplicarPromocion;
+  if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
+  if($('#btnComanda'))$('#btnComanda').onclick=mandarComanda;
+  renderLines();
+}
+function mesaNombre(id){return 'Mesa '+(app._mesaNum&&app._mesaNum[id]||'');}
+function onSvc(s){
+  if(s==='mesa'){toast('Elige una mesa en la pestaña Mesas');go('mesas');return;}
+  if(app.pos.pedido&&app.pos.pedido.lineas.length){toast('Cobra o vacía el pedido actual antes de cambiar');return;}
+  app.pos.tipoServicio=s;app.pos.folio=null;app.pos.pedido=null;vPOS();
+}
+async function onCanal(id){
+  app.pos.canalId=id;
+  if(app.pos.pedido){try{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{canalId:id});}catch(e){}}
+  document.querySelectorAll('[data-canal]').forEach(b=>b.classList.toggle('active',b.dataset.canal===id));
+}
+async function asegurarPedido(){
+  if(app.pos.pedido)return app.pos.pedido;
+  const body={sucursalId:app.sucursalId,tipoServicio:app.pos.tipoServicio};
+  if(app.pos.tipoServicio==='mesa')body.mesaId=app.pos.mesaId;
+  else body.canalId=app.pos.canalId||'local';
+  const p=await API.post('/api/pedidos',body);app.pos.folio=p.folio;app.pos.pedido=p;return p;
+}
+async function onProducto(prod){
+  if(!app.turno){toast('Abre el turno antes de vender');return;}
+  try{
+    await asegurarPedido();
+    if(prod.gruposIds.length){modalModificadores(prod);return;}
+    app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1});
+    renderLines();
+  }catch(e){toast(e.message);}
+}
+async function saveCliente(){
+  if(!app.pos.pedido)return;
+  try{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{costoEnvio:+($('#cliEnvio').value||0),cliente:{nombre:$('#cliNombre').value,direccion:$('#cliDir').value}});renderLines();}catch(e){toast(e.message);}
+}
+function renderLines(){
+  const ped=app.pos.pedido;const cont=$('#lines');if(!cont)return;
+  if(!ped||!ped.lineas.length){cont.innerHTML=`<div class="empty">${app.turno?'Toca un producto para empezar.':'Abre el turno para vender.'}</div>`;}
+  else cont.innerHTML=ped.lineas.map(l=>`<div class="line"><div style="flex:1"><div class="lname">${l.cantidad}× ${l.nombre}</div>${l.modificadores.length?`<div class="lmod">${l.modificadores.map(m=>m.opcionNombre+(m.precioDelta?` (+${money(m.precioDelta)})`:'')).join(' · ')}</div>`:''}${l.notas?`<div class="lnote">“${l.notas}”</div>`:''}</div><div class="lprice">${money(l.importe)}</div><button class="rm" data-rm="${l.id}">×</button></div>`).join('');
+  cont.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{app.pos.pedido=await API.del(`/api/pedidos/${app.pos.folio}/lineas/${b.dataset.rm}`);renderLines();});
+  const sub=ped?ped.subtotal:0,env=ped?ped.costoEnvio:0,tot=ped?ped.total:0;
+  $('#tSub').textContent=money(sub);
+  if($('#tEnvioRow')){$('#tEnvioRow').style.display=env?'flex':'none';$('#tEnvio').textContent=money(env);}
+  if($('#tDescRow')){const d=ped&&ped.descuento;if(d){const amt=d.tipo==='porcentaje'?sub*d.valor/100:d.valor;$('#tDescRow').style.display='flex';$('#tDescLbl').textContent='Descuento'+(d.motivo?' · '+d.motivo:'');$('#tDesc').textContent='−'+money(amt);}else $('#tDescRow').style.display='none';}
+  $('#tTotal').textContent=money(tot);
+  const bc=$('#btnCobrar');if(bc&&app.pos.tipoServicio!=='mesa')bc.disabled=!(app.turno&&ped&&ped.lineas.length>0);
+}
+function modalModificadores(prod){
+  const grupos=prod.gruposIds.map(id=>app.menu.gruposModificadores[id]);
+  let h=`<h3>${prod.nombre}</h3><div class="sub">Precio base ${money(prod.precioBase)}</div>`;
+  grupos.forEach(g=>{h+=`<div class="grp" data-grp="${g.id}"><div class="glabel"><span>${g.nombre}</span>${g.obligatorio?'<span class="req">Obligatorio</span>':''}</div>`+
+    g.opciones.filter(o=>o.activo).map(o=>{const ck=g.obligatorio&&g.tipo==='unico'&&o.porDefecto?'checked':'';const inp=g.tipo==='unico'?`<input type="radio" name="g_${g.id}" value="${o.id}" ${ck}>`:`<input type="checkbox" name="g_${g.id}" value="${o.id}">`;return `<label class="opt">${inp}<span class="onm">${o.nombre}</span>${o.precioDelta?`<span class="od">+${money(o.precioDelta)}</span>`:''}</label>`;}).join('')+`</div>`;});
+  h+=`<div class="grp"><div class="glabel"><span>Notas para cocina</span></div><input class="nota" id="lnNota" placeholder="Ej. sin sal, extra dorada"></div>
+     <div class="modal-foot"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mAdd">Agregar — <span id="mPrice">${money(prod.precioBase)}</span></button></div>`;
+  modal.innerHTML=h;ov.classList.add('show');
+  const rec=()=>{let d=0,ok=true;document.querySelectorAll('#modal .grp[data-grp]').forEach(gd=>{const g=app.menu.gruposModificadores[gd.dataset.grp];const ch=[...gd.querySelectorAll('input:checked')];ch.forEach(c=>d+=g.opciones.find(x=>x.id===c.value).precioDelta);if(g.obligatorio&&!ch.length)ok=false;if(g.max&&ch.length>g.max)ok=false;});$('#mPrice').textContent=money(prod.precioBase+d);$('#mAdd').disabled=!ok;};
+  modal.querySelectorAll('input').forEach(i=>i.addEventListener('change',rec));rec();
+  $('#mCancel').onclick=closeModal;
+  $('#mAdd').onclick=async()=>{const mods=[];document.querySelectorAll('#modal .grp[data-grp]').forEach(gd=>{const g=app.menu.gruposModificadores[gd.dataset.grp];gd.querySelectorAll('input:checked').forEach(c=>mods.push({grupoId:g.id,opcionId:c.value}));});
+    try{app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,modsElegidos:mods,notas:$('#lnNota').value.trim()});closeModal();renderLines();}catch(e){toast(e.message);}};
+}
+async function mandarComanda(){
+  if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
+  try{const r=await API.post(`/api/pedidos/${app.pos.folio}/comanda`);toast(r.enviadas?r.enviadas+' a cocina':'Nada nuevo que mandar');renderNav();}catch(e){toast(e.message);}
+}
+async function aplicarPromocion(){
+  if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
+  let promos=[];try{promos=(await API.get('/api/promociones')).filter(p=>p.activo);}catch{}
+  modal.innerHTML=`<h3>Aplicar promoción</h3><div class="sub">Se descuenta del total de este pedido</div>
+    ${promos.length?promos.map(p=>`<button class="opt" data-p="${p.id}" style="width:100%;justify-content:space-between" data-tipo="${p.tipo}" data-valor="${p.valor}" data-nom="${p.nombre}"><span class="onm">${p.nombre}</span><span class="od">${p.tipo==='porcentaje'?p.valor+'%':money(p.valor)}</span></button>`).join(''):'<div class="empty">No hay promociones activas. Créalas en la pestaña Promociones.</div>'}
+    <div class="modal-foot">${app.pos.pedido.descuento?'<button class="btn-ghost" id="quitarP">Quitar promoción</button>':''}<button class="btn-ghost" id="pClose">Cerrar</button></div>`;
+  ov.classList.add('show');
+  $('#pClose').onclick=closeModal;
+  if($('#quitarP'))$('#quitarP').onclick=async()=>{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{descuento:null});closeModal();renderLines();toast('Promoción quitada');};
+  document.querySelectorAll('[data-p]').forEach(b=>b.onclick=async()=>{
+    app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{descuento:{tipo:b.dataset.tipo,valor:+b.dataset.valor,motivo:b.dataset.nom}});
+    closeModal();renderLines();toast('Promoción aplicada');
   });
 }
-app.get('/api/canales', wrap(async (req, res) => {
-  const canales = await ensureCanales();
-  res.json(Object.values(canales));
-}));
-app.post('/api/canales', soloAdmin, wrap(async (req, res) => {
-  const { nombre, comisionPct = 0 } = req.body || {};
-  if (!nombre) throw bad('Falta nombre');
-  const ch = await withState((e) => {
-    if (!e.config.canales) e.config.canales = M.canalesDefault();
-    const c = M.crearCanal({ nombre, comisionPct });
-    e.config.canales[c.id] = c; return c;
-  });
-  res.json(ch);
-}));
-app.patch('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
-  const patch = req.body || {};
-  const ch = await withState((e) => {
-    const c = (e.config.canales || {})[req.params.id];
-    if (!c) throw bad('Canal inexistente', 404);
-    if (patch.nombre != null) c.nombre = patch.nombre;
-    if (patch.comisionPct != null) c.comisionPct = M.r2(+patch.comisionPct);
-    if (patch.activo != null) c.activo = !!patch.activo;
-    return c;
-  });
-  res.json(ch);
-}));
-app.delete('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
-  if (req.params.id === 'local') throw bad('No se puede eliminar el canal local');
-  await withState((e) => { if (e.config.canales) delete e.config.canales[req.params.id]; });
-  res.json({ ok: true });
-}));
+function cobrar(){
+  const ped=app.pos.pedido;if(!ped||!ped.lineas.length){toast('Agrega productos');return;}
+  const canal=(app.canales||[]).find(c=>c.id===ped.canalId);
+  const metodos=canal&&canal.esApp?['plataforma','tarjeta','efectivo']:['efectivo','tarjeta','transferencia'];
+  const nm={plataforma:'Plataforma',efectivo:'Efectivo',tarjeta:'Tarjeta',transferencia:'Transferencia'};
+  let metodo=metodos[0];
+  const render=()=>{
+    modal.innerHTML=`<h3>Cobrar ${money(ped.total)}</h3><div class="sub">${ped.folio}${canal&&canal.esApp?' · '+canal.nombre:''}</div>
+      <div class="paytabs">${metodos.map(m=>`<button data-m="${m}" class="${m===metodo?'active':''}">${nm[m]}</button>`).join('')}</div>
+      ${metodo==='efectivo'?`<div class="field"><label>Efectivo recibido</label><input id="recib" type="number" class="mono" placeholder="${ped.total}"></div><div class="cambio" id="cambio"></div>`:`<div class="bignum">${money(ped.total)}</div>${metodo==='plataforma'?'<div class="sub" style="text-align:center">El cobro lo hace la plataforma; aquí solo se registra la venta.</div>':''}`}
+      <div class="modal-foot"><button class="btn-ghost" id="pCancel">Cancelar</button><button class="btn-primary" id="pOk">Confirmar cobro</button></div>`;
+    modal.querySelectorAll('.paytabs button').forEach(b=>b.onclick=()=>{metodo=b.dataset.m;render();});
+    if(metodo==='efectivo'){const ri=$('#recib');ri.addEventListener('input',()=>{const r=+ri.value||0,c=r-ped.total;$('#cambio').textContent=r>0?(c>=0?'Cambio: '+money(c):'Faltan '+money(-c)):'';$('#cambio').style.color=c<0?'var(--red)':'var(--green)';});setTimeout(()=>ri.focus(),50);}
+    $('#pCancel').onclick=closeModal;
+    $('#pOk').onclick=async()=>{let recibido=0,pagos;
+      if(metodo==='efectivo'){recibido=+($('#recib').value)||ped.total;if(recibido<ped.total){toast('El efectivo no alcanza');return;}pagos=[{metodo:'efectivo',monto:ped.total}];}
+      else pagos=[{metodo,monto:ped.total}];
+      try{const p=await API.post(`/api/pedidos/${ped.folio}/cobrar`,{pagos,recibido});closeModal();ticketFinal(p);
+        const wasMesa=app.pos.tipoServicio==='mesa';app.pos={folio:null,pedido:null,tipoServicio:wasMesa?'mostrador':app.pos.tipoServicio,mesaId:null,cat:app.pos.cat};renderNav();
+      }catch(e){toast(e.message);}};
+  };
+  render();ov.classList.add('show');
+}
+function ticketHTML(p){
+  const suc=app.sucursales.find(s=>s.id===p.sucursalId)?.nombre||'';
+  const canal=(app.canales||[]).find(c=>c.id===p.canalId);
+  const nm={plataforma:'Plataforma',efectivo:'Efectivo',tarjeta:'Tarjeta',transferencia:'Transferencia',mixto:'Mixto'};
+  const fecha=new Date(p.actualizado||p.creado).toLocaleString('es-MX',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const desc=p.descuento?(p.descuento.tipo==='porcentaje'?p.subtotal*p.descuento.valor/100:p.descuento.valor):0;
+  const servicio=p.tipoServicio==='mesa'?('Mesa '+(app._mesaNum&&app._mesaNum[p.mesaId]||'')):p.tipoServicio;
+  const head=app.tenant&&app.tenant.logo?`<img src="${app.tenant.logo}" style="max-width:150px;max-height:64px;display:block;margin:0 auto 6px">`:`<div class="nm">${(app.tenant&&app.tenant.nombre)||'Restaurante'}</div>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${p.folio}</title><style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Courier New',monospace;width:280px;margin:0 auto;padding:10px;color:#000;font-size:12px;line-height:1.35}
+  .nm{font-size:18px;font-weight:bold;text-align:center}
+  .c{text-align:center}.muted{color:#444}
+  hr{border:none;border-top:1px dashed #000;margin:6px 0}
+  .row{display:flex;justify-content:space-between;gap:8px}
+  .it{margin:3px 0}.mod{font-size:11px;color:#333;padding-left:12px}
+  .tot{font-size:15px;font-weight:bold;margin:2px 0}
+  .gr{text-align:center;margin-top:10px;font-size:11px}
+  @media print{body{width:auto}}
+  </style></head><body>
+  ${head}
+  <div class="c muted">${suc}</div><hr>
+  <div class="row"><span>${p.folio}</span><span>${servicio}</span></div>
+  <div class="muted">${fecha}</div>
+  ${canal&&canal.esApp?`<div class="muted">Canal: ${canal.nombre}</div>`:''}
+  ${p.cliente&&p.cliente.nombre?`<div class="muted">Cliente: ${p.cliente.nombre}</div>`:''}
+  <hr>
+  ${p.lineas.map(l=>`<div class="it"><div class="row"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>${(l.modificadores||[]).map(m=>`<div class="mod">+ ${m.opcionNombre}</div>`).join('')}${l.notas?`<div class="mod">Nota: ${l.notas}</div>`:''}</div>`).join('')}
+  <hr>
+  <div class="row"><span>Subtotal</span><span>${money(p.subtotal)}</span></div>
+  ${desc?`<div class="row"><span>Descuento${p.descuento&&p.descuento.motivo?' ('+p.descuento.motivo+')':''}</span><span>-${money(desc)}</span></div>`:''}
+  ${p.costoEnvio?`<div class="row"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}
+  <div class="row tot"><span>TOTAL</span><span>${money(p.total)}</span></div><hr>
+  <div class="row"><span>Pago</span><span>${nm[p.pago.metodo]||p.pago.metodo}</span></div>
+  ${p.pago.metodo==='efectivo'&&p.pago.recibido?`<div class="row"><span>Recibido</span><span>${money(p.pago.recibido)}</span></div><div class="row"><span>Cambio</span><span>${money(p.pago.cambio||0)}</span></div>`:''}
+  <div class="gr">¡Gracias por su compra!<br>${(app.tenant&&app.tenant.nombre)||''}</div>
+  </body></html>`;
+}
+function imprimirTicket(p){
+  const w=window.open('','ticketwin','width=340,height=640');
+  if(!w){toast('Permite ventanas emergentes para imprimir el ticket');return;}
+  w.document.write(ticketHTML(p));w.document.close();
+  setTimeout(()=>{try{w.focus();w.print();}catch(e){}},350);
+}
+function ticketFinal(p){
+  modal.innerHTML=`<h3>${p.folio}</h3><div class="sub">${p.tipoServicio} · cobrado</div>
+    <div class="breakdown">${p.lineas.map(l=>`<div class="b"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>`).join('')}${p.costoEnvio?`<div class="b"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}<div class="b hl"><span>Total</span><span>${money(p.total)}</span></div><div class="b"><span>Pago (${p.pago.metodo})</span><span>${money(p.pago.recibido||p.total)}</span></div>${p.pago.cambio?`<div class="b"><span>Cambio</span><span>${money(p.pago.cambio)}</span></div>`:''}</div>
+    <div class="modal-foot"><button class="btn-ghost" id="okPrint">🖨 Imprimir ticket</button><button class="btn-primary" id="okDone">Listo</button></div>`;
+  ov.classList.add('show');
+  $('#okPrint').onclick=()=>imprimirTicket(p);
+  $('#okDone').onclick=()=>{closeModal();if(app.vista==='pos')vPOS();else if(app.vista==='mesas')vMesas();};
+}
 
-// Webhook para inyectar pedidos desde una plataforma (requiere convenio de socio).
-// Protegido con el token de integración del restaurante (config.integracionToken).
-app.post('/api/integraciones/:canal/webhook', soloAdmin, wrap(async (req, res) => {
-  // Nota: en producción este endpoint se expone con un token por-restaurante y lo llama
-  // la plataforma (Uber/Rappi/DiDi) tras firmar convenio. Aquí crea un pedido normalizado.
-  const { sucursalId, items = [], cliente = null, externoId = null } = req.body || {};
-  if (!sucursalId || !items.length) throw bad('Falta sucursalId o items');
-  const canalId = req.params.canal;
-  const ped = await withState((e, c) => {
-    const suc = e.sucursales[sucursalId];
-    if (!suc) throw bad('Sucursal inexistente');
-    const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio: 'domicilio', cliente, usuario: 'integracion', canalId });
-    p.externoId = externoId;
-    for (const it of items) {
-      const prod = e.menu.productos[it.productoId];
-      if (prod) p.lineas.push(M.crearLinea(prod, e, { cantidad: it.cantidad || 1, modsElegidos: it.modsElegidos || [], notas: it.notas || '' }));
-    }
-    M.recalcularPedido(p);
-    M.mandarComanda(p); // entra directo a cocina
-    return p;
-  });
-  res.json({ ok: true, folio: ped.folio });
-}));
+// ===========================================================================
+//  COCINA
+// ===========================================================================
+async function vCocina(){
+  await pintarCocina();
+  kdsTimer=setInterval(()=>{if(app.vista==='cocina')pintarCocina();},10000);
+}
+async function pintarCocina(){
+  const ordenes=await API.get('/api/cocina?sucursalId='+app.sucursalId);
+  if(!ordenes.length){$('#view').innerHTML=`<div class="panel"><div class="empty">No hay órdenes en cocina.<br>Cobra un pedido (o manda una comanda de mesa) y aparecerá aquí.</div></div>`;return;}
+  const now=Date.now();
+  $('#view').innerHTML=`<div class="kds">${ordenes.map(p=>{
+    const min=Math.floor((now-new Date(p.recibido).getTime())/60000);
+    const srv=p.tipoServicio==='mesa'?mesaNombre(p.mesaId):p.tipoServicio;
+    return `<div class="ko ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer ${min>=10?'warn':''}">${min} min</span></div><div class="ko-srv">${srv}</div>
+      <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
+      <div class="ko-foot">${p.listo?`<button class="b-entregar" data-entregar="${p.folio}">Entregar</button>`:`<button class="b-listo" data-listo="${p.folio}">Marcar listo</button>`}</div></div>`;}).join('')}</div>`;
+  document.querySelectorAll('[data-listo]').forEach(b=>b.onclick=async()=>{await API.post(`/api/cocina/${b.dataset.listo}/listo`);pintarCocina();});
+  document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=async()=>{await API.post(`/api/cocina/${b.dataset.entregar}/entregar`);toast('Orden entregada');pintarCocina();renderNav();});
+}
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 //  MENÚ
-// ---------------------------------------------------------------------------
-app.get('/api/menu', wrap(async (req, res) => {
-  const e = await readState();
-  res.json({ categorias: e.menu.categorias, gruposModificadores: e.menu.gruposModificadores, productos: e.menu.productos });
-}));
-app.post('/api/menu/categorias', soloAdmin, wrap(async (req, res) => {
-  const { nombre, orden = 0 } = req.body || {};
-  if (!nombre) throw bad('Falta nombre');
-  const c = await withState((e) => { const c = M.crearCategoria({ nombre, orden }); e.menu.categorias[c.id] = c; return c; });
-  res.json(c);
-}));
-app.post('/api/menu/grupos', soloAdmin, wrap(async (req, res) => {
-  const { nombre, tipo, obligatorio, max, opciones = [] } = req.body || {};
-  if (!nombre) throw bad('Falta nombre');
-  const g = await withState((e) => {
-    const grp = M.crearGrupo({ nombre, tipo, obligatorio, max, opciones: opciones.map((o) => M.crearOpcion(o)) });
-    e.menu.gruposModificadores[grp.id] = grp; return grp;
-  });
-  res.json(g);
-}));
-app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
-  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null } = req.body || {};
-  if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
-  const p = await withState((e) => {
-    if (!e.menu.categorias[categoriaId]) throw bad('Categoría inexistente');
-    let finalReceta = receta, esCombo = false;
-    if (componentes && componentes.length) { finalReceta = M.recetaDeCombo(e, componentes); esCombo = true; }
-    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta });
-    if (esCombo) { prod.esCombo = true; prod.componentes = componentes; }
-    if (foto) prod.foto = foto;
-    e.menu.productos[prod.id] = prod; return prod;
-  });
-  res.json(p);
-}));
-app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
-  const { id } = req.params;
-  const patch = req.body || {};
-  const p = await withState((e) => {
-    const prod = e.menu.productos[id];
-    if (!prod) throw bad('Producto inexistente', 404);
-    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId']) if (k in patch) prod[k] = patch[k];
-    return prod;
-  });
-  res.json(p);
-}));
-
-app.get('/api/sucursales', wrap(async (req, res) => { const e = await readState(); res.json(Object.values(e.sucursales)); }));
-
-// ---------------------------------------------------------------------------
-//  CAJA
-// ---------------------------------------------------------------------------
-app.post('/api/caja/abrir', wrap(async (req, res) => {
-  const { sucursalId, fondoInicial = 0 } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const t = await withState((e, c) => {
-    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
-    if (M.turnoAbierto(e, sucursalId)) throw bad('Ya hay un turno abierto en esa sucursal', 409);
-    return M.abrirTurno(e, { sucursalId, usuario: c.username, fondoInicial });
-  });
-  res.json(t);
-}));
-app.get('/api/caja/turno-actual', wrap(async (req, res) => {
-  const e = await readState();
-  const sucursalId = req.query.sucursalId;
-  res.json(M.turnoAbierto(e, sucursalId) || null);
-}));
-app.post('/api/caja/movimiento', wrap(async (req, res) => {
-  const { sucursalId, tipo, monto, motivo } = req.body || {};
-  if (!['entrada', 'salida'].includes(tipo)) throw bad('tipo debe ser entrada o salida');
-  const t = await withState((e, c) => {
-    const turno = M.turnoAbierto(e, sucursalId);
-    if (!turno) throw bad('No hay turno abierto');
-    return M.registrarMovimiento(turno, { tipo, monto, motivo, usuario: c.username });
-  });
-  res.json(t);
-}));
-app.post('/api/caja/cerrar', wrap(async (req, res) => {
-  const { turnoId, conteoEfectivo } = req.body || {};
-  if (turnoId == null || conteoEfectivo == null) throw bad('Falta turnoId o conteoEfectivo');
-  const t = await withState((e, c) => {
-    const turno = e.caja.turnos[turnoId];
-    if (!turno) throw bad('Turno inexistente', 404);
-    if (turno.estado === 'cerrado') throw bad('El turno ya está cerrado', 409);
-    return M.cerrarTurno(turno, { usuario: c.username, conteoEfectivo });
-  });
-  res.json(t);
-}));
-app.get('/api/caja/cortes', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const arr = Object.values(e.caja.turnos).filter((t) => t.estado === 'cerrado' && (!sucursalId || t.sucursalId === sucursalId))
-    .sort((a, b) => new Date(b.cerrado) - new Date(a.cerrado))
-    .map((t) => ({ id: t.id, cerrado: t.cerrado, esperado: t.esperado, conteo: t.conteo, diferencia: t.diferencia, resultado: t.resultado }));
-  res.json(arr);
-}));
-
-// ---------------------------------------------------------------------------
-//  PEDIDOS
-// ---------------------------------------------------------------------------
-app.post('/api/pedidos', wrap(async (req, res) => {
-  const { sucursalId, tipoServicio = 'mostrador', mesaId = null, cliente = null, canalId = 'local' } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const ped = await withState((e, c) => {
-    const suc = e.sucursales[sucursalId];
-    if (!suc) throw bad('Sucursal inexistente');
-    if (tipoServicio === 'mesa') {
-      const mesa = e.mesas[mesaId];
-      if (!mesa) throw bad('Mesa inexistente');
-      if (mesa.pedidoFolio && e.pedidos[mesa.pedidoFolio] && e.pedidos[mesa.pedidoFolio].estado === 'abierto')
-        return e.pedidos[mesa.pedidoFolio]; // ya tiene cuenta abierta
-      const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, mesaId, cliente, usuario: c.username, canalId: 'local' });
-      mesa.estado = 'ocupada'; mesa.pedidoFolio = p.folio;
-      return p;
-    }
-    return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username, canalId });
-  });
-  res.json(ped);
-}));
-
-app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const { productoId, cantidad = 1, modsElegidos = [], notas = '' } = req.body || {};
-  const ped = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (p.estado !== 'abierto') throw bad('El pedido ya está cerrado');
-    const prod = e.menu.productos[productoId];
-    if (!prod) throw bad('Producto inexistente');
-    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas }));
-    p.actualizado = new Date().toISOString();
-    return M.recalcularPedido(p);
-  });
-  res.json(ped);
-}));
-
-app.delete('/api/pedidos/:folio/lineas/:lineaId', wrap(async (req, res) => {
-  const { folio, lineaId } = req.params;
-  const ped = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    p.lineas = p.lineas.filter((l) => l.id !== lineaId);
-    return M.recalcularPedido(p);
-  });
-  res.json(ped);
-}));
-
-app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const { costoEnvio, propina, descuento, cliente, canalId } = req.body || {};
-  const ped = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (costoEnvio != null) p.costoEnvio = costoEnvio;
-    if (propina != null) p.propina = propina;
-    if (descuento !== undefined) p.descuento = descuento;
-    if (cliente !== undefined) p.cliente = cliente;
-    if (canalId !== undefined) p.canalId = canalId;
-    return M.recalcularPedido(p);
-  });
-  res.json(ped);
-}));
-
-app.post('/api/pedidos/:folio/comanda', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const out = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    const enviadas = M.mandarComanda(p);
-    return { folio, enviadas, pedido: p };
-  });
-  res.json(out);
-}));
-
-app.post('/api/pedidos/:folio/cobrar', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const { pagos = [], recibido = 0 } = req.body || {};
-  if (!pagos.length) throw bad('Faltan pagos');
-  const out = await withState((e, c) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (p.estado === 'cobrado') throw bad('El pedido ya está cobrado', 409);
-    if (!p.lineas.length) throw bad('El pedido no tiene productos');
-    M.recalcularPedido(p);
-    const sumPagos = M.r2(pagos.reduce((s, x) => s + x.monto, 0));
-    if (sumPagos < p.total) throw bad(`El pago (${sumPagos}) no cubre el total (${p.total})`);
-    const turno = M.turnoAbierto(e, p.sucursalId);
-    if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
-    p.turnoId = turno.id;
-    M.mandarComanda(p); // dispara a cocina lo que falte (mostrador) o ronda final (mesa)
-    M.registrarPago(p, { pagos, recibido });
-    M.registrarVentaEnTurno(turno, p);
-    M.descontarInventario(e, p);
-    if (p.tipoServicio === 'mesa' && p.mesaId && e.mesas[p.mesaId]) {
-      e.mesas[p.mesaId].estado = 'libre';
-      e.mesas[p.mesaId].pedidoFolio = null;
-    }
-    return p;
-  });
-  res.json(out);
-}));
-
-app.get('/api/pedidos', wrap(async (req, res) => {
-  const e = await readState();
-  const { estado, sucursalId } = req.query;
-  let arr = Object.values(e.pedidos);
-  if (sucursalId) arr = arr.filter((p) => p.sucursalId === sucursalId);
-  if (estado) arr = arr.filter((p) => p.estado === estado);
-  res.json(arr);
-}));
-
-app.get('/api/ventas/recientes', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, limit = 30 } = req.query;
-  let arr = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado');
-  if (sucursalId) arr = arr.filter((p) => p.sucursalId === sucursalId);
-  arr.sort((a, b) => new Date(b.actualizado) - new Date(a.actualizado));
-  res.json(arr.slice(0, +limit));
-}));
-
-// ---------------------------------------------------------------------------
-//  COCINA (KDS)
-// ---------------------------------------------------------------------------
-app.get('/api/cocina', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const arr = Object.values(e.pedidos)
-    .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado'))
-    .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
-    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado').map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
-  res.json(arr);
-}));
-app.post('/api/cocina/:folio/listo', wrap(async (req, res) => {
-  const out = await withState((e) => { const p = e.pedidos[req.params.folio]; if (!p) throw bad('Pedido inexistente', 404); p._kdsListo = true; p.tiemposCocina.listo = new Date().toISOString(); return { ok: true }; });
-  res.json(out);
-}));
-app.post('/api/cocina/:folio/entregar', wrap(async (req, res) => {
-  const out = await withState((e) => {
-    const p = e.pedidos[req.params.folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    for (const l of p.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
-    p._kdsListo = false;
-    return { ok: true };
-  });
-  res.json(out);
-}));
-
-// ---------------------------------------------------------------------------
-//  INVENTARIO
-// ---------------------------------------------------------------------------
-app.get('/api/inventario', wrap(async (req, res) => {
-  const e = await readState();
-  const insumos = Object.values(e.insumos).map((i) => ({ ...i, bajo: i.stock <= i.stockMin, valor: M.r2(i.stock * i.costoUnitario) }));
-  const foodCost = Object.values(e.menu.productos).filter((p) => p.receta.length).map((p) => ({ id: p.id, nombre: p.nombre, costo: M.costoReceta(e, p), precio: p.precioBase, foodCostPct: M.foodCostPct(e, p) }));
-  const valuacion = M.r2(insumos.reduce((s, i) => s + i.valor, 0));
-  res.json({ insumos, foodCost, valuacion });
-}));
-// Conteo físico: compara teórico vs físico, calcula merma en $ y ajusta el stock
-app.post('/api/inventario/conteo', soloAdmin, wrap(async (req, res) => {
-  const { conteos = [] } = req.body || {};
-  if (!conteos.length) throw bad('No hay conteos');
-  const out = await withState((e, c) => {
-    if (!e.conteos) e.conteos = [];
-    const lineas = []; let mermaTotal = 0;
-    for (const ct of conteos) {
-      const i = e.insumos[ct.insumoId];
-      if (!i || ct.fisico == null) continue;
-      const teorico = i.stock, fisico = M.r2(ct.fisico);
-      const diff = M.r2(fisico - teorico);
-      const valor = M.r2((teorico - fisico) * i.costoUnitario); // positivo = merma (pérdida)
-      lineas.push({ insumoId: i.id, nombre: i.nombre, teorico, fisico, diff, valor });
-      mermaTotal = M.r2(mermaTotal + valor);
-      i.stock = fisico; // ajustar a lo contado
-    }
-    const audit = { id: M.uid('aud'), fecha: new Date().toISOString(), usuario: c.username, mermaTotal, lineas };
-    e.conteos.unshift(audit);
-    if (e.conteos.length > 60) e.conteos = e.conteos.slice(0, 60);
-    return audit;
-  });
-  res.json(out);
-}));
-app.get('/api/inventario/auditorias', wrap(async (req, res) => {
-  const e = await readState();
-  res.json((e.conteos || []).slice(0, 20));
-}));
-app.post('/api/inventario/insumos', soloAdmin, wrap(async (req, res) => {
-  const { nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 } = req.body || {};
-  if (!nombre || !unidad) throw bad('Falta nombre o unidad');
-  const i = await withState((e) => { const ins = M.crearInsumo({ nombre, unidad, stock, costoUnitario, stockMin }); e.insumos[ins.id] = ins; return ins; });
-  res.json(i);
-}));
-app.patch('/api/inventario/insumos/:id', soloAdmin, wrap(async (req, res) => {
-  const patch = req.body || {};
-  const i = await withState((e) => {
-    const ins = e.insumos[req.params.id];
-    if (!ins) throw bad('Insumo inexistente', 404);
-    if (patch.nombre != null) ins.nombre = patch.nombre;
-    if (patch.unidad != null) ins.unidad = patch.unidad;
-    if (patch.stock != null) ins.stock = M.r2(+patch.stock);
-    if (patch.stockMin != null) ins.stockMin = M.r2(+patch.stockMin);
-    if (patch.costoUnitario != null) ins.costoUnitario = M.r2(+patch.costoUnitario);
-    return ins;
-  });
-  res.json(i);
-}));
-app.delete('/api/inventario/insumos/:id', soloAdmin, wrap(async (req, res) => {
-  await withState((e) => {
-    const usado = Object.values(e.menu.productos).some((p) => (p.receta || []).some((r) => r.insumoId === req.params.id));
-    if (usado) throw bad('Ese insumo está en la receta de un producto. Quítalo de la receta primero.');
-    delete e.insumos[req.params.id];
-  });
-  res.json({ ok: true });
-}));
-app.post('/api/inventario/insumos/:id/entrada', soloAdmin, wrap(async (req, res) => {
-  const { cantidad = 0 } = req.body || {};
-  const i = await withState((e) => { const ins = e.insumos[req.params.id]; if (!ins) throw bad('Insumo inexistente', 404); ins.stock = M.r2(ins.stock + cantidad); return ins; });
-  res.json(i);
-}));
-
-// Aplicar margen/food cost a TODOS los productos con receta (admin)
-// tipo='foodcost' -> precio = costoReceta / (valor/100) ; tipo='markup' -> precio = costoReceta * valor
-app.post('/api/menu/precios/aplicar', soloAdmin, wrap(async (req, res) => {
-  const { tipo = 'foodcost', valor, redondeo = 0 } = req.body || {};
-  if (!valor || valor <= 0) throw bad('Falta el valor');
-  const out = await withState((e) => {
-    let actualizados = 0, omitidos = 0;
-    const cambios = [];
-    for (const p of Object.values(e.menu.productos)) {
-      const costo = M.costoReceta(e, p);
-      if (!costo) { omitidos++; continue; }
-      let nuevo = tipo === 'markup' ? costo * valor : costo / (valor / 100);
-      if (redondeo > 0) nuevo = Math.ceil(nuevo / redondeo) * redondeo; else nuevo = M.r2(nuevo);
-      cambios.push({ nombre: p.nombre, antes: p.precioBase, despues: nuevo });
-      p.precioBase = nuevo; actualizados++;
-    }
-    return { actualizados, omitidos, cambios };
-  });
-  res.json(out);
-}));
-
-// ---------------------------------------------------------------------------
-//  MESAS
-// ---------------------------------------------------------------------------
-app.get('/api/mesas', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const arr = Object.values(e.mesas).filter((m) => !sucursalId || m.sucursalId === sucursalId).map((m) => {
-    const p = m.pedidoFolio ? e.pedidos[m.pedidoFolio] : null;
-    return { ...m, total: p ? p.total : 0, items: p ? p.lineas.length : 0, abierto: p ? p.creado : null };
-  });
-  res.json(arr);
-}));
-app.post('/api/mesas/:id/cuenta', wrap(async (req, res) => {
-  const m = await withState((e) => { const mesa = e.mesas[req.params.id]; if (!mesa) throw bad('Mesa inexistente', 404); if (mesa.estado === 'ocupada') mesa.estado = 'cuenta'; return mesa; });
-  res.json(m);
-}));
-app.post('/api/mesas', wrap(async (req, res) => {
-  const { sucursalId, nombre } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const m = await withState((e) => {
-    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
-    const n = Object.values(e.mesas).filter((x) => x.sucursalId === sucursalId).length;
-    const mesa = M.crearMesa({ nombre: nombre || ('Mesa ' + (n + 1)), sucursalId });
-    e.mesas[mesa.id] = mesa; return mesa;
-  });
-  res.json(m);
-}));
-app.post('/api/mesas/bulk', wrap(async (req, res) => {
-  const { sucursalId, cantidad = 6 } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const arr = await withState((e) => {
-    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
-    const base = Object.values(e.mesas).filter((x) => x.sucursalId === sucursalId).length;
-    const out = [];
-    for (let i = 1; i <= cantidad; i++) { const m = M.crearMesa({ nombre: 'Mesa ' + (base + i), sucursalId }); e.mesas[m.id] = m; out.push(m); }
-    return out;
-  });
-  res.json(arr);
-}));
-
-// ---------------------------------------------------------------------------
-//  REPORTES
-// ---------------------------------------------------------------------------
-app.get('/api/reportes/resumen', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const peds = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado' && (!sucursalId || p.sucursalId === sucursalId));
-  const venta = M.r2(peds.reduce((s, p) => s + p.total, 0));
-  const porProducto = {}; peds.forEach((p) => p.lineas.forEach((l) => { porProducto[l.nombre] = porProducto[l.nombre] || { q: 0, total: 0 }; porProducto[l.nombre].q += l.cantidad; porProducto[l.nombre].total = M.r2(porProducto[l.nombre].total + l.importe); }));
-  const porPago = { efectivo: 0, tarjeta: 0, transferencia: 0 }; peds.forEach((p) => p.pago && p.pago.pagos.forEach((x) => porPago[x.metodo] = M.r2((porPago[x.metodo] || 0) + x.monto)));
-  const porServicio = { mostrador: 0, domicilio: 0, mesa: 0 }; peds.forEach((p) => porServicio[p.tipoServicio] = M.r2(porServicio[p.tipoServicio] + p.total));
-  res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, porProducto, porPago, porServicio });
-}));
-
-// estado completo (debug / export)
-app.get('/api/estado', wrap(async (req, res) => { res.json(await readState()); }));
-
-// ---------------------------------------------------------------------------
-//  REPORTE FINANCIERO (admin)  — COGS teórico, margen, food cost, rentabilidad
-// ---------------------------------------------------------------------------
-app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const peds = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado' && (!sucursalId || p.sucursalId === sucursalId));
-  const canales = e.config.canales || M.canalesDefault();
-  let ingresos = 0, cogs = 0, descuentos = 0;
-  const porProd = {};
-  const porCanal = {};
-  for (const p of peds) {
-    ingresos = M.r2(ingresos + p.total);
-    const cid = p.canalId || 'local';
-    porCanal[cid] = porCanal[cid] || { ventas: 0, pedidos: 0 };
-    porCanal[cid].ventas = M.r2(porCanal[cid].ventas + p.total);
-    porCanal[cid].pedidos++;
-    if (p.descuento) {
-      const subt = p.lineas.reduce((s, l) => s + l.importe, 0);
-      const d = p.descuento.tipo === 'porcentaje' ? subt * p.descuento.valor / 100 : p.descuento.valor;
-      descuentos = M.r2(descuentos + d);
-    }
-    for (const l of p.lineas) {
-      const prod = e.menu.productos[l.productoId];
-      const costoLinea = prod ? M.r2(M.costoReceta(e, prod) * l.cantidad) : 0;
-      cogs = M.r2(cogs + costoLinea);
-      const k = l.nombre;
-      porProd[k] = porProd[k] || { unidades: 0, ingreso: 0, costo: 0 };
-      porProd[k].unidades += l.cantidad;
-      porProd[k].ingreso = M.r2(porProd[k].ingreso + l.importe);
-      porProd[k].costo = M.r2(porProd[k].costo + costoLinea);
-    }
-  }
-  const margenBruto = M.r2(ingresos - cogs);
-  const canalesOut = Object.entries(porCanal).map(([cid, d]) => {
-    const ch = canales[cid] || { nombre: cid, comisionPct: 0 };
-    const comision = M.r2(d.ventas * ch.comisionPct / 100);
-    const comisionConIVA = M.r2(comision * 1.16); // 16% IVA sobre la comisión
-    return { canalId: cid, nombre: ch.nombre, comisionPct: ch.comisionPct, ventas: d.ventas, pedidos: d.pedidos, comision: comisionConIVA, neto: M.r2(d.ventas - comisionConIVA) };
-  }).sort((a, b) => b.ventas - a.ventas);
-  const comisionTotal = M.r2(canalesOut.reduce((s, c) => s + c.comision, 0));
-  const nominaBase = M.r2(Object.values(e.empleados || {}).filter((x) => x.activo).reduce((s, x) => s + x.salarioBase, 0));
-  const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
-    nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
-    margen: M.r2(d.ingreso - d.costo), margenPct: d.ingreso ? M.r2((d.ingreso - d.costo) / d.ingreso * 100) : 0,
-  })).sort((a, b) => b.margen - a.margen);
-  res.json({
-    ingresos, cogs, margenBruto,
-    margenBrutoPct: ingresos ? M.r2(margenBruto / ingresos * 100) : 0,
-    foodCostPct: ingresos ? M.r2(cogs / ingresos * 100) : 0,
-    descuentos, pedidos: peds.length,
-    ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
-    comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
-    nominaBase,
-    canales: canalesOut,
-    rentabilidad,
-  });
-}));
-
-// Fallback SPA: cualquier ruta que no sea /api sirve el frontend
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-// ---------------------------------------------------------------------------
-//  Arranque
-// ---------------------------------------------------------------------------
-const PORT = process.env.PORT || 3000;
-if (require.main === module) {
-  db.initDB().then(() => app.listen(PORT, () => console.log('ComandaPro API en puerto ' + PORT)))
-    .catch((err) => { console.error('No arrancó:', err); process.exit(1); });
+// ===========================================================================
+async function vMenu(){
+  app.menu=await API.get('/api/menu');const inv=await API.get('/api/inventario');
+  const fcMap={};inv.foodCost.forEach(f=>fcMap[f.id]=f);
+  $('#view').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn dark" id="addProd">+ Nuevo producto</button></div>
+  ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
+    <table><thead><tr><th>Producto</th><th>Destino</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
+    ${ps.map(p=>{const fc=fcMap[p.id];return `<tr><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td></tr>`;}).join('')}
+    </tbody></table></div>`;}).join('')}`;
+  $('#addProd').onclick=modalNuevoProducto;
+}
+function modalNuevoProducto(){
+  modal.innerHTML=`<h3>Nuevo producto</h3><div class="sub">Se agrega al menú de inmediato</div>
+    <div class="field"><label>Nombre</label><input id="npNom" placeholder="Ej. Doble queso"></div>
+    <div class="field"><label>Categoría</label><select id="npCat">${cats().map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('')}</select></div>
+    <div class="field"><label>Precio base</label><input id="npPre" type="number" class="mono" placeholder="0.00"></div>
+    <div class="field"><label>Destino</label><select id="npDest"><option value="cocina">Cocina</option><option value="barra">Barra</option></select></div>
+    <div class="field"><label>URL de foto (opcional)</label><input id="npFoto" placeholder="https://… (si la dejas vacía usa ilustración)"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="npCancel">Cancelar</button><button class="btn-primary" id="npOk">Crear</button></div>`;
+  ov.classList.add('show');$('#npCancel').onclick=closeModal;
+  $('#npOk').onclick=async()=>{const nom=$('#npNom').value.trim(),pre=+$('#npPre').value;if(!nom||!pre){toast('Falta nombre o precio');return;}
+    try{const p=await API.post('/api/menu/productos',{categoriaId:$('#npCat').value,nombre:nom,precioBase:pre,destino:$('#npDest').value});
+      const foto=$('#npFoto').value.trim();if(foto)await API.patch('/api/menu/productos/'+p.id,{foto});
+      closeModal();toast('Producto creado');vMenu();}catch(e){toast(e.message);}};
 }
 
-module.exports = app;
+// ===========================================================================
+//  INVENTARIO
+// ===========================================================================
+async function vInventario(){
+  const inv=await API.get('/api/inventario');
+  const esAdmin2=esAdmin();
+  let auds=[];if(esAdmin2){try{auds=await API.get('/api/inventario/auditorias');}catch{}}
+  const bajos=inv.insumos.filter(i=>i.bajo).length;
+  const faltantes=inv.insumos.filter(i=>i.bajo).map(i=>{const sug=Math.round((i.stockMin*2-i.stock)*100)/100;return {...i,sug:sug>0?sug:i.stockMin,costoSug:Math.round((sug>0?sug:i.stockMin)*i.costoUnitario*100)/100};});
+  const totalCompra=Math.round(faltantes.reduce((s,i)=>s+i.costoSug,0)*100)/100;
+  app._faltantes={lista:faltantes,total:totalCompra};
+  $('#view').innerHTML=`<div class="kpis">
+      <div class="kpi accent"><div class="lab">Valor del inventario</div><div class="val">${money(inv.valuacion)}</div></div>
+      <div class="kpi"><div class="lab">Insumos por reabastecer</div><div class="val" style="color:${bajos?'var(--red)':'var(--green)'}">${bajos}</div></div>
+      <div class="kpi"><div class="lab">Último conteo</div><div class="val" style="font-size:18px">${auds.length?new Date(auds[0].fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'}):'—'}</div>${auds.length?`<div class="lab" style="margin-top:2px;color:${auds[0].mermaTotal>0?'var(--red)':'var(--green)'}">merma ${money(auds[0].mermaTotal)}</div>`:''}</div>
+    </div>
+    ${faltantes.length?`<div class="panel" style="margin-bottom:16px;border-color:var(--red)"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">🛒 Lista de compras <span class="small">${faltantes.length} insumo(s) en o bajo el mínimo</span><span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="copiarCompra" style="font-size:13px">Copiar</button><button class="btn dark" id="imprimirCompra" style="font-size:13px">Imprimir</button></span></h3>
+      <table><thead><tr><th>Insumo</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Sugerido</th><th class="num">Costo est.</th></tr></thead><tbody>
+      ${faltantes.map(i=>`<tr><td style="font-weight:600">${i.nombre}</td><td class="num" style="color:var(--red)">${i.stock} ${i.unidad}</td><td class="num">${i.stockMin}</td><td class="num" style="font-weight:600">${i.sug} ${i.unidad}</td><td class="num">${money(i.costoSug)}</td></tr>`).join('')}
+      </tbody><tfoot><tr><td colspan="4" class="num"><b>Total estimado</b></td><td class="num"><b>${money(totalCompra)}</b></td></tr></tfoot></table></div>`:''}
+    <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin2?`<span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="newInsumo" style="font-size:13px">+ Insumo</button><button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button></span>`:''}</h3>
+    <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 11px;font-size:12px;min-height:auto">+ Entrada</button>${esAdmin2?` <button class="btn" data-edit='${i.id}' style="padding:8px 11px;font-size:12px;min-height:auto">Editar</button>`:''}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${esAdmin2&&auds.length?`<div class="panel" style="margin-bottom:16px"><h3>Mermas recientes <span class="small">teórico vs físico</span></h3><table><thead><tr><th>Fecha</th><th>Por</th><th class="num">Insumos contados</th><th class="num">Merma ($)</th></tr></thead><tbody>
+    ${auds.map(a=>`<tr><td>${new Date(a.fecha).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td>${a.usuario||'—'}</td><td class="num">${a.lineas.length}</td><td class="num" style="color:${a.mermaTotal>0?'var(--red)':a.mermaTotal<0?'var(--accent-ink)':'var(--green)'};font-weight:600">${money(a.mermaTotal)}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
+    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Food cost por producto <span class="small">costo de receta vs precio</span>${esAdmin2?`<button class="btn dark" id="aplicarMargen" style="font-size:13px;margin-left:auto">Aplicar margen a todos</button>`:''}</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
+    ${inv.foodCost.map(f=>`<tr><td>${f.nombre}</td><td class="num">${money(f.costo)}</td><td class="num">${money(f.precio)}</td><td class="num" style="color:${f.foodCostPct>40?'var(--red)':f.foodCostPct>35?'var(--accent-ink)':'var(--green)'};font-weight:600">${f.foodCostPct.toFixed(0)}%</td></tr>`).join('')}
+    </tbody></table></div>`;
+  document.querySelectorAll('[data-ent]').forEach(b=>b.onclick=()=>modalEntrada(b.dataset.ent,b.dataset.nom));
+  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>modalInsumo(inv.insumos.find(i=>i.id===b.dataset.edit)));
+  if($('#conteo'))$('#conteo').onclick=()=>modalConteo(inv.insumos);
+  if($('#newInsumo'))$('#newInsumo').onclick=()=>modalInsumo(null);
+  if($('#aplicarMargen'))$('#aplicarMargen').onclick=modalAplicarMargen;
+  if($('#copiarCompra'))$('#copiarCompra').onclick=copiarListaCompra;
+  if($('#imprimirCompra'))$('#imprimirCompra').onclick=imprimirListaCompra;
+}
+function listaCompraTexto(){
+  const f=app._faltantes||{lista:[],total:0};
+  const nombre=(app.tenant&&app.tenant.nombre)||'Restaurante';
+  const fecha=new Date().toLocaleDateString('es-MX',{day:'2-digit',month:'long',year:'numeric'});
+  let t=`🛒 *Lista de compras* — ${nombre}\n${fecha}\n\n`;
+  f.lista.forEach(i=>{t+=`• ${i.nombre}: ${i.sug} ${i.unidad}  (~${money(i.costoSug)})\n`;});
+  t+=`\nTotal estimado: ${money(f.total)}`;
+  return t;
+}
+async function copiarListaCompra(){
+  const t=listaCompraTexto();
+  try{await navigator.clipboard.writeText(t);toast('Lista copiada — pégala en WhatsApp');}
+  catch{const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('Lista copiada');}
+}
+function imprimirListaCompra(){
+  const f=app._faltantes||{lista:[],total:0};
+  const nombre=(app.tenant&&app.tenant.nombre)||'Restaurante';
+  const fecha=new Date().toLocaleString('es-MX',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const w=window.open('','compra','width=420,height=640');if(!w){toast('Permite ventanas emergentes');return;}
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Lista de compras</title><style>
+    body{font-family:Arial,sans-serif;padding:18px;color:#000;max-width:480px;margin:0 auto}
+    h1{font-size:18px;margin:0 0 2px}.m{color:#555;font-size:13px;margin-bottom:12px}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #ddd}
+    td.n,th.n{text-align:right}tfoot td{font-weight:bold;border-top:2px solid #000}
+    @media print{button{display:none}}</style></head><body>
+    <h1>🛒 Lista de compras — ${nombre}</h1><div class="m">${fecha}</div>
+    <table><thead><tr><th>Insumo</th><th class="n">Stock</th><th class="n">Mínimo</th><th class="n">Sugerido</th><th class="n">Costo est.</th></tr></thead><tbody>
+    ${f.lista.map(i=>`<tr><td>${i.nombre}</td><td class="n">${i.stock} ${i.unidad}</td><td class="n">${i.stockMin}</td><td class="n">${i.sug} ${i.unidad}</td><td class="n">${money(i.costoSug)}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td colspan="4" class="n">Total estimado</td><td class="n">${money(f.total)}</td></tr></tfoot></table>
+    </body></html>`);
+  w.document.close();setTimeout(()=>{try{w.focus();w.print();}catch(e){}},350);
+}
+function modalInsumo(ins){
+  const ed=!!ins;
+  modal.innerHTML=`<h3>${ed?'Editar insumo':'Nuevo insumo'}</h3><div class="sub">${ed?ins.nombre:'Lo que compras para preparar tus productos'}</div>
+    <div class="field"><label>Nombre</label><input id="inNom" value="${ed?ins.nombre:''}" placeholder="Ej. Carne 150g"></div>
+    <div class="cols2"><div class="field"><label>Unidad</label><input id="inUni" value="${ed?ins.unidad:''}" placeholder="pza, g, ml, orden"></div>
+    <div class="field"><label>Costo unitario</label><input id="inCost" type="number" class="mono" inputmode="decimal" value="${ed?ins.costoUnitario:''}" placeholder="0.00"></div></div>
+    <div class="cols2"><div class="field"><label>Stock actual</label><input id="inStock" type="number" class="mono" inputmode="decimal" value="${ed?ins.stock:0}"></div>
+    <div class="field"><label>Stock mínimo</label><input id="inMin" type="number" class="mono" inputmode="decimal" value="${ed?ins.stockMin:0}"></div></div>
+    <div class="modal-foot">${ed?`<button class="btn-ghost" id="inDel" style="color:var(--red);margin-right:auto">Eliminar</button>`:''}<button class="btn-ghost" id="inCancel">Cancelar</button><button class="btn-primary" id="inOk">${ed?'Guardar':'Crear'}</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#inNom').focus(),50);
+  $('#inCancel').onclick=closeModal;
+  if(ed&&$('#inDel'))$('#inDel').onclick=async()=>{if(!confirm('¿Eliminar '+ins.nombre+'?'))return;try{await API.del('/api/inventario/insumos/'+ins.id);closeModal();toast('Insumo eliminado');vInventario();}catch(e){toast(e.message);}};
+  $('#inOk').onclick=async()=>{const body={nombre:$('#inNom').value.trim(),unidad:$('#inUni').value.trim(),costoUnitario:+$('#inCost').value||0,stock:+$('#inStock').value||0,stockMin:+$('#inMin').value||0};
+    if(!body.nombre||!body.unidad){toast('Falta nombre o unidad');return;}
+    try{if(ed)await API.patch('/api/inventario/insumos/'+ins.id,body);else await API.post('/api/inventario/insumos',body);closeModal();toast(ed?'Insumo actualizado':'Insumo creado');vInventario();}catch(e){toast(e.message);}};
+}
+function modalAplicarMargen(){
+  modal.innerHTML=`<h3>Aplicar margen a todos</h3><div class="sub">Recalcula el precio de cada producto a partir de su costo de receta</div>
+    <div class="field"><label>Método</label><select id="mgTipo"><option value="foodcost">Food cost objetivo (%)</option><option value="markup">Multiplicador sobre el costo (×)</option></select></div>
+    <div class="field"><label id="mgLbl">Food cost objetivo (%)</label><input id="mgVal" type="number" class="mono" inputmode="decimal" value="30"></div>
+    <div class="field"><label>Redondear a (opcional)</label><select id="mgRed"><option value="0">Sin redondeo</option><option value="1">Al peso ($1)</option><option value="5" selected>A $5</option><option value="10">A $10</option></select></div>
+    <div style="font-size:13px;color:var(--muted);margin:4px 0 8px" id="mgHint">Precio = costo de receta ÷ 30% — un food cost de 28–35% es lo sano.</div>
+    <div class="modal-foot"><button class="btn-ghost" id="mgCancel">Cancelar</button><button class="btn-primary" id="mgOk">Aplicar a todos</button></div>`;
+  ov.classList.add('show');
+  const sync=()=>{const t=$('#mgTipo').value;$('#mgLbl').textContent=t==='foodcost'?'Food cost objetivo (%)':'Multiplicador (×)';
+    $('#mgHint').textContent=t==='foodcost'?'Precio = costo de receta ÷ %. Un food cost de 28–35% es lo sano.':'Precio = costo de receta × multiplicador. Ej. 3 = triple del costo.';
+    if(t==='markup'&&$('#mgVal').value==='30')$('#mgVal').value='3';if(t==='foodcost'&&$('#mgVal').value==='3')$('#mgVal').value='30';};
+  $('#mgTipo').onchange=sync;
+  $('#mgCancel').onclick=closeModal;
+  $('#mgOk').onclick=async()=>{const tipo=$('#mgTipo').value,valor=+$('#mgVal').value,redondeo=+$('#mgRed').value;
+    if(!valor){toast('Captura el valor');return;}
+    try{const r=await API.post('/api/menu/precios/aplicar',{tipo,valor,redondeo});app.menu=await API.get('/api/menu');closeModal();
+      toast(`${r.actualizados} precios actualizados${r.omitidos?` · ${r.omitidos} sin receta`:''}`);vInventario();}catch(e){toast(e.message);}};
+}
+function modalConteo(insumos){
+  modal.innerHTML=`<h3>Conteo físico</h3><div class="sub">Captura lo que hay físicamente. El sistema calcula la merma (lo que falta vs el teórico) y ajusta el stock.</div>
+    <div style="max-height:46vh;overflow:auto;margin:6px 0"><table><thead><tr><th>Insumo</th><th class="num">Teórico</th><th class="num" style="width:96px">Físico</th></tr></thead><tbody>
+    ${insumos.map(i=>`<tr><td>${i.nombre}<div style="font-size:11px;color:var(--muted)">${i.unidad}</div></td><td class="num">${i.stock}</td><td class="num"><input data-ct="${i.id}" type="number" class="mono" inputmode="decimal" value="${i.stock}" style="width:84px;padding:8px;text-align:right"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div id="mermaPrev" style="font-size:14px;color:var(--muted);margin:6px 0"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="ctCancel">Cancelar</button><button class="btn-primary" id="ctOk">Aplicar conteo</button></div>`;
+  ov.classList.add('show');
+  const byId={};insumos.forEach(i=>byId[i.id]=i);
+  const recalc=()=>{let m=0;modal.querySelectorAll('[data-ct]').forEach(inp=>{const i=byId[inp.dataset.ct];const fis=parseFloat(inp.value);if(!isNaN(fis))m+=(i.stock-fis)*i.costoUnitario;});
+    $('#mermaPrev').innerHTML=m>0?`Merma estimada: <b style="color:var(--red)">${money(m)}</b>`:m<0?`Sobrante: <b style="color:var(--accent-ink)">${money(-m)}</b>`:'Todo cuadra ✓';};
+  modal.querySelectorAll('[data-ct]').forEach(inp=>inp.oninput=recalc);recalc();
+  $('#ctCancel').onclick=closeModal;
+  $('#ctOk').onclick=async()=>{const conteos=[...modal.querySelectorAll('[data-ct]')].map(inp=>({insumoId:inp.dataset.ct,fisico:parseFloat(inp.value)})).filter(c=>!isNaN(c.fisico));
+    try{const r=await API.post('/api/inventario/conteo',{conteos});closeModal();toast(r.mermaTotal>0?`Conteo aplicado · merma ${money(r.mermaTotal)}`:'Conteo aplicado · todo cuadra');vInventario();}catch(e){toast(e.message);}};
+}
+function modalEntrada(id,nombre){
+  modal.innerHTML=`<h3>Entrada de stock</h3><div class="sub">${nombre||''}</div>
+    <div class="field"><label>¿Cuántas unidades entran?</label><input id="entCant" type="number" class="mono" inputmode="decimal" placeholder="0"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">Agregar al stock</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#entCant').focus(),50);
+  $('#eCancel').onclick=closeModal;
+  $('#eOk').onclick=async()=>{const n=parseFloat($('#entCant').value);if(!n){toast('Captura una cantidad');return;}try{await API.post(`/api/inventario/insumos/${id}/entrada`,{cantidad:n});closeModal();toast('Stock actualizado');vInventario();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  MESAS
+// ===========================================================================
+async function vMesas(){
+  const mesas=await API.get('/api/mesas?sucursalId='+app.sucursalId);
+  app._mesaNum={};mesas.forEach(m=>app._mesaNum[m.id]=m.nombre.replace('Mesa ',''));
+  const lbl={libre:'Libre',ocupada:'Ocupada',cuenta:'Pidió cuenta'};
+  const sucNombre=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
+  if(!mesas.length){
+    $('#view').innerHTML=`<div class="panel"><h3>Salón · ${sucNombre}</h3>
+      <div class="empty">Esta sucursal aún no tiene mesas.<br><br>
+      <button class="btn accent" id="crear6" style="margin-right:8px">Crear 6 mesas</button>
+      <button class="btn" id="crear1">Agregar 1 mesa</button></div></div>`;
+    $('#crear6').onclick=async()=>{await API.post('/api/mesas/bulk',{sucursalId:app.sucursalId,cantidad:6});toast('6 mesas creadas');vMesas();};
+    $('#crear1').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
+    return;
+  }
+  $('#view').innerHTML=`<div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center">Salón · ${sucNombre} <button class="btn" id="addMesa" style="font-size:13px">+ Agregar mesa</button></h3>
+    <div class="mesas">${mesas.map(m=>`<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block;border:none;cursor:pointer">${mesaArt(m.estado)}</button>
+      <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div><div class="ms">${lbl[m.estado]}</div>${m.estado!=='libre'?`<div class="mtot">${money(m.total)}</div>`:''}${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}</div></div>`).join('')}</div></div>`;
+  $('#addMesa').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
+  document.querySelectorAll('[data-abrir]').forEach(b=>b.onclick=()=>abrirMesa(b.dataset.abrir));
+  document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);vMesas();});
+}
+async function abrirMesa(mesaId){
+  if(!app.turno){toast('Abre el turno antes de atender mesas');return;}
+  try{const p=await API.post('/api/pedidos',{sucursalId:app.sucursalId,tipoServicio:'mesa',mesaId});
+    app.pos={folio:p.folio,pedido:p,tipoServicio:'mesa',mesaId,cat:app.pos.cat||cats()[0].id};go('pos');
+  }catch(e){toast(e.message);}
+}
+
+// ===========================================================================
+//  REPORTES
+// ===========================================================================
+async function vReportes(){
+  const [res,cortes]=await Promise.all([API.get('/api/reportes/resumen?sucursalId='+app.sucursalId),API.get('/api/caja/cortes?sucursalId='+app.sucursalId)]);
+  const rows=Object.entries(res.porProducto||{}).sort((a,b)=>b[1].total-a[1].total);
+  $('#view').innerHTML=`<div class="kpis"><div class="kpi accent"><div class="lab">Venta total</div><div class="val">${money(res.venta)}</div></div>
+    <div class="kpi"><div class="lab">Pedidos</div><div class="val">${res.pedidos}</div></div>
+    <div class="kpi"><div class="lab">Unidades</div><div class="val">${Object.values(res.porProducto||{}).reduce((s,x)=>s+x.q,0)}</div></div></div>
+  <div class="panel" style="margin-bottom:16px"><h3>Ventas por producto</h3><table><thead><tr><th>Producto</th><th class="num">Piezas</th><th class="num">Importe</th><th class="num">% total</th></tr></thead><tbody>
+    ${rows.map(([n,d])=>`<tr><td>${n}</td><td class="num">${d.q}</td><td class="num">${money(d.total)}</td><td class="num">${(d.total/res.venta*100||0).toFixed(1)}%</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">Sin ventas</td></tr>'}
+  </tbody></table></div>
+  <div class="cols">
+    <div class="panel"><h3>Por servicio</h3>${['mostrador','domicilio','mesa'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porServicio[k]/(res.venta||1)*100}%"></div></div><div class="bv">${money(res.porServicio[k])}</div></div>`).join('')}</div>
+    <div class="panel"><h3>Por método de pago</h3>${['efectivo','tarjeta','transferencia'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porPago[k]/(res.venta||1)*100}%;background:${k==='efectivo'?'var(--green)':k==='tarjeta'?'var(--blue)':'var(--accent)'}"></div></div><div class="bv">${money(res.porPago[k])}</div></div>`).join('')}</div></div>
+  <div class="panel" style="margin-top:16px"><h3>Cortes de caja</h3>${cortes.length?`<table><thead><tr><th>Cierre</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th><th>Resultado</th></tr></thead><tbody>
+    ${cortes.map(t=>`<tr><td>${new Date(t.cerrado).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(t.esperado.efectivo)}</td><td class="num">${money(t.conteo)}</td><td class="num" style="color:${t.diferencia<0?'var(--red)':t.diferencia>0?'var(--accent-ink)':'var(--green)'}">${money(t.diferencia)}</td><td><span class="chip ${t.resultado==='faltante'?'low':t.resultado==='cuadrado'?'ok':''}">${t.resultado}</span></td></tr>`).join('')}
+  </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>
+  <div id="finBlock"></div>`;
+  if(esAdmin())renderFinanciero();
+}
+async function renderFinanciero(){
+  let fin;try{fin=await API.get('/api/reportes/financiero?sucursalId='+app.sucursalId);}catch{return;}
+  const col=v=>v<=35?'var(--green)':v<=45?'var(--accent-ink)':'var(--red)';
+  const r=fin.rentabilidad||[];
+  $('#finBlock').innerHTML=`
+  <div style="margin:22px 0 10px;font-family:'Bricolage Grotesque';font-weight:700;font-size:20px">Análisis financiero</div>
+  <div class="kpis">
+    <div class="kpi accent"><div class="lab">Ingresos</div><div class="val">${money(fin.ingresos)}</div></div>
+    <div class="kpi"><div class="lab">Costo de insumos (COGS)</div><div class="val">${money(fin.cogs)}</div></div>
+    <div class="kpi"><div class="lab">Margen bruto</div><div class="val">${money(fin.margenBruto)}</div><div class="lab" style="margin-top:2px">${fin.margenBrutoPct}%</div></div>
+    <div class="kpi"><div class="lab">Food cost %</div><div class="val" style="color:${col(fin.foodCostPct)}">${fin.foodCostPct}%</div><div class="lab" style="margin-top:2px">meta 28–35%</div></div>
+  </div>
+  <div class="kpis" style="margin-top:0">
+    <div class="kpi"><div class="lab">Ticket promedio</div><div class="val">${money(fin.ticketPromedio)}</div></div>
+    <div class="kpi"><div class="lab">Descuentos otorgados</div><div class="val">${money(fin.descuentos)}</div></div>
+    <div class="kpi"><div class="lab">Pedidos cobrados</div><div class="val">${fin.pedidos}</div></div>
+  </div>
+  <div class="cols" style="margin-top:16px">
+    <div class="panel"><h3>Prime cost <span class="small">la métrica que más se vigila · meta 55–65%</span></h3>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">La nómina se toma de <b>Personal</b> (salarios de empleados activos). Ajústala si tu periodo es distinto.</div>
+      <div class="field"><label>Costo de nómina del periodo</label><input id="nomina" type="number" class="mono" inputmode="decimal" value="${fin.nominaBase||''}" placeholder="0.00">${fin.nominaBase?`<div style="font-size:12px;color:var(--muted);margin-top:4px">Nómina mensual de Personal: ${money(fin.nominaBase)}</div>`:'<div style="font-size:12px;color:var(--muted);margin-top:4px">Captura empleados en Personal para que se llene sola.</div>'}</div>
+      <div id="primeOut" style="font-size:14px;color:var(--muted)">—</div></div>
+    <div class="panel"><h3>Resumen del margen</h3>
+      <div class="bar-row"><div class="bn">Insumos (COGS)</div><div class="bt"><div class="bf" style="width:${fin.foodCostPct}%;background:var(--accent)"></div></div><div class="bv">${fin.foodCostPct}%</div></div>
+      <div class="bar-row"><div class="bn">Margen bruto</div><div class="bt"><div class="bf" style="width:${fin.margenBrutoPct}%;background:var(--green)"></div></div><div class="bv">${fin.margenBrutoPct}%</div></div>
+      <div style="color:var(--muted);font-size:13px;margin-top:10px">El margen bruto debe cubrir nómina, renta, servicios y dejar utilidad.</div></div>
+  </div>
+  ${(fin.canales&&fin.canales.length)?`<div class="panel" style="margin-top:16px"><h3>Ventas por canal <span class="small">comisión incluye 16% IVA · venta neta = lo que te queda</span></h3>
+    <div class="kpis" style="margin:0 0 12px"><div class="kpi"><div class="lab">Comisión total (delivery)</div><div class="val" style="color:var(--red)">${money(fin.comisionTotal)}</div></div><div class="kpi accent"><div class="lab">Venta neta</div><div class="val">${money(fin.ventaNeta)}</div></div></div>
+    <table><thead><tr><th>Canal</th><th class="num">Pedidos</th><th class="num">Ventas</th><th class="num">Comisión</th><th class="num">Neto</th></tr></thead><tbody>
+    ${fin.canales.map(c=>`<tr><td style="font-weight:600">${c.nombre}${c.comisionPct?` <span class="small">${c.comisionPct}%</span>`:''}</td><td class="num">${c.pedidos}</td><td class="num">${money(c.ventas)}</td><td class="num" style="color:${c.comision>0?'var(--red)':'inherit'}">${money(c.comision)}</td><td class="num" style="font-weight:600">${money(c.neto)}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
+  <div class="panel" style="margin-top:16px"><h3>Rentabilidad por producto <span class="small">menu engineering · ordenado por margen que aporta</span></h3>
+    ${r.length?`<table><thead><tr><th>Producto</th><th class="num">Unidades</th><th class="num">Ingreso</th><th class="num">Costo</th><th class="num">Margen</th><th class="num">Margen %</th></tr></thead><tbody>
+    ${r.map(x=>`<tr><td>${x.nombre}</td><td class="num">${x.unidades}</td><td class="num">${money(x.ingreso)}</td><td class="num">${money(x.costo)}</td><td class="num" style="font-weight:600">${money(x.margen)}</td><td class="num" style="color:${x.margenPct>=60?'var(--green)':x.margenPct>=45?'var(--accent-ink)':'var(--red)'}">${x.margenPct}%</td></tr>`).join('')}
+    </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas para analizar.</div>'}</div>`;
+  const calcPrime=()=>{const nom=parseFloat($('#nomina').value)||0;const out=$('#primeOut');if(!nom||!fin.ingresos){out.innerHTML='Captura la nómina y registra ventas para ver el prime cost.';return;}
+    const prime=fin.cogs+nom;const pct=+(prime/fin.ingresos*100).toFixed(1);const c=pct<=65?'var(--green)':pct<=72?'var(--accent-ink)':'var(--red)';
+    out.innerHTML=`<div style="font-size:13px;color:var(--muted)">Prime cost (insumos + nómina)</div><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:28px;color:${c}">${pct}%</div><div style="font-size:13px;color:var(--muted)">${pct<=65?'Saludable ✓':pct<=72?'En el límite, vigílalo':'Alto — revisa nómina y food cost'}</div>`;};
+  $('#nomina').oninput=calcPrime;calcPrime();
+}
+
+// ===========================================================================
+//  PROMOCIONES + COMBOS  (admin)
+// ===========================================================================
+async function vPromociones(){
+  const promos=await API.get('/api/promociones');
+  $('#view').innerHTML=`<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:14px">
+      <button class="btn" id="addCombo">+ Crear combo</button><button class="btn dark" id="addPromo">+ Nueva promoción</button></div>
+    <div class="panel"><h3>Promociones <span class="small">descuentos aplicables en el punto de venta</span></h3>
+      ${promos.length?`<table><thead><tr><th>Nombre</th><th>Tipo</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${promos.map(p=>`<tr><td>${p.nombre}</td><td>${p.tipo==='porcentaje'?'Porcentaje':'Monto fijo'}</td><td class="num">${p.tipo==='porcentaje'?p.valor+'%':money(p.valor)}</td><td><span class="chip ${p.activo?'ok':'low'}">${p.activo?'Activa':'Inactiva'}</span></td><td class="num"><button class="btn" data-toggle="${p.id}" data-act="${p.activo}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">${p.activo?'Desactivar':'Activar'}</button><button class="btn" data-del="${p.id}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button></td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay promociones. Crea una con el botón de arriba.</div>'}</div>
+    <div class="panel" style="margin-top:16px"><h3>¿Qué es un combo?</h3><div style="color:var(--muted);font-size:14px;line-height:1.6">Un combo es un producto que junta varios (ej. hamburguesa + papas + refresco) a un precio especial. Aparece en el menú y en el punto de venta como cualquier producto, y descuenta los insumos de cada componente automáticamente.</div></div>`;
+  $('#addPromo').onclick=modalNuevaPromo;
+  $('#addCombo').onclick=modalNuevoCombo;
+  document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{await API.patch('/api/promociones/'+b.dataset.toggle,{activo:b.dataset.act!=='true'});vPromociones();});
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{await API.del('/api/promociones/'+b.dataset.del);vPromociones();});
+}
+function modalNuevaPromo(){
+  modal.innerHTML=`<h3>Nueva promoción</h3><div class="sub">Descuento que podrás aplicar a un pedido</div>
+    <div class="field"><label>Nombre</label><input id="prNom" placeholder="Ej. Martes 2x1, Cliente frecuente"></div>
+    <div class="field"><label>Tipo</label><select id="prTipo"><option value="porcentaje">Porcentaje (%)</option><option value="monto">Monto fijo ($)</option></select></div>
+    <div class="field"><label>Valor</label><input id="prVal" type="number" class="mono" placeholder="10"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="prCancel">Cancelar</button><button class="btn-primary" id="prOk">Crear</button></div>`;
+  ov.classList.add('show');$('#prCancel').onclick=closeModal;
+  $('#prOk').onclick=async()=>{const n=$('#prNom').value.trim(),v=+$('#prVal').value;if(!n||!v){toast('Falta nombre o valor');return;}try{await API.post('/api/promociones',{nombre:n,tipo:$('#prTipo').value,valor:v});closeModal();toast('Promoción creada');vPromociones();}catch(e){toast(e.message);}};
+}
+function modalNuevoCombo(){
+  const prods=Object.values(app.menu.productos).filter(p=>p.activo&&!p.esCombo);
+  modal.innerHTML=`<h3>Crear combo</h3><div class="sub">Junta productos a un precio especial</div>
+    <div class="field"><label>Nombre del combo</label><input id="cbNom" placeholder="Ej. Combo familiar"></div>
+    <div class="field"><label>Categoría</label><select id="cbCat">${cats().map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('')}</select></div>
+    <div class="field"><label>Precio del combo</label><input id="cbPre" type="number" class="mono" placeholder="0.00"></div>
+    <div class="grp"><div class="glabel"><span>Incluye</span></div>${prods.map(p=>`<label class="opt"><input type="checkbox" value="${p.id}"><span class="onm">${p.nombre}</span><span class="od">${money(p.precioBase)}</span></label>`).join('')}</div>
+    <div class="modal-foot"><button class="btn-ghost" id="cbCancel">Cancelar</button><button class="btn-primary" id="cbOk">Crear combo</button></div>`;
+  ov.classList.add('show');$('#cbCancel').onclick=closeModal;
+  $('#cbOk').onclick=async()=>{const nom=$('#cbNom').value.trim(),pre=+$('#cbPre').value;const comp=[...modal.querySelectorAll('input:checked')].map(c=>c.value);
+    if(!nom||!pre){toast('Falta nombre o precio');return;}if(comp.length<2){toast('Elige al menos 2 productos');return;}
+    try{await API.post('/api/menu/productos',{categoriaId:$('#cbCat').value,nombre:nom,precioBase:pre,destino:'cocina',componentes:comp});app.menu=await API.get('/api/menu');closeModal();toast('Combo creado');vPromociones();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  AJUSTES  (marca + usuarios) (admin)
+// ===========================================================================
+async function vAjustes(){
+  const [cfg,usuarios,canales]=await Promise.all([API.get('/api/config'),API.get('/api/usuarios'),API.get('/api/canales')]);
+  app._fiscal=cfg.fiscal||{};const fx=app._fiscal;
+  $('#view').innerHTML=`
+  <div class="cols">
+    <div class="panel"><h3>Marca del restaurante</h3>
+      <div class="field"><label>Nombre</label><input id="cfgNom" value="${cfg.nombre||''}"></div>
+      <div class="field"><label>Logo</label>
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+          <div style="width:80px;height:60px;border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--paper)"><img id="logoPrev" src="${cfg.logo||''}" style="max-width:100%;max-height:100%;${cfg.logo?'':'display:none'}"><span id="logoEmpty" style="color:var(--muted);font-size:12px;${cfg.logo?'display:none':''}">sin logo</span></div>
+          <div><input type="file" id="logoFile" accept="image/*"><div style="color:var(--muted);font-size:12px;margin-top:4px">PNG o JPG, idealmente cuadrado o tipo banner</div></div>
+        </div></div>
+      <button class="btn accent" id="cfgSave">Guardar marca</button></div>
+    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center">Usuarios <button class="btn" id="addUser" style="font-size:13px">+ Usuario</button></h3>
+      <table><thead><tr><th>Usuario</th><th>Rol</th><th></th></tr></thead><tbody>
+      ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
+      </tbody></table></div>
+  </div>
+  <div class="panel" style="margin-top:16px"><h3>Datos para contratos <span class="small">del comitente (restaurante) — se usan al generar contratos de comisión</span></h3>
+    <div class="cols2"><div class="field"><label>Razón social / nombre fiscal</label><input id="fxRazon" value="${fx.razonSocial||''}" placeholder="Ej. Jefe Burgers SA de CV o tu nombre"></div>
+    <div class="field"><label>RFC</label><input id="fxRfc" value="${fx.rfc||''}" class="mono"></div></div>
+    <div class="field"><label>Domicilio fiscal</label><input id="fxDom" value="${fx.domicilio||''}"></div>
+    <div class="cols2"><div class="field"><label>Representante legal (si es empresa)</label><input id="fxRep" value="${fx.repLegal||''}"></div>
+    <div class="field"><label>Ciudad / Estado (jurisdicción)</label><input id="fxCiudad" value="${fx.ciudad||''}" placeholder="Ej. Toluca, Estado de México"></div></div>
+    <button class="btn accent" id="fxSave">Guardar datos</button></div>
+  <div class="panel" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Canales de delivery <span class="small">la comisión se descuenta para tu venta neta · incluye 16% IVA sobre la comisión</span><button class="btn" id="addCanal" style="font-size:13px;margin-left:auto">+ Canal</button></h3>
+    <table><thead><tr><th>Canal</th><th class="num">Comisión</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${canales.map(c=>`<tr><td style="font-weight:600">${c.nombre}${c.esApp?' <span class="small">app</span>':''}</td><td class="num"><input data-com="${c.id}" type="number" class="mono" value="${c.comisionPct}" style="width:72px;padding:7px;text-align:right">%</td><td><span class="chip ${c.activo?'ok':'low'}">${c.activo?'Activo':'Inactivo'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-toggleCanal="${c.id}" data-act="${c.activo}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">${c.activo?'Desactivar':'Activar'}</button>${c.id!=='local'?`<button class="btn" data-delCanal="${c.id}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`:''}</td></tr>`).join('')}
+    </tbody></table>
+    <div style="color:var(--muted);font-size:13px;margin-top:10px">Comisiones típicas 2026: DiDi Food 15–30%, Rappi 20–35%, Uber Eats 25–35%. Recibir pedidos en automático desde la app requiere convenio de socio con la plataforma.</div></div>`;
+  let logoData=cfg.logo||null;
+  $('#logoFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>700000){toast('La imagen es muy pesada (máx ~700KB)');return;}const rd=new FileReader();rd.onload=()=>{logoData=rd.result;$('#logoPrev').src=logoData;$('#logoPrev').style.display='';$('#logoEmpty').style.display='none';};rd.readAsDataURL(f);};
+  $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
+  $('#addUser').onclick=modalNuevoUsuario;
+  document.querySelectorAll('[data-du]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar usuario '+b.dataset.du+'?'))return;try{await API.del('/api/usuarios/'+encodeURIComponent(b.dataset.du));toast('Usuario eliminado');vAjustes();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-com]').forEach(inp=>inp.onchange=async()=>{try{await API.patch('/api/canales/'+inp.dataset.com,{comisionPct:+inp.value||0});app.canales=await API.get('/api/canales');toast('Comisión actualizada');}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-togglecanal]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/canales/'+b.dataset.togglecanal,{activo:b.dataset.act!=='true'});app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-delcanal]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar este canal?'))return;try{await API.del('/api/canales/'+b.dataset.delcanal);app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
+  $('#addCanal').onclick=modalNuevoCanal;
+  if($('#fxSave'))$('#fxSave').onclick=async()=>{
+    const fiscal={razonSocial:$('#fxRazon').value.trim(),rfc:$('#fxRfc').value.trim(),domicilio:$('#fxDom').value.trim(),repLegal:$('#fxRep').value.trim(),ciudad:$('#fxCiudad').value.trim()};
+    try{await API.patch('/api/config',{fiscal});app._fiscal=fiscal;toast('Datos para contratos guardados');}catch(e){toast(e.message);}
+  };
+}
+function modalNuevoCanal(){
+  modal.innerHTML=`<h3>Nuevo canal</h3><div class="sub">Una plataforma o forma de venta con su comisión</div>
+    <div class="field"><label>Nombre</label><input id="caNom" placeholder="Ej. iFood, Pedidos propios"></div>
+    <div class="field"><label>Comisión (%)</label><input id="caCom" type="number" class="mono" value="0"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="caCancel">Cancelar</button><button class="btn-primary" id="caOk">Crear</button></div>`;
+  ov.classList.add('show');$('#caCancel').onclick=closeModal;
+  $('#caOk').onclick=async()=>{const n=$('#caNom').value.trim();if(!n){toast('Falta nombre');return;}try{await API.post('/api/canales',{nombre:n,comisionPct:+$('#caCom').value||0});app.canales=await API.get('/api/canales');closeModal();toast('Canal creado');vAjustes();}catch(e){toast(e.message);}};
+}
+function modalNuevoUsuario(){
+  modal.innerHTML=`<h3>Nuevo usuario</h3><div class="sub">El nombre de usuario debe ser único</div>
+    <div class="field"><label>Usuario</label><input id="usU" autocomplete="off"></div>
+    <div class="field"><label>Contraseña</label><input id="usP" type="text" autocomplete="off"></div>
+    <div class="field"><label>Rol</label><select id="usR"><option value="cajero">Cajero — vende y maneja caja</option><option value="mesero">Mesero — mesas y comandas</option><option value="cocinero">Cocinero — pantalla de cocina</option><option value="repartidor">Repartidor — domicilios</option><option value="gerente">Gerente — gestión completa</option><option value="admin">Administrador — todo</option></select></div>
+    <div class="field"><label>Sucursal (opcional)</label><select id="usS"><option value="">Todas</option>${app.sucursales.map(s=>`<option value="${s.id}">${s.nombre}</option>`).join('')}</select></div>
+    <div class="modal-foot"><button class="btn-ghost" id="usCancel">Cancelar</button><button class="btn-primary" id="usOk">Crear</button></div>`;
+  ov.classList.add('show');$('#usCancel').onclick=closeModal;
+  $('#usOk').onclick=async()=>{const u=$('#usU').value.trim(),p=$('#usP').value;if(!u||!p){toast('Falta usuario o contraseña');return;}try{await API.post('/api/usuarios',{username:u,password:p,rol:$('#usR').value,sucursalId:$('#usS').value||null});closeModal();toast('Usuario creado');vAjustes();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  SUPER ADMIN  — crea y administra restaurantes (como CobraPro)
+// ===========================================================================
+function renderSuper(){
+  $('#app').innerHTML=`<div class="shell">
+    <nav class="sidebar"><div class="logo"><span class="brandtext">Comanda<b>Pro</b></span></div>
+      <div class="nav"><button class="active">${IC.ajustes}<span>Restaurantes</span></button></div>
+      <div class="side-foot"><span>Super Admin</span><button id="logout">Salir</button></div></nav>
+    <div class="app-main"><div class="topbar"><div class="vtitle">Restaurantes</div><div class="spacer"></div>
+      <button class="btn accent" id="newTenant">+ Crear restaurante</button></div>
+      <div class="view" id="view"><div class="loading">Cargando…</div></div></div></div>`;
+  $('#logout').onclick=()=>{API.token=null;app.rol=null;app.tenant=null;boot();};
+  $('#newTenant').onclick=modalNuevoTenant;
+  vSuperTenants();
+}
+async function vSuperTenants(){
+  const tenants=await API.get('/api/super/tenants');
+  $('#view').innerHTML=`<div class="kpis"><div class="kpi accent"><div class="lab">Restaurantes</div><div class="val">${tenants.length}</div></div>
+    <div class="kpi"><div class="lab">Sucursales totales</div><div class="val">${tenants.reduce((s,t)=>s+t.sucursales,0)}</div></div>
+    <div class="kpi"><div class="lab">Usuarios totales</div><div class="val">${tenants.reduce((s,t)=>s+t.usuarios,0)}</div></div></div>
+   <div class="panel"><h3>Restaurantes en la plataforma</h3>
+    ${tenants.length?`<table><thead><tr><th>Restaurante</th><th class="num">Sucursales</th><th class="num">Usuarios</th></tr></thead><tbody>
+    ${tenants.map(t=>`<tr><td style="font-weight:600">${t.nombre}</td><td class="num">${t.sucursales}</td><td class="num">${t.usuarios}</td></tr>`).join('')}
+    </tbody></table>`:'<div class="empty">Aún no hay restaurantes. Crea el primero con el botón de arriba.</div>'}</div>`;
+}
+function modalNuevoTenant(){
+  modal.innerHTML=`<h3>Crear restaurante</h3><div class="sub">Se crea con su menú base, 2 sucursales y un usuario administrador</div>
+   <div class="field"><label>Nombre del restaurante</label><input id="tNom" placeholder="Ej. Tacos El Güero"></div>
+   <div class="field"><label>Usuario administrador</label><input id="tUser" autocomplete="off" placeholder="dueño"></div>
+   <div class="field"><label>Contraseña</label><input id="tPass" type="text" autocomplete="off"></div>
+   <div class="modal-foot"><button class="btn-ghost" id="tCancel">Cancelar</button><button class="btn-primary" id="tOk">Crear</button></div>`;
+  ov.classList.add('show');$('#tCancel').onclick=closeModal;
+  $('#tOk').onclick=async()=>{const n=$('#tNom').value.trim(),u=$('#tUser').value.trim(),p=$('#tPass').value;if(!n||!u||!p){toast('Faltan datos');return;}try{await API.post('/api/super/tenants',{nombre:n,adminUser:u,adminPass:p});closeModal();toast('Restaurante creado');vSuperTenants();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  ASISTENCIA / CHECADOR
+// ===========================================================================
+function fmtHora(iso){return iso?new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}):'—';}
+async function vAsistencia(){
+  const emps=await API.get('/api/asistencia/empleados');
+  let rep=null;if(esAdmin()){try{rep=await API.get('/api/asistencia');}catch{}}
+  $('#view').innerHTML=`
+  <div class="panel" style="margin-bottom:16px"><h3>Checador <span class="small">toca tu nombre para registrar entrada o salida · sucursal ${app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||''}</span></h3>
+    ${emps.length?`<div class="checagrid">${emps.map(e=>`<button class="checacard ${e.trabajando?'on':''}" data-chk="${e.id}" data-pin="${e.requierePin?1:0}" data-nom="${e.nombre}">
+      <div class="cknom">${e.nombre}</div><div class="ckpue">${e.puesto||''}</div>
+      <div class="ckstat">${e.trabajando?`<span class="dot"></span>Trabajando · ${fmtHora(e.desde)}`:'Fuera'}</div>
+      <div class="ckact">${e.trabajando?'Registrar salida':'Registrar entrada'}</div></button>`).join('')}</div>`:'<div class="empty">Agrega empleados en la pestaña Personal para usar el checador.</div>'}</div>
+  ${rep?`
+    <div class="panel" style="margin-bottom:16px"><h3>Trabajando ahora <span class="small">${rep.activos.length} persona(s)</span></h3>
+      ${rep.activos.length?`<table><thead><tr><th>Empleado</th><th>Puesto</th><th>Sucursal</th><th class="num">Entrada</th><th class="num">Horas (parcial)</th></tr></thead><tbody>
+      ${rep.activos.map(a=>`<tr><td style="font-weight:600">${a.nombre}</td><td>${a.puesto||'—'}</td><td>${a.sucursal||'—'}</td><td class="num">${fmtHora(a.entrada)}</td><td class="num">${a.horasParcial} h</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Nadie tiene entrada abierta en este momento.</div>'}</div>
+    <div class="panel"><h3>Asistencia reciente <span class="small">últimos registros</span></h3>
+      ${rep.recientes.length?`<table><thead><tr><th>Empleado</th><th>Fecha</th><th class="num">Entrada</th><th class="num">Salida</th><th class="num">Horas</th></tr></thead><tbody>
+      ${rep.recientes.map(a=>`<tr><td>${a.nombre}</td><td>${a.fecha}</td><td class="num">${fmtHora(a.entrada)}</td><td class="num">${a.salida?fmtHora(a.salida):'<span style="color:var(--green)">en turno</span>'}</td><td class="num">${a.salida?a.horas+' h':'—'}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay registros.</div>'}</div>`:''}`;
+  document.querySelectorAll('[data-chk]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.pin==='1')pedirPinChecar(b.dataset.chk,b.dataset.nom);
+    else checar(b.dataset.chk,'');
+  });
+}
+function pedirPinChecar(id,nombre){
+  modal.innerHTML=`<h3>${nombre}</h3><div class="sub">Ingresa tu PIN</div>
+    <div class="field"><input id="pinChk" type="password" inputmode="numeric" class="mono" style="text-align:center;font-size:24px;letter-spacing:6px" maxlength="6"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="pinCancel">Cancelar</button><button class="btn-primary" id="pinOk">Registrar</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#pinChk').focus(),50);
+  $('#pinCancel').onclick=closeModal;
+  $('#pinOk').onclick=()=>{const pin=$('#pinChk').value;closeModal();checar(id,pin);};
+}
+async function checar(id,pin){
+  try{const r=await API.post('/api/asistencia/checar',{empleadoId:id,pin,sucursalId:app.sucursalId});
+    toast(r.accion==='entrada'?`Entrada registrada · ${fmtHora(r.hora)} · ${r.nombre}`:`Salida registrada · ${r.horas} h · ${r.nombre}`);
+    vAsistencia();
+  }catch(e){toast(e.message);}
+}
+
+// ===========================================================================
+//  RH / PERSONAL  (admin)
+// ===========================================================================
+async function vRH(){
+  const [emps,resumen,usuarios]=await Promise.all([API.get('/api/rh/empleados'),API.get('/api/rh/resumen'),API.get('/api/usuarios')]);
+  app._usuarios=usuarios;
+  const sucNombre=id=>app.sucursales.find(s=>s.id===id)?.nombre||'—';
+  const rot=resumen.rotacion;
+  $('#view').innerHTML=`
+  <div class="kpis">
+    <div class="kpi accent"><div class="lab">Empleados activos</div><div class="val">${resumen.activos}</div></div>
+    <div class="kpi"><div class="lab">Nómina base mensual</div><div class="val">${money(resumen.nomina.base)}</div></div>
+    <div class="kpi"><div class="lab">Rotación (90 días)</div><div class="val" style="color:${rot.tasaRotacion>20?'var(--red)':'var(--green)'}">${rot.tasaRotacion}%</div><div class="lab" style="margin-top:2px">${rot.bajas90} baja(s)</div></div>
+    <div class="kpi"><div class="lab">Próximo cumpleaños</div><div class="val" style="font-size:18px">${resumen.cumples.length?resumen.cumples[0].nombre.split(' ')[0]:'—'}</div>${resumen.cumples.length?`<div class="lab" style="margin-top:2px">${resumen.cumples[0].dias===0?'¡hoy! 🎉':'en '+resumen.cumples[0].dias+' días'}</div>`:''}</div>
+  </div>
+  <div class="cols">
+    <div class="panel"><h3>🎂 Cumpleaños próximos <span class="small">31 días</span></h3>
+      ${resumen.cumples.length?resumen.cumples.map(c=>`<div class="bar-row"><div class="bn">${c.nombre} <span class="small">${c.puesto||''}</span></div><div style="flex:1"></div><div class="bv">${c.fecha} · ${c.dias===0?'hoy 🎉':c.dias+'d'}</div></div>`).join(''):'<div class="empty">Captura la fecha de cumpleaños de tu equipo.</div>'}</div>
+    <div class="panel"><h3>Rotación de personal <span class="small">benchmark sector ~70% anual</span></h3>
+      <div class="bar-row"><div class="bn">Activos</div><div style="flex:1"></div><div class="bv">${rot.activos}</div></div>
+      <div class="bar-row"><div class="bn">Bajas (90 días)</div><div style="flex:1"></div><div class="bv">${rot.bajas90}</div></div>
+      <div class="bar-row"><div class="bn">Antigüedad promedio</div><div style="flex:1"></div><div class="bv">${rot.antiguedadPromMeses} meses</div></div>
+      <div class="bar-row"><div class="bn">Tasa de rotación 90d</div><div style="flex:1"></div><div class="bv" style="color:${rot.tasaRotacion>20?'var(--red)':'var(--green)'}">${rot.tasaRotacion}%</div></div></div>
+  </div>
+  <div class="cols" style="margin-top:16px">
+    <div class="panel"><h3>🏆 Ranking de vendedores <span class="small">por ventas cobradas</span></h3>
+      ${resumen.vendedores.length?`<table><thead><tr><th>Vendedor</th><th class="num">Pedidos</th><th class="num">Ventas</th><th class="num">Comisión est.</th></tr></thead><tbody>
+      ${resumen.vendedores.map((v,i)=>`<tr><td>${['🥇','🥈','🥉'][i]||''} ${v.nombre}</td><td class="num">${v.pedidos}</td><td class="num">${money(v.ventas)}</td><td class="num" style="color:var(--green)">${v.comisionPct?money(v.comisionEstimada):'—'}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas.</div>'}</div>
+    <div class="panel"><h3>🏪 Ranking por tienda</h3>
+      ${resumen.sucursales.length?`<table><thead><tr><th>Sucursal</th><th class="num">Pedidos</th><th class="num">Ventas</th></tr></thead><tbody>
+      ${resumen.sucursales.map((s,i)=>`<tr><td>${['🥇','🥈','🥉'][i]||''} ${s.nombre}</td><td class="num">${s.pedidos}</td><td class="num">${money(s.ventas)}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas.</div>'}</div>
+  </div>
+  <div class="panel" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center">Empleados <button class="btn dark" id="addEmp" style="font-size:13px">+ Empleado</button></h3>
+    ${emps.length?`<table><thead><tr><th>Nombre</th><th>Puesto</th><th>Sucursal</th><th class="num">Salario base</th><th class="num">Comisión</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${emps.map(e=>`<tr><td style="font-weight:600">${e.nombre}</td><td>${e.puesto||'—'}</td><td>${sucNombre(e.sucursalId)}</td><td class="num">${money(e.salarioBase)}</td><td class="num">${e.comisionPct?e.comisionPct+'%':'—'}</td><td><span class="chip ${e.activo?'ok':'low'}">${e.activo?'Activo':'Baja'}</span></td><td class="num"><button class="btn" data-emp='${e.id}' style="padding:7px 11px;font-size:12px;min-height:auto">Editar</button></td></tr>`).join('')}
+    </tbody></table>`:'<div class="empty">Aún no hay empleados. Agrega tu equipo con el botón de arriba.</div>'}
+    <div style="color:var(--muted);font-size:13px;margin-top:10px">La comisión estimada del ranking usa el % del empleado ligado a su usuario del sistema.</div></div>`;
+  $('#addEmp').onclick=()=>modalEmpleado(null);
+  document.querySelectorAll('[data-emp]').forEach(b=>b.onclick=()=>modalEmpleado(emps.find(e=>e.id===b.dataset.emp)));
+}
+function modalEmpleado(emp){
+  const ed=!!emp;const us=app._usuarios||[];
+  modal.innerHTML=`<h3>${ed?'Editar empleado':'Nuevo empleado'}</h3><div class="sub">${ed?emp.nombre:'Datos del colaborador'}</div>
+    <div class="field"><label>Nombre completo</label><input id="eNom" value="${ed?emp.nombre:''}"></div>
+    <div class="cols2"><div class="field"><label>Puesto</label><input id="ePue" value="${ed?emp.puesto||'':''}" placeholder="Cajero, cocinero…"></div>
+    <div class="field"><label>Sucursal</label><select id="eSuc"><option value="">—</option>${app.sucursales.map(s=>`<option value="${s.id}" ${ed&&emp.sucursalId===s.id?'selected':''}>${s.nombre}</option>`).join('')}</select></div></div>
+    <div class="cols2"><div class="field"><label>Salario base (mensual)</label><input id="eSal" type="number" class="mono" value="${ed?emp.salarioBase:''}" placeholder="0.00"></div>
+    <div class="field"><label>Comisión (% sobre sus ventas)</label><input id="eCom" type="number" class="mono" value="${ed?emp.comisionPct:''}" placeholder="0"></div></div>
+    <div class="cols2"><div class="field"><label>Cumpleaños</label><input id="eCum" type="date" value="${ed&&emp.cumple&&emp.cumple.length>=10?emp.cumple.slice(0,10):''}"></div>
+    <div class="field"><label>Fecha de ingreso</label><input id="eIng" type="date" value="${ed&&emp.ingreso?emp.ingreso.slice(0,10):''}"></div></div>
+    <div class="cols2"><div class="field"><label>Teléfono</label><input id="eTel" value="${ed?emp.telefono||'':''}"></div>
+    <div class="field"><label>PIN para checador (opcional)</label><input id="ePin" inputmode="numeric" maxlength="6" class="mono" value="${ed?emp.pin||'':''}" placeholder="4 dígitos"></div></div>
+    <div class="cols2"><div class="field"><label>RFC (para contrato/comisión)</label><input id="eRfc" class="mono" value="${ed?emp.rfc||'':''}" placeholder="opcional"></div>
+    <div class="field"><label>Domicilio (para contrato)</label><input id="eDom" value="${ed?emp.domicilio||'':''}" placeholder="opcional"></div></div>
+    <div class="field"><label>Usuario del sistema (para comisión)</label><select id="eUsr"><option value="">— ninguno —</option>${us.map(u=>`<option value="${u.username}" ${ed&&emp.username===u.username?'selected':''}>${u.username}</option>`).join('')}</select></div></div>
+    <div class="modal-foot">${ed?`<button class="btn-ghost" id="eContrato" style="margin-right:auto">📄 Contrato de comisión</button>`:''}${ed?`<button class="btn-ghost" id="eBaja" style="color:${emp.activo?'var(--red)':'var(--green)'}">${emp.activo?'Dar de baja':'Reactivar'}</button>`:''}<button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">${ed?'Guardar':'Crear'}</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#eNom').focus(),50);
+  $('#eCancel').onclick=closeModal;
+  if(ed&&$('#eContrato'))$('#eContrato').onclick=()=>generarContrato(emp);
+  if(ed&&$('#eBaja'))$('#eBaja').onclick=async()=>{try{await API.patch('/api/rh/empleados/'+emp.id,{activo:!emp.activo});closeModal();toast(emp.activo?'Empleado dado de baja':'Empleado reactivado');vRH();}catch(e){toast(e.message);}};
+  $('#eOk').onclick=async()=>{const body={nombre:$('#eNom').value.trim(),puesto:$('#ePue').value.trim(),sucursalId:$('#eSuc').value||null,salarioBase:+$('#eSal').value||0,comisionPct:+$('#eCom').value||0,cumple:$('#eCum').value||'',ingreso:$('#eIng').value||'',telefono:$('#eTel').value.trim(),pin:$('#ePin').value.trim(),rfc:$('#eRfc').value.trim(),domicilio:$('#eDom').value.trim(),username:$('#eUsr').value||''};
+    if(!body.nombre){toast('Falta el nombre');return;}
+    try{if(ed)await API.patch('/api/rh/empleados/'+emp.id,body);else await API.post('/api/rh/empleados',body);closeModal();toast(ed?'Empleado actualizado':'Empleado agregado');vRH();}catch(e){toast(e.message);}};
+}
+async function generarContrato(emp){
+  let fx=app._fiscal;
+  if(!fx||!fx.razonSocial){try{const cfg=await API.get('/api/config');fx=cfg.fiscal||{};app._fiscal=fx;}catch{fx=fx||{};}}
+  const PH=(v,t)=>v&&String(v).trim()?String(v):`<u style="background:#fff3cd">&nbsp;[${t}]&nbsp;</u>`;
+  const nomComercial=(app.tenant&&app.tenant.nombre)||'el restaurante';
+  const comitente=fx.razonSocial||nomComercial;
+  const hoy=new Date();const fecha=hoy.toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'});
+  const ciudad=fx.ciudad||'';
+  const pct=emp.comisionPct||0;
+  const repLinea=fx.repLegal?`, representado en este acto por <b>${fx.repLegal}</b> en su carácter de representante legal,`:'';
+  const w=window.open('','contrato','width=820,height=920');if(!w){toast('Permite ventanas emergentes para generar el contrato');return;}
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Contrato de comisión mercantil — ${emp.nombre}</title><style>
+    body{font-family:'Times New Roman',Georgia,serif;max-width:720px;margin:0 auto;padding:34px 30px;color:#111;font-size:13.5px;line-height:1.55;text-align:justify}
+    h1{text-align:center;font-size:17px;margin:0 0 4px}.sub{text-align:center;color:#555;font-size:12px;margin-bottom:18px}
+    h2{font-size:13.5px;margin:16px 0 4px}p{margin:7px 0}.cl{font-weight:bold}
+    .warn{background:#fdecea;border:1px solid #e74c3c;border-radius:8px;padding:12px 14px;margin:0 0 20px;font-family:Arial,sans-serif;font-size:12px;line-height:1.45;text-align:left}
+    .warn b{color:#c0392b}
+    .firmas{display:flex;justify-content:space-between;gap:30px;margin-top:46px;text-align:center}
+    .firmas div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px}
+    .small{font-size:11px;color:#666}
+    @media print{.warn{-webkit-print-color-adjust:exact;print-color-adjust:exact}button{display:none}}
+    .bar{font-family:Arial,sans-serif;text-align:center;margin-bottom:14px}
+    .bar button{padding:9px 16px;margin:0 4px;border:1px solid #333;border-radius:7px;background:#fff;cursor:pointer;font-size:13px}
+  </style></head><body>
+  <div class="bar"><button onclick="window.print()">🖨 Imprimir / Guardar PDF</button></div>
+  <div class="warn"><b>⚠ AVISO LEGAL — LÉELO ANTES DE USAR.</b> Este es un machote informativo, <b>no es asesoría jurídica</b>. Conforme al <b>artículo 285 de la Ley Federal del Trabajo</b>, los vendedores y semejantes <b>se presumen trabajadores</b> cuando su actividad es permanente, salvo que no ejecuten personalmente el trabajo o sólo intervengan en operaciones aisladas. El elemento que define una relación laboral es la <b>subordinación</b> (art. 20 LFT). Si la persona cumple horario fijo, vende personalmente y de forma permanente bajo tus órdenes, una autoridad (Tribunal Laboral, IMSS, Infonavit o SAT) puede <b>recaracterizar esta relación como laboral</b> sin importar el título del contrato, generándote pasivos (IMSS/Infonavit retroactivos, PTU, indemnizaciones). <b>Antes de firmarlo, valídalo con un abogado laboral y un contador.</b> Los campos resaltados deben completarse.</div>
+
+  <h1>CONTRATO DE COMISIÓN MERCANTIL</h1>
+  <div class="sub">Al amparo del Código de Comercio, Libro Segundo, Título Tercero, artículos 273 a 308</div>
+
+  <p>Contrato de comisión mercantil que celebran, por una parte, <b>${PH(comitente,'RAZÓN SOCIAL / NOMBRE DEL COMITENTE')}</b>${repLinea} con domicilio en ${PH(fx.domicilio,'DOMICILIO FISCAL DEL COMITENTE')} y RFC ${PH(fx.rfc,'RFC DEL COMITENTE')}, a quien en lo sucesivo se le denominará <b>"EL COMITENTE"</b>; y por la otra parte, <b>${PH(emp.nombre,'NOMBRE DEL COMISIONISTA')}</b>, por su propio derecho, con domicilio en ${PH(emp.domicilio,'DOMICILIO DEL COMISIONISTA')} y RFC ${PH(emp.rfc,'RFC DEL COMISIONISTA')}, a quien en lo sucesivo se le denominará <b>"EL COMISIONISTA"</b>; al tenor de las siguientes declaraciones y cláusulas.</p>
+
+  <h2>DECLARACIONES</h2>
+  <p><b>I.</b> Declara EL COMITENTE que se dedica a la elaboración y venta de alimentos y bebidas bajo el nombre comercial "<b>${nomComercial}</b>", y que desea encomendar a EL COMISIONISTA la promoción y venta de sus productos en los términos de este contrato.</p>
+  <p><b>II.</b> Declara EL COMISIONISTA ser persona física mayor de edad, que cuenta con los conocimientos, elementos y recursos propios para desempeñar la comisión; que actúa como comerciante independiente y <b>no</b> bajo subordinación; que se encuentra inscrito (o se inscribirá) en el RFC ante el SAT y que expedirá el CFDI correspondiente por las comisiones que perciba.</p>
+  <p><b>III.</b> Declaran ambas partes que reconocen la naturaleza <b>mercantil</b> de este contrato, regido por el Código de Comercio, y que entre ellas <b>no existe relación laboral alguna</b>.</p>
+
+  <h2>CLÁUSULAS</h2>
+  <p><span class="cl">PRIMERA. Objeto.</span> Con fundamento en el artículo 273 del Código de Comercio, EL COMITENTE confiere a EL COMISIONISTA una comisión mercantil consistente en promover y realizar, por cuenta de EL COMITENTE, la venta de los productos que éste comercializa, en los precios y condiciones que EL COMITENTE determine.</p>
+  <p><span class="cl">SEGUNDA. Independencia y ausencia de relación laboral.</span> EL COMISIONISTA desempeñará su encargo de forma <b>independiente</b>, con plena libertad para fijar sus horarios, presentarse o ausentarse cuando lo desee, y para emplear sus propios medios y, en su caso, los auxiliares o terceros que él contrate y remunere por su cuenta. <b>No existe subordinación, jornada, exclusividad ni dirección permanente</b> de EL COMITENTE sobre EL COMISIONISTA. En consecuencia, las partes reconocen que no se genera relación de trabajo en términos de la Ley Federal del Trabajo, ni obligación de seguridad social a cargo de EL COMITENTE respecto de EL COMISIONISTA.</p>
+  <p><span class="cl">TERCERA. Comisión.</span> Como única retribución, EL COMITENTE pagará a EL COMISIONISTA una comisión equivalente al <b>${pct?pct+'%':PH('','PORCENTAJE')}</b> sobre el importe de las ventas efectivamente realizadas y cobradas por su conducto. La comisión se pagará ${PH('','PERIODICIDAD: p. ej. semanal/quincenal')} contra la entrega del CFDI que ampare dicha comisión.</p>
+  <p><span class="cl">CUARTA. Instrucciones y rendición de cuentas.</span> Conforme a los artículos 286 y 298 del Código de Comercio, EL COMISIONISTA se sujetará a las instrucciones generales de EL COMITENTE respecto de precios y condiciones de venta, rendirá cuenta de las operaciones realizadas y entregará los importes que hubiere cobrado por cuenta de EL COMITENTE.</p>
+  <p><span class="cl">QUINTA. Obligaciones fiscales.</span> EL COMISIONISTA es el único responsable del cumplimiento de sus obligaciones fiscales y, en su caso, de seguridad social, y expedirá CFDI por las comisiones percibidas. Las retenciones que conforme a la legislación fiscal vigente procedan serán aplicadas por EL COMITENTE.</p>
+  <p><span class="cl">SEXTA. Gastos.</span> Los gastos en que incurra EL COMISIONISTA para el desempeño de su encargo correrán por su cuenta, salvo pacto expreso por escrito en contrario.</p>
+  <p><span class="cl">SÉPTIMA. No exclusividad.</span> El presente contrato no confiere exclusividad a ninguna de las partes; EL COMISIONISTA podrá prestar servicios a otros comitentes, absteniéndose de incurrir en competencia desleal con productos idénticos de competidores directos de EL COMITENTE.</p>
+  <p><span class="cl">OCTAVA. Confidencialidad.</span> EL COMISIONISTA guardará confidencialidad respecto de la información comercial de EL COMITENTE a la que tenga acceso con motivo de este contrato.</p>
+  <p><span class="cl">NOVENA. Vigencia y terminación.</span> El presente contrato tendrá vigencia ${PH('','INDEFINIDA o PLAZO')}. Cualquiera de las partes podrá darlo por terminado mediante aviso por escrito con ${PH('','NÚM.')} días naturales de anticipación, sin responsabilidad para ninguna de ellas. Conforme al artículo 308 del Código de Comercio, el contrato se rescinde por muerte o inhabilitación de EL COMISIONISTA.</p>
+  <p><span class="cl">DÉCIMA. Legislación y jurisdicción.</span> Para la interpretación y cumplimiento de este contrato, las partes se someten a las disposiciones del Código de Comercio y a la jurisdicción de los tribunales competentes de ${PH(ciudad,'CIUDAD / ESTADO')}, renunciando a cualquier otro fuero que pudiera corresponderles.</p>
+
+  <p style="margin-top:20px">Leído que fue el presente contrato y enteradas las partes de su contenido y alcance legal, lo firman de conformidad en ${PH(ciudad,'CIUDAD')}, a ${fecha}.</p>
+
+  <div class="firmas"><div><b>EL COMITENTE</b><br>${PH(comitente,'NOMBRE/RAZÓN SOCIAL')}${fx.repLegal?'<br><span class="small">'+fx.repLegal+'</span>':''}</div><div><b>EL COMISIONISTA</b><br>${emp.nombre}</div></div>
+  <div class="firmas" style="margin-top:34px"><div>Testigo</div><div>Testigo</div></div>
+  </body></html>`);
+  w.document.close();
+}
+
+// ===========================================================================
+//  TURNO
+// ===========================================================================
+function modalAbrirTurno(){
+  modal.innerHTML=`<h3>Abrir turno</h3><div class="sub">Declara el fondo de cambio</div>
+    <div class="field"><label>Fondo inicial</label><input id="fondo" type="number" class="mono" value="500"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="tCancel">Cancelar</button><button class="btn-primary" id="tOk">Abrir</button></div>`;
+  ov.classList.add('show');$('#tCancel').onclick=closeModal;
+  $('#tOk').onclick=async()=>{try{app.turno=await API.post('/api/caja/abrir',{sucursalId:app.sucursalId,fondoInicial:+($('#fondo').value)||0});closeModal();renderTopbar();toast('Turno abierto');go(app.vista);}catch(e){toast(e.message);}};
+}
+function modalCerrarTurno(){
+  const t=app.turno;
+  modal.innerHTML=`<h3>Cerrar turno</h3><div class="sub">Cuenta el efectivo del cajón</div>
+    <div class="field"><label>Efectivo contado</label><input id="conteo" type="number" class="mono" placeholder="0.00"></div><div id="difBox"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="cCancel">Cancelar</button><button class="btn-primary" id="cOk">Cerrar turno</button></div>`;
+  ov.classList.add('show');$('#cCancel').onclick=closeModal;
+  $('#cOk').onclick=async()=>{if($('#conteo').value===''){toast('Captura el efectivo');return;}
+    try{const r=await API.post('/api/caja/cerrar',{turnoId:t.id,conteoEfectivo:+$('#conteo').value});const res=r.resultado;
+      modal.innerHTML=`<h3>Turno cerrado</h3><div class="breakdown"><div class="b"><span>Venta total</span><span>${money(r.esperado.ventaTotal)}</span></div><div class="b"><span>Esperado efectivo</span><span>${money(r.esperado.efectivo)}</span></div><div class="b"><span>Contado</span><span>${money(r.conteo)}</span></div></div><div class="result ${res}">${res==='cuadrado'?'Caja cuadrada':res==='faltante'?'FALTANTE':'SOBRANTE'} ${money(Math.abs(r.diferencia))}</div><div class="modal-foot"><button class="btn-primary" id="cDone">Entendido</button></div>`;
+      app.turno=null;renderTopbar();$('#cDone').onclick=()=>{closeModal();go(app.vista);};
+    }catch(e){toast(e.message);}};
+}
+
+boot();
+</script>
+</body>
+</html>
