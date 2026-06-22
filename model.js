@@ -19,6 +19,7 @@ function estadoInicial(meta = {}) {
     insumos: {},
     promociones: {},
     empleados: {},
+    asistencias: [],
     pedidos: {},
     mesas: {},
     caja: { turnos: {} },
@@ -40,9 +41,9 @@ function canalesDefault() {
 const crearCanal = ({ nombre, comisionPct = 0, esApp = true }) => ({ id: uid('canal'), nombre, comisionPct: r2(comisionPct), activo: true, esApp });
 
 // ---- RH / Empleados ---------------------------------------------------------
-const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0, comisionPct = 0, cumple = '', ingreso = '', telefono = '', username = '' }) => ({
+const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0, comisionPct = 0, cumple = '', ingreso = '', telefono = '', username = '', pin = '' }) => ({
   id: uid('emp'), nombre, puesto, sucursalId, salarioBase: r2(salarioBase), comisionPct: r2(comisionPct),
-  cumple, ingreso: ingreso || new Date().toISOString().slice(0, 10), telefono, username,
+  cumple, ingreso: ingreso || new Date().toISOString().slice(0, 10), telefono, username, pin: String(pin || ''),
   activo: true, fechaBaja: null, creado: new Date().toISOString(),
 });
 
