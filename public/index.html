@@ -93,14 +93,15 @@
   @media(max-width:900px){.pos{grid-template-columns:1fr}}
   .pos-menu{overflow-y:auto}
   .cats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-  .cat{background:var(--card);border:1px solid var(--line);padding:8px 14px;border-radius:999px;font-weight:600;font-size:14px;color:var(--muted)}
+  .cat{background:var(--card);border:1px solid var(--line);padding:10px 17px;border-radius:999px;font-weight:600;font-size:15px;color:var(--muted)}
   .cat.active{background:var(--ink);color:#e8e3d8;border-color:var(--ink)}
-  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:16px}
   .prod{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-align:left;display:flex;flex-direction:column;transition:transform .08s,box-shadow .12s;padding:0}
   .prod:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(0,0,0,.09)}
-  .prod .art{height:104px;width:100%;display:block;object-fit:cover}
-  .prod .meta{padding:11px 13px}
-  .prod .nm{font-weight:600;font-size:15px;line-height:1.25}
+  .prod:active{transform:scale(.98)}
+  .prod .art{height:134px;width:100%;display:block;object-fit:cover}
+  .prod .meta{padding:12px 14px}
+  .prod .nm{font-weight:600;font-size:16px;line-height:1.25}
   .prod .row{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
   .prod .pr{font-family:var(--mono);font-weight:600;color:var(--accent-ink)}
   .prod .dest{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
@@ -142,10 +143,13 @@
   .b-listo{background:var(--accent);color:#2c1c04}.b-entregar{background:var(--green);color:#fff}
 
   /* MESAS */
-  .mesas{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
+  .mesas{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:16px}
   .mesa{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;text-align:center;transition:transform .08s,box-shadow .12s;display:flex;flex-direction:column}
   .mesa:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(0,0,0,.09)}
-  .mesa .art{width:100%;height:118px;display:block}
+  .mesa:active{transform:scale(.98)}
+  .mesa .art{width:100%;height:130px;display:block}
+  /* touch: blancos de toque cómodos */
+  .btn,.pay,.cat,.modal-foot button,.modal-foot a,.paytabs button,.svc button,.cuenta-btn{min-height:46px;display:inline-flex;align-items:center;justify-content:center}
   .mesa .mbody{padding:10px 12px 12px}
   .mesa .ms{font-size:12px;font-weight:600;margin-top:2px}
   .mesa.libre .ms{color:var(--green)}.mesa.ocupada .ms{color:var(--accent-ink)}.mesa.cuenta .ms{color:var(--blue)}
@@ -213,11 +217,11 @@ let tt;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('sh
 // ===========================================================================
 //  Ilustraciones (SVG). Si el producto trae .foto (URL), se usa la imagen.
 // ===========================================================================
-function artBurger(){return `<svg class="art" viewBox="0 0 160 104" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="104" fill="#fbeed8"/><g transform="translate(0,6)"><path d="M30 34c0-17 22-27 50-27s50 10 50 27z" fill="#e0a44a"/><circle cx="60" cy="20" r="2" fill="#f6dca0"/><circle cx="80" cy="15" r="2" fill="#f6dca0"/><circle cx="100" cy="20" r="2" fill="#f6dca0"/><circle cx="70" cy="26" r="2" fill="#f6dca0"/><circle cx="92" cy="27" r="2" fill="#f6dca0"/><rect x="28" y="34" width="104" height="9" rx="4" fill="#7bb449"/><path d="M28 41h104l-7 7-9-5-9 6-9-6-9 6-9-6-9 6-9-6-9 6-7-7z" fill="#f2b133"/><rect x="30" y="50" width="100" height="13" rx="6" fill="#6b3a1e"/><path d="M30 66c0 9 22 14 50 14s50-5 50-14z" fill="#e0a44a"/></g></svg>`;}
-function artSoda(){return `<svg class="art" viewBox="0 0 160 104" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="104" fill="#e7eef6"/><rect x="62" y="20" width="14" height="30" rx="3" fill="#cf4334" transform="rotate(8 69 35)"/><path d="M58 34h44l-6 56a6 6 0 0 1-6 5H70a6 6 0 0 1-6-5z" fill="#f7f4ee"/><path d="M58 34h44l-1 12H59z" fill="#cf4334"/><rect x="56" y="28" width="48" height="8" rx="4" fill="#d7dce3"/><path d="M64 56h32l-3 30H67z" fill="#3b6ea5" opacity=".25"/></svg>`;}
-function artFries(){return `<svg class="art" viewBox="0 0 160 104" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="104" fill="#fbeed8"/><g transform="translate(60,18)"><rect x="2" y="6" width="6" height="40" fill="#f2c14e"/><rect x="11" y="0" width="6" height="46" fill="#f5cd6b"/><rect x="20" y="4" width="6" height="42" fill="#f2c14e"/><rect x="29" y="-2" width="6" height="48" fill="#f5cd6b"/><rect x="38" y="6" width="6" height="40" fill="#f2c14e"/><path d="M-4 40h48l-5 38a4 4 0 0 1-4 3H-1l-3-41z" fill="#cf4334"/><path d="M-4 40h48l-1 10H-3z" fill="#b8392b"/></g></svg>`;}
-function artAgua(){return `<svg class="art" viewBox="0 0 160 104" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="104" fill="#fbeaf0"/><path d="M62 26h36l-5 56a5 5 0 0 1-5 4H72a5 5 0 0 1-5-4z" fill="#f5f1ea" stroke="#e5dfd2"/><path d="M64 46h32l-3 36a4 4 0 0 1-4 3H71a4 4 0 0 1-4-3z" fill="#ec7aa0" opacity=".7"/><circle cx="80" cy="22" r="6" fill="#7bb449"/></svg>`;}
-function artPlato(){return `<svg class="art" viewBox="0 0 160 104" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="104" fill="#f1efe8"/><circle cx="80" cy="52" r="34" fill="#fff" stroke="#e5dfd2"/><circle cx="80" cy="52" r="22" fill="#f4f1ea"/></svg>`;}
+function artBurger(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdf4e2"/><stop offset="1" stop-color="#f6e0bc"/></linearGradient><linearGradient id="btop" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2b765"/><stop offset="1" stop-color="#dd9038"/></linearGradient><linearGradient id="bbot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6a249"/><stop offset="1" stop-color="#cf8a32"/></linearGradient><linearGradient id="bpat" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#824a26"/><stop offset="1" stop-color="#5e3318"/></linearGradient></defs><rect width="160" height="120" fill="url(#bbg)"/><ellipse cx="80" cy="100" rx="54" ry="7" fill="#7a4a10" opacity=".12"/><path d="M28 50c0-23 24-35 52-35s52 12 52 35z" fill="url(#btop)"/><path d="M44 30c9-8 24-11 40-9" stroke="#ffe6b8" stroke-width="3.5" fill="none" stroke-linecap="round" opacity=".55"/><g fill="#fbe3ac"><ellipse cx="62" cy="34" rx="3" ry="1.7" transform="rotate(-18 62 34)"/><ellipse cx="80" cy="28" rx="3" ry="1.7"/><ellipse cx="98" cy="34" rx="3" ry="1.7" transform="rotate(18 98 34)"/><ellipse cx="71" cy="40" rx="3" ry="1.7" transform="rotate(-10 71 40)"/><ellipse cx="90" cy="40" rx="3" ry="1.7" transform="rotate(10 90 40)"/></g><path d="M26 50h108c-6 8-15 4-21 8-6 4-12 0-18 4-6 4-12 0-18 0-6 0-12 4-18 0-6-4-15 0-15-12z" fill="#7cb949"/><path d="M30 58h100v7l-9 8-7-6-9 8-7-6-9 8-7-6-9 8-7-6-9 8-7-6-7 4z" fill="#f4b740"/><rect x="28" y="66" width="104" height="15" rx="7" fill="url(#bpat)"/><rect x="30" y="80" width="100" height="16" rx="8" fill="url(#bbot)"/></svg>`;}
+function artSoda(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="sbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef4fb"/><stop offset="1" stop-color="#dae6f4"/></linearGradient><linearGradient id="cup" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b8362a"/><stop offset=".5" stop-color="#e1503c"/><stop offset="1" stop-color="#b8362a"/></linearGradient></defs><rect width="160" height="120" fill="url(#sbg)"/><ellipse cx="80" cy="104" rx="32" ry="6" fill="#16253f" opacity=".12"/><rect x="94" y="16" width="6" height="36" rx="3" fill="#e8e3d8" transform="rotate(13 97 34)"/><path d="M52 38h56l-7 60a6 6 0 0 1-6 5H65a6 6 0 0 1-6-5z" fill="url(#cup)"/><rect x="50" y="46" width="60" height="13" fill="#f7f4ee"/><rect x="58" y="51" width="44" height="3" rx="1.5" fill="#b8362a" opacity=".55"/><rect x="48" y="30" width="64" height="10" rx="4" fill="#cf3322"/><path d="M60 30c2-8 38-8 40 0z" fill="#d84a38"/></svg>`;}
+function artFries(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="fbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdf4e2"/><stop offset="1" stop-color="#f6e0bc"/></linearGradient><linearGradient id="frb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e1503c"/><stop offset="1" stop-color="#bf3526"/></linearGradient><linearGradient id="fr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8d370"/><stop offset="1" stop-color="#e0a23c"/></linearGradient></defs><rect width="160" height="120" fill="url(#fbg)"/><ellipse cx="80" cy="104" rx="34" ry="6" fill="#7a4a10" opacity=".12"/><g fill="url(#fr)"><rect x="58" y="40" width="7" height="50" rx="3"/><rect x="68" y="30" width="7" height="60" rx="3"/><rect x="78" y="36" width="7" height="54" rx="3"/><rect x="88" y="26" width="7" height="64" rx="3"/><rect x="98" y="42" width="7" height="48" rx="3"/></g><path d="M50 64h60l-6 36a6 6 0 0 1-6 5H62a6 6 0 0 1-6-5z" fill="url(#frb)"/><path d="M50 64h60l-1 11H51z" fill="#a82e21"/></svg>`;}
+function artAgua(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="abg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdeef4"/><stop offset="1" stop-color="#f6d8e4"/></linearGradient><linearGradient id="aliq" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f48fb0"/><stop offset="1" stop-color="#e85f8c"/></linearGradient></defs><rect width="160" height="120" fill="url(#abg)"/><ellipse cx="80" cy="104" rx="28" ry="6" fill="#7a1030" opacity=".12"/><rect x="92" y="20" width="5" height="40" rx="2.5" fill="#fff" opacity=".8" transform="rotate(10 94 40)"/><path d="M58 34h44l-5 60a6 6 0 0 1-6 5H69a6 6 0 0 1-6-5z" fill="#ffffff" opacity=".55"/><path d="M60 48h40l-4 46a5 5 0 0 1-5 4H69a5 5 0 0 1-5-4z" fill="url(#aliq)"/><rect x="66" y="40" width="11" height="11" rx="3" fill="#fff" opacity=".55"/><rect x="84" y="44" width="9" height="9" rx="2.5" fill="#fff" opacity=".5"/><circle cx="100" cy="34" r="9" fill="#8fce4f"/><circle cx="100" cy="34" r="6" fill="#c7e89a"/></svg>`;}
+function artPlato(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="pl" cx="50%" cy="42%" r="60%"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ece7db"/></radialGradient></defs><rect width="160" height="120" fill="#f1efe8"/><ellipse cx="80" cy="64" rx="40" ry="38" fill="#000" opacity=".06"/><circle cx="80" cy="60" r="38" fill="url(#pl)" stroke="#e0d9c8"/><circle cx="80" cy="60" r="24" fill="none" stroke="#e6dfce" stroke-width="2"/><rect x="40" y="44" width="3" height="32" rx="1.5" fill="#c9c1ad"/><rect x="117" y="44" width="3" height="32" rx="1.5" fill="#c9c1ad"/></svg>`;}
 function prodArt(prod,catName){
   if(prod.foto)return `<img class="art" src="${prod.foto}" alt="${prod.nombre}" onerror="this.outerHTML=prodArtFallback('${(catName||'').replace(/'/g,'')}','${prod.nombre.replace(/'/g,'')}')">`;
   return prodArtFallback(catName,prod.nombre);
@@ -515,12 +519,20 @@ async function vInventario(){
   const inv=await API.get('/api/inventario');
   $('#view').innerHTML=`<div class="panel" style="margin-bottom:16px"><h3>Insumos <span class="small">se descuenta con cada venta</span></h3>
     <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th>Estado</th><th></th></tr></thead><tbody>
-    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num"><button class="btn" data-ent="${i.id}" style="padding:4px 10px;font-size:12px">+ Entrada</button></td></tr>`).join('')}
+    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 12px;font-size:12px;min-height:auto">+ Entrada</button></td></tr>`).join('')}
     </tbody></table></div>
     <div class="panel"><h3>Food cost por producto</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
     ${inv.foodCost.map(f=>`<tr><td>${f.nombre}</td><td class="num">${money(f.costo)}</td><td class="num">${money(f.precio)}</td><td class="num" style="color:${f.foodCostPct>40?'var(--red)':f.foodCostPct>35?'var(--accent-ink)':'var(--green)'};font-weight:600">${f.foodCostPct.toFixed(0)}%</td></tr>`).join('')}
     </tbody></table></div>`;
-  document.querySelectorAll('[data-ent]').forEach(b=>b.onclick=async()=>{const c=prompt('¿Cuántas unidades entran?');if(c===null)return;const n=parseFloat(c);if(!n)return;try{await API.post(`/api/inventario/insumos/${b.dataset.ent}/entrada`,{cantidad:n});toast('Stock actualizado');vInventario();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-ent]').forEach(b=>b.onclick=()=>modalEntrada(b.dataset.ent,b.dataset.nom));
+}
+function modalEntrada(id,nombre){
+  modal.innerHTML=`<h3>Entrada de stock</h3><div class="sub">${nombre||''}</div>
+    <div class="field"><label>¿Cuántas unidades entran?</label><input id="entCant" type="number" class="mono" inputmode="decimal" placeholder="0"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">Agregar al stock</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#entCant').focus(),50);
+  $('#eCancel').onclick=closeModal;
+  $('#eOk').onclick=async()=>{const n=parseFloat($('#entCant').value);if(!n){toast('Captura una cantidad');return;}try{await API.post(`/api/inventario/insumos/${id}/entrada`,{cantidad:n});closeModal();toast('Stock actualizado');vInventario();}catch(e){toast(e.message);}};
 }
 
 // ===========================================================================
@@ -530,9 +542,20 @@ async function vMesas(){
   const mesas=await API.get('/api/mesas?sucursalId='+app.sucursalId);
   app._mesaNum={};mesas.forEach(m=>app._mesaNum[m.id]=m.nombre.replace('Mesa ',''));
   const lbl={libre:'Libre',ocupada:'Ocupada',cuenta:'Pidió cuenta'};
-  $('#view').innerHTML=`<div class="panel"><h3>Salón <span class="small">toca una mesa para abrir o seguir su cuenta</span></h3>
-    <div class="mesas">${mesas.map(m=>`<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block">${mesaArt(m.estado)}</button>
+  const sucNombre=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
+  if(!mesas.length){
+    $('#view').innerHTML=`<div class="panel"><h3>Salón · ${sucNombre}</h3>
+      <div class="empty">Esta sucursal aún no tiene mesas.<br><br>
+      <button class="btn accent" id="crear6" style="margin-right:8px">Crear 6 mesas</button>
+      <button class="btn" id="crear1">Agregar 1 mesa</button></div></div>`;
+    $('#crear6').onclick=async()=>{await API.post('/api/mesas/bulk',{sucursalId:app.sucursalId,cantidad:6});toast('6 mesas creadas');vMesas();};
+    $('#crear1').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
+    return;
+  }
+  $('#view').innerHTML=`<div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center">Salón · ${sucNombre} <button class="btn" id="addMesa" style="font-size:13px">+ Agregar mesa</button></h3>
+    <div class="mesas">${mesas.map(m=>`<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block;border:none;cursor:pointer">${mesaArt(m.estado)}</button>
       <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div><div class="ms">${lbl[m.estado]}</div>${m.estado!=='libre'?`<div class="mtot">${money(m.total)}</div>`:''}${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}</div></div>`).join('')}</div></div>`;
+  $('#addMesa').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
   document.querySelectorAll('[data-abrir]').forEach(b=>b.onclick=()=>abrirMesa(b.dataset.abrir));
   document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);vMesas();});
 }
