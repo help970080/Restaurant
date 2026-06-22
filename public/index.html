@@ -40,6 +40,17 @@
   .brandlogo{max-height:40px;max-width:172px;display:block;object-fit:contain}
   .brandtext{font-family:'Bricolage Grotesque';font-weight:700;font-size:20px;line-height:1.1;display:block}
   .cols2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .checagrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+  .checacard{text-align:left;padding:16px;border-radius:14px;border:1px solid var(--line);background:var(--card);display:flex;flex-direction:column;gap:3px;transition:transform .08s}
+  .checacard:active{transform:scale(.97)}
+  .checacard.on{border-color:var(--green);background:#eef7f0}
+  .checacard .cknom{font-family:'Bricolage Grotesque';font-weight:700;font-size:17px}
+  .checacard .ckpue{font-size:12px;color:var(--muted)}
+  .checacard .ckstat{font-size:12px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:5px}
+  .checacard.on .ckstat{color:var(--green);font-weight:600}
+  .checacard .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block}
+  .checacard .ckact{margin-top:8px;font-size:13px;font-weight:600;color:var(--accent-ink)}
+  .checacard.on .ckact{color:var(--green)}
   .nav{flex:1;padding:6px 10px;overflow-y:auto}
   .nav button{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;color:#b7b0a2;padding:10px 12px;border-radius:9px;font-size:14px;font-weight:500;margin-bottom:2px}
   .nav button:hover{background:#272318;color:#e8e3d8}
@@ -265,8 +276,9 @@ const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
   reportes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="6"/><line x1="18" y1="20" x2="18" y2="10"/></svg>',
   promociones:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8"/><rect x="2" y="7" width="20" height="5" rx="1"/><path d="M12 21V7M12 7S11 3 8.5 3 5 5 7 7h5zM12 7s1-4 3.5-4S19 5 17 7h-5z"/></svg>',
   ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-  rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'};
-const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['reportes','Reportes']];
+  rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  asistencia:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'};
+const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['asistencia','Asistencia'],['reportes','Reportes']];
 function esAdmin(){return app.rol==='admin'||app.rol==='gerente';}
 function NAV(){return esAdmin()?[...NAV_BASE,['promociones','Promociones'],['rh','Personal'],['ajustes','Ajustes']]:NAV_BASE;}
 
@@ -311,7 +323,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.6 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.7 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -337,7 +349,7 @@ async function renderNav(){
 function go(v){app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
-  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH}[v])();
+  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia}[v])();
 }
 
 // ===========================================================================
@@ -721,9 +733,9 @@ async function renderFinanciero(){
   </div>
   <div class="cols" style="margin-top:16px">
     <div class="panel"><h3>Prime cost <span class="small">la métrica que más se vigila · meta 55–65%</span></h3>
-      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Captura tu nómina del periodo para calcular el prime cost (insumos + nómina ÷ ventas).</div>
-      <div class="field"><label>Costo de nómina del periodo</label><input id="nomina" type="number" class="mono" inputmode="decimal" placeholder="0.00"></div>
-      <div id="primeOut" style="font-size:14px;color:var(--muted)">Ingresa la nómina para ver el resultado.</div></div>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">La nómina se toma de <b>Personal</b> (salarios de empleados activos). Ajústala si tu periodo es distinto.</div>
+      <div class="field"><label>Costo de nómina del periodo</label><input id="nomina" type="number" class="mono" inputmode="decimal" value="${fin.nominaBase||''}" placeholder="0.00">${fin.nominaBase?`<div style="font-size:12px;color:var(--muted);margin-top:4px">Nómina mensual de Personal: ${money(fin.nominaBase)}</div>`:'<div style="font-size:12px;color:var(--muted);margin-top:4px">Captura empleados en Personal para que se llene sola.</div>'}</div>
+      <div id="primeOut" style="font-size:14px;color:var(--muted)">—</div></div>
     <div class="panel"><h3>Resumen del margen</h3>
       <div class="bar-row"><div class="bn">Insumos (COGS)</div><div class="bt"><div class="bf" style="width:${fin.foodCostPct}%;background:var(--accent)"></div></div><div class="bv">${fin.foodCostPct}%</div></div>
       <div class="bar-row"><div class="bn">Margen bruto</div><div class="bt"><div class="bf" style="width:${fin.margenBrutoPct}%;background:var(--green)"></div></div><div class="bv">${fin.margenBrutoPct}%</div></div>
@@ -738,9 +750,10 @@ async function renderFinanciero(){
     ${r.length?`<table><thead><tr><th>Producto</th><th class="num">Unidades</th><th class="num">Ingreso</th><th class="num">Costo</th><th class="num">Margen</th><th class="num">Margen %</th></tr></thead><tbody>
     ${r.map(x=>`<tr><td>${x.nombre}</td><td class="num">${x.unidades}</td><td class="num">${money(x.ingreso)}</td><td class="num">${money(x.costo)}</td><td class="num" style="font-weight:600">${money(x.margen)}</td><td class="num" style="color:${x.margenPct>=60?'var(--green)':x.margenPct>=45?'var(--accent-ink)':'var(--red)'}">${x.margenPct}%</td></tr>`).join('')}
     </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas para analizar.</div>'}</div>`;
-  $('#nomina').oninput=e=>{const nom=parseFloat(e.target.value)||0;const out=$('#primeOut');if(!nom||!fin.ingresos){out.innerHTML='Ingresa la nómina para ver el resultado.';return;}
+  const calcPrime=()=>{const nom=parseFloat($('#nomina').value)||0;const out=$('#primeOut');if(!nom||!fin.ingresos){out.innerHTML='Captura la nómina y registra ventas para ver el prime cost.';return;}
     const prime=fin.cogs+nom;const pct=+(prime/fin.ingresos*100).toFixed(1);const c=pct<=65?'var(--green)':pct<=72?'var(--accent-ink)':'var(--red)';
     out.innerHTML=`<div style="font-size:13px;color:var(--muted)">Prime cost (insumos + nómina)</div><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:28px;color:${c}">${pct}%</div><div style="font-size:13px;color:var(--muted)">${pct<=65?'Saludable ✓':pct<=72?'En el límite, vigílalo':'Alto — revisa nómina y food cost'}</div>`;};
+  $('#nomina').oninput=calcPrime;calcPrime();
 }
 
 // ===========================================================================
@@ -873,6 +886,48 @@ function modalNuevoTenant(){
 }
 
 // ===========================================================================
+//  ASISTENCIA / CHECADOR
+// ===========================================================================
+function fmtHora(iso){return iso?new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}):'—';}
+async function vAsistencia(){
+  const emps=await API.get('/api/asistencia/empleados');
+  let rep=null;if(esAdmin()){try{rep=await API.get('/api/asistencia');}catch{}}
+  $('#view').innerHTML=`
+  <div class="panel" style="margin-bottom:16px"><h3>Checador <span class="small">toca tu nombre para registrar entrada o salida · sucursal ${app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||''}</span></h3>
+    ${emps.length?`<div class="checagrid">${emps.map(e=>`<button class="checacard ${e.trabajando?'on':''}" data-chk="${e.id}" data-pin="${e.requierePin?1:0}" data-nom="${e.nombre}">
+      <div class="cknom">${e.nombre}</div><div class="ckpue">${e.puesto||''}</div>
+      <div class="ckstat">${e.trabajando?`<span class="dot"></span>Trabajando · ${fmtHora(e.desde)}`:'Fuera'}</div>
+      <div class="ckact">${e.trabajando?'Registrar salida':'Registrar entrada'}</div></button>`).join('')}</div>`:'<div class="empty">Agrega empleados en la pestaña Personal para usar el checador.</div>'}</div>
+  ${rep?`
+    <div class="panel" style="margin-bottom:16px"><h3>Trabajando ahora <span class="small">${rep.activos.length} persona(s)</span></h3>
+      ${rep.activos.length?`<table><thead><tr><th>Empleado</th><th>Puesto</th><th>Sucursal</th><th class="num">Entrada</th><th class="num">Horas (parcial)</th></tr></thead><tbody>
+      ${rep.activos.map(a=>`<tr><td style="font-weight:600">${a.nombre}</td><td>${a.puesto||'—'}</td><td>${a.sucursal||'—'}</td><td class="num">${fmtHora(a.entrada)}</td><td class="num">${a.horasParcial} h</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Nadie tiene entrada abierta en este momento.</div>'}</div>
+    <div class="panel"><h3>Asistencia reciente <span class="small">últimos registros</span></h3>
+      ${rep.recientes.length?`<table><thead><tr><th>Empleado</th><th>Fecha</th><th class="num">Entrada</th><th class="num">Salida</th><th class="num">Horas</th></tr></thead><tbody>
+      ${rep.recientes.map(a=>`<tr><td>${a.nombre}</td><td>${a.fecha}</td><td class="num">${fmtHora(a.entrada)}</td><td class="num">${a.salida?fmtHora(a.salida):'<span style="color:var(--green)">en turno</span>'}</td><td class="num">${a.salida?a.horas+' h':'—'}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay registros.</div>'}</div>`:''}`;
+  document.querySelectorAll('[data-chk]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.pin==='1')pedirPinChecar(b.dataset.chk,b.dataset.nom);
+    else checar(b.dataset.chk,'');
+  });
+}
+function pedirPinChecar(id,nombre){
+  modal.innerHTML=`<h3>${nombre}</h3><div class="sub">Ingresa tu PIN</div>
+    <div class="field"><input id="pinChk" type="password" inputmode="numeric" class="mono" style="text-align:center;font-size:24px;letter-spacing:6px" maxlength="6"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="pinCancel">Cancelar</button><button class="btn-primary" id="pinOk">Registrar</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#pinChk').focus(),50);
+  $('#pinCancel').onclick=closeModal;
+  $('#pinOk').onclick=()=>{const pin=$('#pinChk').value;closeModal();checar(id,pin);};
+}
+async function checar(id,pin){
+  try{const r=await API.post('/api/asistencia/checar',{empleadoId:id,pin,sucursalId:app.sucursalId});
+    toast(r.accion==='entrada'?`Entrada registrada · ${fmtHora(r.hora)} · ${r.nombre}`:`Salida registrada · ${r.horas} h · ${r.nombre}`);
+    vAsistencia();
+  }catch(e){toast(e.message);}
+}
+
+// ===========================================================================
 //  RH / PERSONAL  (admin)
 // ===========================================================================
 async function vRH(){
@@ -925,12 +980,13 @@ function modalEmpleado(emp){
     <div class="cols2"><div class="field"><label>Cumpleaños</label><input id="eCum" type="date" value="${ed&&emp.cumple&&emp.cumple.length>=10?emp.cumple.slice(0,10):''}"></div>
     <div class="field"><label>Fecha de ingreso</label><input id="eIng" type="date" value="${ed&&emp.ingreso?emp.ingreso.slice(0,10):''}"></div></div>
     <div class="cols2"><div class="field"><label>Teléfono</label><input id="eTel" value="${ed?emp.telefono||'':''}"></div>
+    <div class="field"><label>PIN para checador (opcional)</label><input id="ePin" inputmode="numeric" maxlength="6" class="mono" value="${ed?emp.pin||'':''}" placeholder="4 dígitos"></div></div>
     <div class="field"><label>Usuario del sistema (para comisión)</label><select id="eUsr"><option value="">— ninguno —</option>${us.map(u=>`<option value="${u.username}" ${ed&&emp.username===u.username?'selected':''}>${u.username}</option>`).join('')}</select></div></div>
     <div class="modal-foot">${ed?`<button class="btn-ghost" id="eBaja" style="margin-right:auto;color:${emp.activo?'var(--red)':'var(--green)'}">${emp.activo?'Dar de baja':'Reactivar'}</button>`:''}<button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">${ed?'Guardar':'Crear'}</button></div>`;
   ov.classList.add('show');setTimeout(()=>$('#eNom').focus(),50);
   $('#eCancel').onclick=closeModal;
   if(ed&&$('#eBaja'))$('#eBaja').onclick=async()=>{try{await API.patch('/api/rh/empleados/'+emp.id,{activo:!emp.activo});closeModal();toast(emp.activo?'Empleado dado de baja':'Empleado reactivado');vRH();}catch(e){toast(e.message);}};
-  $('#eOk').onclick=async()=>{const body={nombre:$('#eNom').value.trim(),puesto:$('#ePue').value.trim(),sucursalId:$('#eSuc').value||null,salarioBase:+$('#eSal').value||0,comisionPct:+$('#eCom').value||0,cumple:$('#eCum').value||'',ingreso:$('#eIng').value||'',telefono:$('#eTel').value.trim(),username:$('#eUsr').value||''};
+  $('#eOk').onclick=async()=>{const body={nombre:$('#eNom').value.trim(),puesto:$('#ePue').value.trim(),sucursalId:$('#eSuc').value||null,salarioBase:+$('#eSal').value||0,comisionPct:+$('#eCom').value||0,cumple:$('#eCum').value||'',ingreso:$('#eIng').value||'',telefono:$('#eTel').value.trim(),pin:$('#ePin').value.trim(),username:$('#eUsr').value||''};
     if(!body.nombre){toast('Falta el nombre');return;}
     try{if(ed)await API.patch('/api/rh/empleados/'+emp.id,body);else await API.post('/api/rh/empleados',body);closeModal();toast(ed?'Empleado actualizado':'Empleado agregado');vRH();}catch(e){toast(e.message);}};
 }
