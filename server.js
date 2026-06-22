@@ -167,14 +167,15 @@ app.delete('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/config', wrap(async (req, res) => {
   const e = await readState();
-  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda });
+  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda, fiscal: e.config.fiscal || {} });
 }));
 app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
-  const { nombre, logo } = req.body || {};
+  const { nombre, logo, fiscal } = req.body || {};
   const out = await withState((e) => {
     if (nombre) e.meta.nombre = nombre;
     if (logo !== undefined) e.config.logo = logo;
-    return { nombre: e.meta.nombre, logo: e.config.logo || null };
+    if (fiscal && typeof fiscal === 'object') e.config.fiscal = { ...(e.config.fiscal || {}), ...fiscal };
+    return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {} };
   });
   res.json(out);
 }));
@@ -225,7 +226,7 @@ app.patch('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
   const emp = await withState((e) => {
     const x = (e.empleados || {})[req.params.id];
     if (!x) throw bad('Empleado inexistente', 404);
-    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username', 'pin']) if (k in b) x[k] = b[k];
+    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username', 'pin', 'rfc', 'domicilio']) if (k in b) x[k] = b[k];
     if ('salarioBase' in b) x.salarioBase = M.r2(+b.salarioBase);
     if ('comisionPct' in b) x.comisionPct = M.r2(+b.comisionPct);
     if ('activo' in b) { x.activo = !!b.activo; x.fechaBaja = b.activo ? null : new Date().toISOString().slice(0, 10); }
