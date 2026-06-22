@@ -18,6 +18,7 @@ function estadoInicial(meta = {}) {
     menu: { categorias: {}, gruposModificadores: {}, productos: {} },
     insumos: {},
     promociones: {},
+    empleados: {},
     pedidos: {},
     mesas: {},
     caja: { turnos: {} },
@@ -37,6 +38,13 @@ function canalesDefault() {
   };
 }
 const crearCanal = ({ nombre, comisionPct = 0, esApp = true }) => ({ id: uid('canal'), nombre, comisionPct: r2(comisionPct), activo: true, esApp });
+
+// ---- RH / Empleados ---------------------------------------------------------
+const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0, comisionPct = 0, cumple = '', ingreso = '', telefono = '', username = '' }) => ({
+  id: uid('emp'), nombre, puesto, sucursalId, salarioBase: r2(salarioBase), comisionPct: r2(comisionPct),
+  cumple, ingreso: ingreso || new Date().toISOString().slice(0, 10), telefono, username,
+  activo: true, fechaBaja: null, creado: new Date().toISOString(),
+});
 
 // ---- Promociones ------------------------------------------------------------
 const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0 }) => ({ id: uid('promo'), nombre, tipo, valor, activo: true });
@@ -200,7 +208,7 @@ function descontarInventario(e, ped) {
 
 module.exports = {
   uid, r2, estadoInicial,
-  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
