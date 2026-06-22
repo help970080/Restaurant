@@ -55,6 +55,9 @@ function buildTenantDoc(nombre = 'Jefe Burgers') {
   const promo = M.crearPromocion({ nombre: 'Descuento 10%', tipo: 'porcentaje', valor: 10 });
   e.promociones[promo.id] = promo;
 
+  // Canales de venta / delivery (México)
+  e.config.canales = M.canalesDefault();
+
   // Mesas (6 por sucursal)
   for (const suc of [a, b]) for (let i = 1; i <= 6; i++) { const m = M.crearMesa({ nombre: 'Mesa ' + i, sucursalId: suc.id }); e.mesas[m.id] = m; }
 
