@@ -79,6 +79,8 @@
   th,td{text-align:left;padding:9px 8px;font-size:14px;border-bottom:1px solid var(--line)}
   th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
   td.num,th.num{text-align:right;font-family:var(--mono)}tr:last-child td{border-bottom:none}
+  .thumb{display:inline-block;width:50px;height:38px;border-radius:8px;overflow:hidden;vertical-align:middle;margin-right:10px;border:1px solid var(--line)}
+  .thumb .art{width:50px;height:38px;display:block}
   .chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
   .chip.cocina{background:var(--accent-bg);color:var(--accent-ink)}.chip.barra{background:var(--blue-bg);color:var(--blue)}
   .chip.ok{background:var(--green-bg);color:var(--green)}.chip.low{background:var(--red-bg);color:var(--red)}
@@ -493,7 +495,7 @@ async function vMenu(){
   $('#view').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn dark" id="addProd">+ Nuevo producto</button></div>
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
     <table><thead><tr><th>Producto</th><th>Destino</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];return `<tr><td>${p.nombre}</td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td></tr>`;}).join('')}
+    ${ps.map(p=>{const fc=fcMap[p.id];return `<tr><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}`;
   $('#addProd').onclick=modalNuevoProducto;
 }
