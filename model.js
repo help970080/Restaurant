@@ -13,15 +13,30 @@ const r2 = (n) => Math.round((+n) * 100) / 100;
 function estadoInicial(meta = {}) {
   return {
     meta: { nombre: meta.nombre || 'Restaurante', creado: new Date().toISOString(), version: 1 },
-    config: { moneda: 'MXN', zonaHoraria: 'America/Mexico_City' },
+    config: { moneda: 'MXN', zonaHoraria: 'America/Mexico_City', logo: null },
     sucursales: {},
     menu: { categorias: {}, gruposModificadores: {}, productos: {} },
     insumos: {},
+    promociones: {},
     pedidos: {},
     mesas: {},
     caja: { turnos: {} },
     secuencias: { pedido: {} },
   };
+}
+
+// ---- Promociones ------------------------------------------------------------
+const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0 }) => ({ id: uid('promo'), nombre, tipo, valor, activo: true });
+
+// Receta agregada de un combo: suma las recetas de sus productos componentes
+function recetaDeCombo(e, componentes = []) {
+  const acc = {};
+  for (const pid of componentes) {
+    const p = e.menu.productos[pid];
+    if (!p) continue;
+    for (const r of p.receta) acc[r.insumoId] = r2((acc[r.insumoId] || 0) + r.cantidad);
+  }
+  return Object.entries(acc).map(([insumoId, cantidad]) => ({ insumoId, cantidad }));
 }
 
 // ---- Menú -------------------------------------------------------------------
@@ -172,7 +187,7 @@ function descontarInventario(e, ped) {
 
 module.exports = {
   uid, r2, estadoInicial,
-  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
