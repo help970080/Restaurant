@@ -13,7 +13,7 @@ const r2 = (n) => Math.round((+n) * 100) / 100;
 function estadoInicial(meta = {}) {
   return {
     meta: { nombre: meta.nombre || 'Restaurante', creado: new Date().toISOString(), version: 1 },
-    config: { moneda: 'MXN', zonaHoraria: 'America/Mexico_City', logo: null },
+    config: { moneda: 'MXN', zonaHoraria: 'America/Mexico_City', logo: null, fiscal: {} },
     sucursales: {},
     menu: { categorias: {}, gruposModificadores: {}, productos: {} },
     insumos: {},
@@ -41,9 +41,9 @@ function canalesDefault() {
 const crearCanal = ({ nombre, comisionPct = 0, esApp = true }) => ({ id: uid('canal'), nombre, comisionPct: r2(comisionPct), activo: true, esApp });
 
 // ---- RH / Empleados ---------------------------------------------------------
-const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0, comisionPct = 0, cumple = '', ingreso = '', telefono = '', username = '', pin = '' }) => ({
+const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0, comisionPct = 0, cumple = '', ingreso = '', telefono = '', username = '', pin = '', rfc = '', domicilio = '' }) => ({
   id: uid('emp'), nombre, puesto, sucursalId, salarioBase: r2(salarioBase), comisionPct: r2(comisionPct),
-  cumple, ingreso: ingreso || new Date().toISOString().slice(0, 10), telefono, username, pin: String(pin || ''),
+  cumple, ingreso: ingreso || new Date().toISOString().slice(0, 10), telefono, username, pin: String(pin || ''), rfc, domicilio,
   activo: true, fechaBaja: null, creado: new Date().toISOString(),
 });
 
