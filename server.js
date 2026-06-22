@@ -618,6 +618,15 @@ app.get('/api/pedidos', wrap(async (req, res) => {
   res.json(arr);
 }));
 
+app.get('/api/ventas/recientes', wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId, limit = 30 } = req.query;
+  let arr = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado');
+  if (sucursalId) arr = arr.filter((p) => p.sucursalId === sucursalId);
+  arr.sort((a, b) => new Date(b.actualizado) - new Date(a.actualizado));
+  res.json(arr.slice(0, +limit));
+}));
+
 // ---------------------------------------------------------------------------
 //  COCINA (KDS)
 // ---------------------------------------------------------------------------
