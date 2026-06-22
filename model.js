@@ -21,6 +21,7 @@ function estadoInicial(meta = {}) {
     pedidos: {},
     mesas: {},
     caja: { turnos: {} },
+    conteos: [],
     secuencias: { pedido: {} },
   };
 }
