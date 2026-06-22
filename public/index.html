@@ -264,9 +264,10 @@ const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
   mesas:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>',
   reportes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="6"/><line x1="18" y1="20" x2="18" y2="10"/></svg>',
   promociones:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8"/><rect x="2" y="7" width="20" height="5" rx="1"/><path d="M12 21V7M12 7S11 3 8.5 3 5 5 7 7h5zM12 7s1-4 3.5-4S19 5 17 7h-5z"/></svg>',
-  ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'};
+  ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'};
 const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['reportes','Reportes']];
-function NAV(){return app.rol==='admin'?[...NAV_BASE,['promociones','Promociones'],['ajustes','Ajustes']]:NAV_BASE;}
+function NAV(){return app.rol==='admin'?[...NAV_BASE,['promociones','Promociones'],['rh','Personal'],['ajustes','Ajustes']]:NAV_BASE;}
 
 // ===========================================================================
 //  Boot / login
@@ -335,7 +336,7 @@ async function renderNav(){
 function go(v){app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
-  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes}[v])();
+  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH}[v])();
 }
 
 // ===========================================================================
@@ -376,7 +377,7 @@ function cats(){return Object.values(app.menu.categorias).sort((a,b)=>a.orden-b.
 function prodsDe(catId){return Object.values(app.menu.productos).filter(p=>p.categoriaId===catId&&p.activo);}
 function vPOS(){
   if(!app.pos.cat)app.pos.cat=cats()[0].id;
-  const ped=app.pos.pedido;const enMesa=app.pos.tipoServicio==='mesa';
+  const ped=app.pos.pedido;const enMesa=app.pos.tipoServicio==='mesa';const enDom=app.pos.tipoServicio==='domicilio';
   const cat=app.menu.categorias[app.pos.cat];
   $('#view').innerHTML=`<div class="pos">
     <div class="pos-menu"><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
@@ -392,7 +393,7 @@ function vPOS(){
         <div class="trow" id="tDescRow" style="display:none;color:var(--green)"><span id="tDescLbl">Descuento</span><span class="mono" id="tDesc">$0.00</span></div>
         <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
         <div class="trow tot"><span>Total</span><span class="mono" id="tTotal">$0.00</span></div>
-        ${enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar cuenta</button></div>`:`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`}
+        ${enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar cuenta</button></div>`:enDom?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar</button></div>`:`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`}
       </div></div></div>`;
   document.querySelectorAll('.cat').forEach(b=>b.onclick=()=>{app.pos.cat=b.dataset.cat;vPOS();});
   document.querySelectorAll('.svc button').forEach(b=>b.onclick=()=>onSvc(b.dataset.svc));
@@ -483,11 +484,14 @@ async function aplicarPromocion(){
 }
 function cobrar(){
   const ped=app.pos.pedido;if(!ped||!ped.lineas.length){toast('Agrega productos');return;}
-  let metodo='efectivo';
+  const canal=(app.canales||[]).find(c=>c.id===ped.canalId);
+  const metodos=canal&&canal.esApp?['plataforma','tarjeta','efectivo']:['efectivo','tarjeta','transferencia'];
+  const nm={plataforma:'Plataforma',efectivo:'Efectivo',tarjeta:'Tarjeta',transferencia:'Transferencia'};
+  let metodo=metodos[0];
   const render=()=>{
-    modal.innerHTML=`<h3>Cobrar ${money(ped.total)}</h3><div class="sub">${ped.folio}</div>
-      <div class="paytabs">${['efectivo','tarjeta','transferencia'].map(m=>`<button data-m="${m}" class="${m===metodo?'active':''}">${m[0].toUpperCase()+m.slice(1)}</button>`).join('')}</div>
-      ${metodo==='efectivo'?`<div class="field"><label>Efectivo recibido</label><input id="recib" type="number" class="mono" placeholder="${ped.total}"></div><div class="cambio" id="cambio"></div>`:`<div class="bignum">${money(ped.total)}</div>`}
+    modal.innerHTML=`<h3>Cobrar ${money(ped.total)}</h3><div class="sub">${ped.folio}${canal&&canal.esApp?' · '+canal.nombre:''}</div>
+      <div class="paytabs">${metodos.map(m=>`<button data-m="${m}" class="${m===metodo?'active':''}">${nm[m]}</button>`).join('')}</div>
+      ${metodo==='efectivo'?`<div class="field"><label>Efectivo recibido</label><input id="recib" type="number" class="mono" placeholder="${ped.total}"></div><div class="cambio" id="cambio"></div>`:`<div class="bignum">${money(ped.total)}</div>${metodo==='plataforma'?'<div class="sub" style="text-align:center">El cobro lo hace la plataforma; aquí solo se registra la venta.</div>':''}`}
       <div class="modal-foot"><button class="btn-ghost" id="pCancel">Cancelar</button><button class="btn-primary" id="pOk">Confirmar cobro</button></div>`;
     modal.querySelectorAll('.paytabs button').forEach(b=>b.onclick=()=>{metodo=b.dataset.m;render();});
     if(metodo==='efectivo'){const ri=$('#recib');ri.addEventListener('input',()=>{const r=+ri.value||0,c=r-ped.total;$('#cambio').textContent=r>0?(c>=0?'Cambio: '+money(c):'Faltan '+money(-c)):'';$('#cambio').style.color=c<0?'var(--red)':'var(--green)';});setTimeout(()=>ri.focus(),50);}
@@ -865,6 +869,69 @@ function modalNuevoTenant(){
    <div class="modal-foot"><button class="btn-ghost" id="tCancel">Cancelar</button><button class="btn-primary" id="tOk">Crear</button></div>`;
   ov.classList.add('show');$('#tCancel').onclick=closeModal;
   $('#tOk').onclick=async()=>{const n=$('#tNom').value.trim(),u=$('#tUser').value.trim(),p=$('#tPass').value;if(!n||!u||!p){toast('Faltan datos');return;}try{await API.post('/api/super/tenants',{nombre:n,adminUser:u,adminPass:p});closeModal();toast('Restaurante creado');vSuperTenants();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  RH / PERSONAL  (admin)
+// ===========================================================================
+async function vRH(){
+  const [emps,resumen,usuarios]=await Promise.all([API.get('/api/rh/empleados'),API.get('/api/rh/resumen'),API.get('/api/usuarios')]);
+  app._usuarios=usuarios;
+  const sucNombre=id=>app.sucursales.find(s=>s.id===id)?.nombre||'—';
+  const rot=resumen.rotacion;
+  $('#view').innerHTML=`
+  <div class="kpis">
+    <div class="kpi accent"><div class="lab">Empleados activos</div><div class="val">${resumen.activos}</div></div>
+    <div class="kpi"><div class="lab">Nómina base mensual</div><div class="val">${money(resumen.nomina.base)}</div></div>
+    <div class="kpi"><div class="lab">Rotación (90 días)</div><div class="val" style="color:${rot.tasaRotacion>20?'var(--red)':'var(--green)'}">${rot.tasaRotacion}%</div><div class="lab" style="margin-top:2px">${rot.bajas90} baja(s)</div></div>
+    <div class="kpi"><div class="lab">Próximo cumpleaños</div><div class="val" style="font-size:18px">${resumen.cumples.length?resumen.cumples[0].nombre.split(' ')[0]:'—'}</div>${resumen.cumples.length?`<div class="lab" style="margin-top:2px">${resumen.cumples[0].dias===0?'¡hoy! 🎉':'en '+resumen.cumples[0].dias+' días'}</div>`:''}</div>
+  </div>
+  <div class="cols">
+    <div class="panel"><h3>🎂 Cumpleaños próximos <span class="small">31 días</span></h3>
+      ${resumen.cumples.length?resumen.cumples.map(c=>`<div class="bar-row"><div class="bn">${c.nombre} <span class="small">${c.puesto||''}</span></div><div style="flex:1"></div><div class="bv">${c.fecha} · ${c.dias===0?'hoy 🎉':c.dias+'d'}</div></div>`).join(''):'<div class="empty">Captura la fecha de cumpleaños de tu equipo.</div>'}</div>
+    <div class="panel"><h3>Rotación de personal <span class="small">benchmark sector ~70% anual</span></h3>
+      <div class="bar-row"><div class="bn">Activos</div><div style="flex:1"></div><div class="bv">${rot.activos}</div></div>
+      <div class="bar-row"><div class="bn">Bajas (90 días)</div><div style="flex:1"></div><div class="bv">${rot.bajas90}</div></div>
+      <div class="bar-row"><div class="bn">Antigüedad promedio</div><div style="flex:1"></div><div class="bv">${rot.antiguedadPromMeses} meses</div></div>
+      <div class="bar-row"><div class="bn">Tasa de rotación 90d</div><div style="flex:1"></div><div class="bv" style="color:${rot.tasaRotacion>20?'var(--red)':'var(--green)'}">${rot.tasaRotacion}%</div></div></div>
+  </div>
+  <div class="cols" style="margin-top:16px">
+    <div class="panel"><h3>🏆 Ranking de vendedores <span class="small">por ventas cobradas</span></h3>
+      ${resumen.vendedores.length?`<table><thead><tr><th>Vendedor</th><th class="num">Pedidos</th><th class="num">Ventas</th><th class="num">Comisión est.</th></tr></thead><tbody>
+      ${resumen.vendedores.map((v,i)=>`<tr><td>${['🥇','🥈','🥉'][i]||''} ${v.nombre}</td><td class="num">${v.pedidos}</td><td class="num">${money(v.ventas)}</td><td class="num" style="color:var(--green)">${v.comisionPct?money(v.comisionEstimada):'—'}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas.</div>'}</div>
+    <div class="panel"><h3>🏪 Ranking por tienda</h3>
+      ${resumen.sucursales.length?`<table><thead><tr><th>Sucursal</th><th class="num">Pedidos</th><th class="num">Ventas</th></tr></thead><tbody>
+      ${resumen.sucursales.map((s,i)=>`<tr><td>${['🥇','🥈','🥉'][i]||''} ${s.nombre}</td><td class="num">${s.pedidos}</td><td class="num">${money(s.ventas)}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay ventas cobradas.</div>'}</div>
+  </div>
+  <div class="panel" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center">Empleados <button class="btn dark" id="addEmp" style="font-size:13px">+ Empleado</button></h3>
+    ${emps.length?`<table><thead><tr><th>Nombre</th><th>Puesto</th><th>Sucursal</th><th class="num">Salario base</th><th class="num">Comisión</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${emps.map(e=>`<tr><td style="font-weight:600">${e.nombre}</td><td>${e.puesto||'—'}</td><td>${sucNombre(e.sucursalId)}</td><td class="num">${money(e.salarioBase)}</td><td class="num">${e.comisionPct?e.comisionPct+'%':'—'}</td><td><span class="chip ${e.activo?'ok':'low'}">${e.activo?'Activo':'Baja'}</span></td><td class="num"><button class="btn" data-emp='${e.id}' style="padding:7px 11px;font-size:12px;min-height:auto">Editar</button></td></tr>`).join('')}
+    </tbody></table>`:'<div class="empty">Aún no hay empleados. Agrega tu equipo con el botón de arriba.</div>'}
+    <div style="color:var(--muted);font-size:13px;margin-top:10px">La comisión estimada del ranking usa el % del empleado ligado a su usuario del sistema.</div></div>`;
+  $('#addEmp').onclick=()=>modalEmpleado(null);
+  document.querySelectorAll('[data-emp]').forEach(b=>b.onclick=()=>modalEmpleado(emps.find(e=>e.id===b.dataset.emp)));
+}
+function modalEmpleado(emp){
+  const ed=!!emp;const us=app._usuarios||[];
+  modal.innerHTML=`<h3>${ed?'Editar empleado':'Nuevo empleado'}</h3><div class="sub">${ed?emp.nombre:'Datos del colaborador'}</div>
+    <div class="field"><label>Nombre completo</label><input id="eNom" value="${ed?emp.nombre:''}"></div>
+    <div class="cols2"><div class="field"><label>Puesto</label><input id="ePue" value="${ed?emp.puesto||'':''}" placeholder="Cajero, cocinero…"></div>
+    <div class="field"><label>Sucursal</label><select id="eSuc"><option value="">—</option>${app.sucursales.map(s=>`<option value="${s.id}" ${ed&&emp.sucursalId===s.id?'selected':''}>${s.nombre}</option>`).join('')}</select></div></div>
+    <div class="cols2"><div class="field"><label>Salario base (mensual)</label><input id="eSal" type="number" class="mono" value="${ed?emp.salarioBase:''}" placeholder="0.00"></div>
+    <div class="field"><label>Comisión (% sobre sus ventas)</label><input id="eCom" type="number" class="mono" value="${ed?emp.comisionPct:''}" placeholder="0"></div></div>
+    <div class="cols2"><div class="field"><label>Cumpleaños</label><input id="eCum" type="date" value="${ed&&emp.cumple&&emp.cumple.length>=10?emp.cumple.slice(0,10):''}"></div>
+    <div class="field"><label>Fecha de ingreso</label><input id="eIng" type="date" value="${ed&&emp.ingreso?emp.ingreso.slice(0,10):''}"></div></div>
+    <div class="cols2"><div class="field"><label>Teléfono</label><input id="eTel" value="${ed?emp.telefono||'':''}"></div>
+    <div class="field"><label>Usuario del sistema (para comisión)</label><select id="eUsr"><option value="">— ninguno —</option>${us.map(u=>`<option value="${u.username}" ${ed&&emp.username===u.username?'selected':''}>${u.username}</option>`).join('')}</select></div></div>
+    <div class="modal-foot">${ed?`<button class="btn-ghost" id="eBaja" style="margin-right:auto;color:${emp.activo?'var(--red)':'var(--green)'}">${emp.activo?'Dar de baja':'Reactivar'}</button>`:''}<button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">${ed?'Guardar':'Crear'}</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#eNom').focus(),50);
+  $('#eCancel').onclick=closeModal;
+  if(ed&&$('#eBaja'))$('#eBaja').onclick=async()=>{try{await API.patch('/api/rh/empleados/'+emp.id,{activo:!emp.activo});closeModal();toast(emp.activo?'Empleado dado de baja':'Empleado reactivado');vRH();}catch(e){toast(e.message);}};
+  $('#eOk').onclick=async()=>{const body={nombre:$('#eNom').value.trim(),puesto:$('#ePue').value.trim(),sucursalId:$('#eSuc').value||null,salarioBase:+$('#eSal').value||0,comisionPct:+$('#eCom').value||0,cumple:$('#eCum').value||'',ingreso:$('#eIng').value||'',telefono:$('#eTel').value.trim(),username:$('#eUsr').value||''};
+    if(!body.nombre){toast('Falta el nombre');return;}
+    try{if(ed)await API.patch('/api/rh/empleados/'+emp.id,body);else await API.post('/api/rh/empleados',body);closeModal();toast(ed?'Empleado actualizado':'Empleado agregado');vRH();}catch(e){toast(e.message);}};
 }
 
 // ===========================================================================
