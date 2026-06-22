@@ -37,6 +37,8 @@
   .sidebar{width:218px;background:var(--ink);color:#e8e3d8;display:flex;flex-direction:column;flex:0 0 auto}
   .logo{font-family:'Bricolage Grotesque';font-weight:700;font-size:21px;letter-spacing:-.02em;padding:18px 20px 14px}
   .logo b{color:var(--accent)}
+  .brandlogo{max-height:40px;max-width:172px;display:block;object-fit:contain}
+  .brandtext{font-family:'Bricolage Grotesque';font-weight:700;font-size:20px;line-height:1.1;display:block}
   .nav{flex:1;padding:6px 10px;overflow-y:auto}
   .nav button{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;color:#b7b0a2;padding:10px 12px;border-radius:9px;font-size:14px;font-weight:500;margin-bottom:2px}
   .nav button:hover{background:#272318;color:#e8e3d8}
@@ -246,7 +248,7 @@ function mesaArt(estado){
 // ===========================================================================
 //  Estado de la app
 // ===========================================================================
-const app={tenant:null,sucursales:[],sucursalId:null,turno:null,menu:null,vista:'resumen',
+const app={tenant:null,rol:null,sucursales:[],sucursalId:null,turno:null,menu:null,vista:'resumen',
   pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null}};
 let kdsTimer=null;
 
@@ -256,8 +258,11 @@ const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
   menu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>',
   inventario:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>',
   mesas:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>',
-  reportes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="6"/><line x1="18" y1="20" x2="18" y2="10"/></svg>'};
-const NAV=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['reportes','Reportes']];
+  reportes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="6"/><line x1="18" y1="20" x2="18" y2="10"/></svg>',
+  promociones:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8"/><rect x="2" y="7" width="20" height="5" rx="1"/><path d="M12 21V7M12 7S11 3 8.5 3 5 5 7 7h5zM12 7s1-4 3.5-4S19 5 17 7h-5z"/></svg>',
+  ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'};
+const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['reportes','Reportes']];
+function NAV(){return app.rol==='admin'?[...NAV_BASE,['promociones','Promociones'],['ajustes','Ajustes']]:NAV_BASE;}
 
 // ===========================================================================
 //  Boot / login
@@ -266,8 +271,9 @@ async function boot(){
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   if(!API.token){renderLogin();return;}
   try{
+    const me=await API.get('/api/me');app.rol=me.rol;app.tenant=me.tenant;app.miSucursal=me.sucursalId;app.username=me.username;
     app.sucursales=await API.get('/api/sucursales');
-    if(!app.sucursalId)app.sucursalId=app.sucursales[0].id;
+    if(!app.sucursalId)app.sucursalId=app.miSucursal||app.sucursales[0].id;
     await refreshTurno();
     app.menu=await API.get('/api/menu');
     renderShell();go('resumen');
@@ -288,17 +294,22 @@ async function refreshTurno(){app.turno=await API.get('/api/caja/turno-actual?su
 // ===========================================================================
 //  Shell
 // ===========================================================================
+function brandSidebar(){
+  if(app.tenant&&app.tenant.logo)return `<img src="${app.tenant.logo}" class="brandlogo" alt="${app.tenant.nombre||''}">`;
+  const nm=app.tenant&&app.tenant.nombre?app.tenant.nombre:'ComandaPro';
+  return `<span class="brandtext">${nm}</span>`;
+}
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
-    <nav class="sidebar"><div class="logo">Jefe<b>Burgers</b></div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.1 · API</span><button id="logout">Salir</button></div></nav>
+    <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
+      <div class="side-foot"><span>v0.2 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
         <div class="turno-pill off" id="turnoPill">Turno cerrado</div>
         <button class="btn accent" id="btnTurno">Abrir turno</button>
       </div><div class="view" id="view"></div></div></div>`;
-  $('#logout').onclick=()=>{API.token=null;app.sucursalId=null;boot();};
+  $('#logout').onclick=()=>{API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
   $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
   $('#btnTurno').onclick=()=>app.turno?modalCerrarTurno():modalAbrirTurno();
   renderTopbar();renderNav();
@@ -311,13 +322,13 @@ function renderTopbar(){
 }
 async function renderNav(){
   let badge=0;try{badge=(await API.get('/api/cocina?sucursalId='+app.sucursalId)).length;}catch{}
-  $('#nav').innerHTML=NAV.map(([k,l])=>`<button data-v="${k}" class="${k===app.vista?'active':''}">${IC[k]}<span>${l}</span>${k==='cocina'&&badge?`<span class="badge">${badge}</span>`:''}</button>`).join('');
+  $('#nav').innerHTML=NAV().map(([k,l])=>`<button data-v="${k}" class="${k===app.vista?'active':''}">${IC[k]}<span>${l}</span>${k==='cocina'&&badge?`<span class="badge">${badge}</span>`:''}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.v));
 }
-function go(v){app.vista=v;$('#vtitle').textContent=NAV.find(n=>n[0]===v)[1];renderNav();
+function go(v){app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
-  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes}[v])();
+  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes}[v])();
 }
 
 // ===========================================================================
@@ -370,7 +381,8 @@ function vPOS(){
       <div class="totals">
         <div class="trow"><span>Subtotal</span><span class="mono" id="tSub">$0.00</span></div>
         <div class="trow" id="tEnvioRow" style="display:none"><span>Envío</span><span class="mono" id="tEnvio">$0.00</span></div>
-        <div class="extra-btns"><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
+        <div class="trow" id="tDescRow" style="display:none;color:var(--green)"><span id="tDescLbl">Descuento</span><span class="mono" id="tDesc">$0.00</span></div>
+        <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
         <div class="trow tot"><span>Total</span><span class="mono" id="tTotal">$0.00</span></div>
         ${enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar cuenta</button></div>`:`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`}
       </div></div></div>`;
@@ -380,6 +392,7 @@ function vPOS(){
   if($('#salirMesa'))$('#salirMesa').onclick=()=>{app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat};vPOS();};
   if($('#cliEnvio'))$('#cliEnvio').addEventListener('change',saveCliente);
   if($('#btnNuevo'))$('#btnNuevo').onclick=()=>{app.pos.folio=null;app.pos.pedido=null;if(app.pos.tipoServicio==='mesa'){app.pos.tipoServicio='mostrador';app.pos.mesaId=null;}vPOS();};
+  if($('#btnPromo'))$('#btnPromo').onclick=aplicarPromocion;
   if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
   if($('#btnComanda'))$('#btnComanda').onclick=mandarComanda;
   renderLines();
@@ -417,6 +430,7 @@ function renderLines(){
   const sub=ped?ped.subtotal:0,env=ped?ped.costoEnvio:0,tot=ped?ped.total:0;
   $('#tSub').textContent=money(sub);
   if($('#tEnvioRow')){$('#tEnvioRow').style.display=env?'flex':'none';$('#tEnvio').textContent=money(env);}
+  if($('#tDescRow')){const d=ped&&ped.descuento;if(d){const amt=d.tipo==='porcentaje'?sub*d.valor/100:d.valor;$('#tDescRow').style.display='flex';$('#tDescLbl').textContent='Descuento'+(d.motivo?' · '+d.motivo:'');$('#tDesc').textContent='−'+money(amt);}else $('#tDescRow').style.display='none';}
   $('#tTotal').textContent=money(tot);
   const bc=$('#btnCobrar');if(bc&&app.pos.tipoServicio!=='mesa')bc.disabled=!(app.turno&&ped&&ped.lineas.length>0);
 }
@@ -437,6 +451,20 @@ function modalModificadores(prod){
 async function mandarComanda(){
   if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
   try{const r=await API.post(`/api/pedidos/${app.pos.folio}/comanda`);toast(r.enviadas?r.enviadas+' a cocina':'Nada nuevo que mandar');renderNav();}catch(e){toast(e.message);}
+}
+async function aplicarPromocion(){
+  if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
+  let promos=[];try{promos=(await API.get('/api/promociones')).filter(p=>p.activo);}catch{}
+  modal.innerHTML=`<h3>Aplicar promoción</h3><div class="sub">Se descuenta del total de este pedido</div>
+    ${promos.length?promos.map(p=>`<button class="opt" data-p="${p.id}" style="width:100%;justify-content:space-between" data-tipo="${p.tipo}" data-valor="${p.valor}" data-nom="${p.nombre}"><span class="onm">${p.nombre}</span><span class="od">${p.tipo==='porcentaje'?p.valor+'%':money(p.valor)}</span></button>`).join(''):'<div class="empty">No hay promociones activas. Créalas en la pestaña Promociones.</div>'}
+    <div class="modal-foot">${app.pos.pedido.descuento?'<button class="btn-ghost" id="quitarP">Quitar promoción</button>':''}<button class="btn-ghost" id="pClose">Cerrar</button></div>`;
+  ov.classList.add('show');
+  $('#pClose').onclick=closeModal;
+  if($('#quitarP'))$('#quitarP').onclick=async()=>{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{descuento:null});closeModal();renderLines();toast('Promoción quitada');};
+  document.querySelectorAll('[data-p]').forEach(b=>b.onclick=async()=>{
+    app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{descuento:{tipo:b.dataset.tipo,valor:+b.dataset.valor,motivo:b.dataset.nom}});
+    closeModal();renderLines();toast('Promoción aplicada');
+  });
 }
 function cobrar(){
   const ped=app.pos.pedido;if(!ped||!ped.lineas.length){toast('Agrega productos');return;}
@@ -586,6 +614,83 @@ async function vReportes(){
   <div class="panel" style="margin-top:16px"><h3>Cortes de caja</h3>${cortes.length?`<table><thead><tr><th>Cierre</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th><th>Resultado</th></tr></thead><tbody>
     ${cortes.map(t=>`<tr><td>${new Date(t.cerrado).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(t.esperado.efectivo)}</td><td class="num">${money(t.conteo)}</td><td class="num" style="color:${t.diferencia<0?'var(--red)':t.diferencia>0?'var(--accent-ink)':'var(--green)'}">${money(t.diferencia)}</td><td><span class="chip ${t.resultado==='faltante'?'low':t.resultado==='cuadrado'?'ok':''}">${t.resultado}</span></td></tr>`).join('')}
   </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>`;
+}
+
+// ===========================================================================
+//  PROMOCIONES + COMBOS  (admin)
+// ===========================================================================
+async function vPromociones(){
+  const promos=await API.get('/api/promociones');
+  $('#view').innerHTML=`<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:14px">
+      <button class="btn" id="addCombo">+ Crear combo</button><button class="btn dark" id="addPromo">+ Nueva promoción</button></div>
+    <div class="panel"><h3>Promociones <span class="small">descuentos aplicables en el punto de venta</span></h3>
+      ${promos.length?`<table><thead><tr><th>Nombre</th><th>Tipo</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${promos.map(p=>`<tr><td>${p.nombre}</td><td>${p.tipo==='porcentaje'?'Porcentaje':'Monto fijo'}</td><td class="num">${p.tipo==='porcentaje'?p.valor+'%':money(p.valor)}</td><td><span class="chip ${p.activo?'ok':'low'}">${p.activo?'Activa':'Inactiva'}</span></td><td class="num"><button class="btn" data-toggle="${p.id}" data-act="${p.activo}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">${p.activo?'Desactivar':'Activar'}</button><button class="btn" data-del="${p.id}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button></td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Aún no hay promociones. Crea una con el botón de arriba.</div>'}</div>
+    <div class="panel" style="margin-top:16px"><h3>¿Qué es un combo?</h3><div style="color:var(--muted);font-size:14px;line-height:1.6">Un combo es un producto que junta varios (ej. hamburguesa + papas + refresco) a un precio especial. Aparece en el menú y en el punto de venta como cualquier producto, y descuenta los insumos de cada componente automáticamente.</div></div>`;
+  $('#addPromo').onclick=modalNuevaPromo;
+  $('#addCombo').onclick=modalNuevoCombo;
+  document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{await API.patch('/api/promociones/'+b.dataset.toggle,{activo:b.dataset.act!=='true'});vPromociones();});
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{await API.del('/api/promociones/'+b.dataset.del);vPromociones();});
+}
+function modalNuevaPromo(){
+  modal.innerHTML=`<h3>Nueva promoción</h3><div class="sub">Descuento que podrás aplicar a un pedido</div>
+    <div class="field"><label>Nombre</label><input id="prNom" placeholder="Ej. Martes 2x1, Cliente frecuente"></div>
+    <div class="field"><label>Tipo</label><select id="prTipo"><option value="porcentaje">Porcentaje (%)</option><option value="monto">Monto fijo ($)</option></select></div>
+    <div class="field"><label>Valor</label><input id="prVal" type="number" class="mono" placeholder="10"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="prCancel">Cancelar</button><button class="btn-primary" id="prOk">Crear</button></div>`;
+  ov.classList.add('show');$('#prCancel').onclick=closeModal;
+  $('#prOk').onclick=async()=>{const n=$('#prNom').value.trim(),v=+$('#prVal').value;if(!n||!v){toast('Falta nombre o valor');return;}try{await API.post('/api/promociones',{nombre:n,tipo:$('#prTipo').value,valor:v});closeModal();toast('Promoción creada');vPromociones();}catch(e){toast(e.message);}};
+}
+function modalNuevoCombo(){
+  const prods=Object.values(app.menu.productos).filter(p=>p.activo&&!p.esCombo);
+  modal.innerHTML=`<h3>Crear combo</h3><div class="sub">Junta productos a un precio especial</div>
+    <div class="field"><label>Nombre del combo</label><input id="cbNom" placeholder="Ej. Combo familiar"></div>
+    <div class="field"><label>Categoría</label><select id="cbCat">${cats().map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('')}</select></div>
+    <div class="field"><label>Precio del combo</label><input id="cbPre" type="number" class="mono" placeholder="0.00"></div>
+    <div class="grp"><div class="glabel"><span>Incluye</span></div>${prods.map(p=>`<label class="opt"><input type="checkbox" value="${p.id}"><span class="onm">${p.nombre}</span><span class="od">${money(p.precioBase)}</span></label>`).join('')}</div>
+    <div class="modal-foot"><button class="btn-ghost" id="cbCancel">Cancelar</button><button class="btn-primary" id="cbOk">Crear combo</button></div>`;
+  ov.classList.add('show');$('#cbCancel').onclick=closeModal;
+  $('#cbOk').onclick=async()=>{const nom=$('#cbNom').value.trim(),pre=+$('#cbPre').value;const comp=[...modal.querySelectorAll('input:checked')].map(c=>c.value);
+    if(!nom||!pre){toast('Falta nombre o precio');return;}if(comp.length<2){toast('Elige al menos 2 productos');return;}
+    try{await API.post('/api/menu/productos',{categoriaId:$('#cbCat').value,nombre:nom,precioBase:pre,destino:'cocina',componentes:comp});app.menu=await API.get('/api/menu');closeModal();toast('Combo creado');vPromociones();}catch(e){toast(e.message);}};
+}
+
+// ===========================================================================
+//  AJUSTES  (marca + usuarios) (admin)
+// ===========================================================================
+async function vAjustes(){
+  const [cfg,usuarios]=await Promise.all([API.get('/api/config'),API.get('/api/usuarios')]);
+  $('#view').innerHTML=`
+  <div class="cols">
+    <div class="panel"><h3>Marca del restaurante</h3>
+      <div class="field"><label>Nombre</label><input id="cfgNom" value="${cfg.nombre||''}"></div>
+      <div class="field"><label>Logo</label>
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+          <div style="width:80px;height:60px;border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--paper)"><img id="logoPrev" src="${cfg.logo||''}" style="max-width:100%;max-height:100%;${cfg.logo?'':'display:none'}"><span id="logoEmpty" style="color:var(--muted);font-size:12px;${cfg.logo?'display:none':''}">sin logo</span></div>
+          <div><input type="file" id="logoFile" accept="image/*"><div style="color:var(--muted);font-size:12px;margin-top:4px">PNG o JPG, idealmente cuadrado o tipo banner</div></div>
+        </div></div>
+      <button class="btn accent" id="cfgSave">Guardar marca</button></div>
+    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center">Usuarios <button class="btn" id="addUser" style="font-size:13px">+ Usuario</button></h3>
+      <table><thead><tr><th>Usuario</th><th>Rol</th><th></th></tr></thead><tbody>
+      ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${u.rol==='admin'?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
+      </tbody></table></div>
+  </div>`;
+  let logoData=cfg.logo||null;
+  $('#logoFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>700000){toast('La imagen es muy pesada (máx ~700KB)');return;}const rd=new FileReader();rd.onload=()=>{logoData=rd.result;$('#logoPrev').src=logoData;$('#logoPrev').style.display='';$('#logoEmpty').style.display='none';};rd.readAsDataURL(f);};
+  $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
+  $('#addUser').onclick=modalNuevoUsuario;
+  document.querySelectorAll('[data-du]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar usuario '+b.dataset.du+'?'))return;try{await API.del('/api/usuarios/'+encodeURIComponent(b.dataset.du));toast('Usuario eliminado');vAjustes();}catch(e){toast(e.message);}});
+}
+function modalNuevoUsuario(){
+  modal.innerHTML=`<h3>Nuevo usuario</h3><div class="sub">El nombre de usuario debe ser único</div>
+    <div class="field"><label>Usuario</label><input id="usU" autocomplete="off"></div>
+    <div class="field"><label>Contraseña</label><input id="usP" type="text" autocomplete="off"></div>
+    <div class="field"><label>Rol</label><select id="usR"><option value="cajero">Cajero (vende, no edita menú)</option><option value="admin">Administrador (todo)</option></select></div>
+    <div class="field"><label>Sucursal (opcional)</label><select id="usS"><option value="">Todas</option>${app.sucursales.map(s=>`<option value="${s.id}">${s.nombre}</option>`).join('')}</select></div>
+    <div class="modal-foot"><button class="btn-ghost" id="usCancel">Cancelar</button><button class="btn-primary" id="usOk">Crear</button></div>`;
+  ov.classList.add('show');$('#usCancel').onclick=closeModal;
+  $('#usOk').onclick=async()=>{const u=$('#usU').value.trim(),p=$('#usP').value;if(!u||!p){toast('Falta usuario o contraseña');return;}try{await API.post('/api/usuarios',{username:u,password:p,rol:$('#usR').value,sucursalId:$('#usS').value||null});closeModal();toast('Usuario creado');vAjustes();}catch(e){toast(e.message);}};
 }
 
 // ===========================================================================
