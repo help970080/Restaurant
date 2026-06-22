@@ -39,6 +39,7 @@
   .logo b{color:var(--accent)}
   .brandlogo{max-height:40px;max-width:172px;display:block;object-fit:contain}
   .brandtext{font-family:'Bricolage Grotesque';font-weight:700;font-size:20px;line-height:1.1;display:block}
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .nav{flex:1;padding:6px 10px;overflow-y:auto}
   .nav button{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;color:#b7b0a2;padding:10px 12px;border-radius:9px;font-size:14px;font-weight:500;margin-bottom:2px}
   .nav button:hover{background:#272318;color:#e8e3d8}
@@ -557,18 +558,55 @@ async function vInventario(){
       <div class="kpi"><div class="lab">Insumos por reabastecer</div><div class="val" style="color:${bajos?'var(--red)':'var(--green)'}">${bajos}</div></div>
       <div class="kpi"><div class="lab">Último conteo</div><div class="val" style="font-size:18px">${auds.length?new Date(auds[0].fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'}):'—'}</div>${auds.length?`<div class="lab" style="margin-top:2px;color:${auds[0].mermaTotal>0?'var(--red)':'var(--green)'}">merma ${money(auds[0].mermaTotal)}</div>`:''}</div>
     </div>
-    <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin?`<button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button>`:''}</h3>
+    <div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Insumos <span class="small">se descuenta con cada venta</span>${esAdmin?`<span style="display:flex;gap:8px;margin-left:auto"><button class="btn" id="newInsumo" style="font-size:13px">+ Insumo</button><button class="btn dark" id="conteo" style="font-size:13px">Conteo físico</button></span>`:''}</h3>
     <table><thead><tr><th>Insumo</th><th>Unidad</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Costo unit.</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
-    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 12px;font-size:12px;min-height:auto">+ Entrada</button></td></tr>`).join('')}
+    ${inv.insumos.map(i=>`<tr><td>${i.nombre}</td><td>${i.unidad}</td><td class="num" style="color:${i.bajo?'var(--red)':'inherit'}">${i.stock}</td><td class="num">${i.stockMin}</td><td class="num">${money(i.costoUnitario)}</td><td class="num">${money(i.valor)}</td><td><span class="chip ${i.bajo?'low':'ok'}">${i.bajo?'Reabastecer':'OK'}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-ent="${i.id}" data-nom="${i.nombre}" style="padding:8px 11px;font-size:12px;min-height:auto">+ Entrada</button>${esAdmin?` <button class="btn" data-edit='${i.id}' style="padding:8px 11px;font-size:12px;min-height:auto">Editar</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>
     ${esAdmin&&auds.length?`<div class="panel" style="margin-bottom:16px"><h3>Mermas recientes <span class="small">teórico vs físico</span></h3><table><thead><tr><th>Fecha</th><th>Por</th><th class="num">Insumos contados</th><th class="num">Merma ($)</th></tr></thead><tbody>
     ${auds.map(a=>`<tr><td>${new Date(a.fecha).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td>${a.usuario||'—'}</td><td class="num">${a.lineas.length}</td><td class="num" style="color:${a.mermaTotal>0?'var(--red)':a.mermaTotal<0?'var(--accent-ink)':'var(--green)'};font-weight:600">${money(a.mermaTotal)}</td></tr>`).join('')}
     </tbody></table></div>`:''}
-    <div class="panel"><h3>Food cost por producto</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
+    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Food cost por producto <span class="small">costo de receta vs precio</span>${esAdmin?`<button class="btn dark" id="aplicarMargen" style="font-size:13px;margin-left:auto">Aplicar margen a todos</button>`:''}</h3><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
     ${inv.foodCost.map(f=>`<tr><td>${f.nombre}</td><td class="num">${money(f.costo)}</td><td class="num">${money(f.precio)}</td><td class="num" style="color:${f.foodCostPct>40?'var(--red)':f.foodCostPct>35?'var(--accent-ink)':'var(--green)'};font-weight:600">${f.foodCostPct.toFixed(0)}%</td></tr>`).join('')}
     </tbody></table></div>`;
   document.querySelectorAll('[data-ent]').forEach(b=>b.onclick=()=>modalEntrada(b.dataset.ent,b.dataset.nom));
+  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>modalInsumo(inv.insumos.find(i=>i.id===b.dataset.edit)));
   if($('#conteo'))$('#conteo').onclick=()=>modalConteo(inv.insumos);
+  if($('#newInsumo'))$('#newInsumo').onclick=()=>modalInsumo(null);
+  if($('#aplicarMargen'))$('#aplicarMargen').onclick=modalAplicarMargen;
+}
+function modalInsumo(ins){
+  const ed=!!ins;
+  modal.innerHTML=`<h3>${ed?'Editar insumo':'Nuevo insumo'}</h3><div class="sub">${ed?ins.nombre:'Lo que compras para preparar tus productos'}</div>
+    <div class="field"><label>Nombre</label><input id="inNom" value="${ed?ins.nombre:''}" placeholder="Ej. Carne 150g"></div>
+    <div class="cols2"><div class="field"><label>Unidad</label><input id="inUni" value="${ed?ins.unidad:''}" placeholder="pza, g, ml, orden"></div>
+    <div class="field"><label>Costo unitario</label><input id="inCost" type="number" class="mono" inputmode="decimal" value="${ed?ins.costoUnitario:''}" placeholder="0.00"></div></div>
+    <div class="cols2"><div class="field"><label>Stock actual</label><input id="inStock" type="number" class="mono" inputmode="decimal" value="${ed?ins.stock:0}"></div>
+    <div class="field"><label>Stock mínimo</label><input id="inMin" type="number" class="mono" inputmode="decimal" value="${ed?ins.stockMin:0}"></div></div>
+    <div class="modal-foot">${ed?`<button class="btn-ghost" id="inDel" style="color:var(--red);margin-right:auto">Eliminar</button>`:''}<button class="btn-ghost" id="inCancel">Cancelar</button><button class="btn-primary" id="inOk">${ed?'Guardar':'Crear'}</button></div>`;
+  ov.classList.add('show');setTimeout(()=>$('#inNom').focus(),50);
+  $('#inCancel').onclick=closeModal;
+  if(ed&&$('#inDel'))$('#inDel').onclick=async()=>{if(!confirm('¿Eliminar '+ins.nombre+'?'))return;try{await API.del('/api/inventario/insumos/'+ins.id);closeModal();toast('Insumo eliminado');vInventario();}catch(e){toast(e.message);}};
+  $('#inOk').onclick=async()=>{const body={nombre:$('#inNom').value.trim(),unidad:$('#inUni').value.trim(),costoUnitario:+$('#inCost').value||0,stock:+$('#inStock').value||0,stockMin:+$('#inMin').value||0};
+    if(!body.nombre||!body.unidad){toast('Falta nombre o unidad');return;}
+    try{if(ed)await API.patch('/api/inventario/insumos/'+ins.id,body);else await API.post('/api/inventario/insumos',body);closeModal();toast(ed?'Insumo actualizado':'Insumo creado');vInventario();}catch(e){toast(e.message);}};
+}
+function modalAplicarMargen(){
+  modal.innerHTML=`<h3>Aplicar margen a todos</h3><div class="sub">Recalcula el precio de cada producto a partir de su costo de receta</div>
+    <div class="field"><label>Método</label><select id="mgTipo"><option value="foodcost">Food cost objetivo (%)</option><option value="markup">Multiplicador sobre el costo (×)</option></select></div>
+    <div class="field"><label id="mgLbl">Food cost objetivo (%)</label><input id="mgVal" type="number" class="mono" inputmode="decimal" value="30"></div>
+    <div class="field"><label>Redondear a (opcional)</label><select id="mgRed"><option value="0">Sin redondeo</option><option value="1">Al peso ($1)</option><option value="5" selected>A $5</option><option value="10">A $10</option></select></div>
+    <div style="font-size:13px;color:var(--muted);margin:4px 0 8px" id="mgHint">Precio = costo de receta ÷ 30% — un food cost de 28–35% es lo sano.</div>
+    <div class="modal-foot"><button class="btn-ghost" id="mgCancel">Cancelar</button><button class="btn-primary" id="mgOk">Aplicar a todos</button></div>`;
+  ov.classList.add('show');
+  const sync=()=>{const t=$('#mgTipo').value;$('#mgLbl').textContent=t==='foodcost'?'Food cost objetivo (%)':'Multiplicador (×)';
+    $('#mgHint').textContent=t==='foodcost'?'Precio = costo de receta ÷ %. Un food cost de 28–35% es lo sano.':'Precio = costo de receta × multiplicador. Ej. 3 = triple del costo.';
+    if(t==='markup'&&$('#mgVal').value==='30')$('#mgVal').value='3';if(t==='foodcost'&&$('#mgVal').value==='3')$('#mgVal').value='30';};
+  $('#mgTipo').onchange=sync;
+  $('#mgCancel').onclick=closeModal;
+  $('#mgOk').onclick=async()=>{const tipo=$('#mgTipo').value,valor=+$('#mgVal').value,redondeo=+$('#mgRed').value;
+    if(!valor){toast('Captura el valor');return;}
+    try{const r=await API.post('/api/menu/precios/aplicar',{tipo,valor,redondeo});app.menu=await API.get('/api/menu');closeModal();
+      toast(`${r.actualizados} precios actualizados${r.omitidos?` · ${r.omitidos} sin receta`:''}`);vInventario();}catch(e){toast(e.message);}};
 }
 function modalConteo(insumos){
   modal.innerHTML=`<h3>Conteo físico</h3><div class="sub">Captura lo que hay físicamente. El sistema calcula la merma (lo que falta vs el teórico) y ajusta el stock.</div>
