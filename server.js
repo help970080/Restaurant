@@ -225,7 +225,7 @@ app.patch('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
   const emp = await withState((e) => {
     const x = (e.empleados || {})[req.params.id];
     if (!x) throw bad('Empleado inexistente', 404);
-    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username']) if (k in b) x[k] = b[k];
+    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username', 'pin']) if (k in b) x[k] = b[k];
     if ('salarioBase' in b) x.salarioBase = M.r2(+b.salarioBase);
     if ('comisionPct' in b) x.comisionPct = M.r2(+b.comisionPct);
     if ('activo' in b) { x.activo = !!b.activo; x.fechaBaja = b.activo ? null : new Date().toISOString().slice(0, 10); }
@@ -291,6 +291,54 @@ app.get('/api/rh/resumen', soloAdmin, wrap(async (req, res) => {
     rotacion: { activos: activos.length, bajas90, antiguedadPromMeses, tasaRotacion },
     nomina: { base: nominaBase, comisionesEstimadas, total: M.r2(nominaBase + comisionesEstimadas) },
   });
+}));
+
+// ---------------------------------------------------------------------------
+//  ASISTENCIA / CHECADOR
+// ---------------------------------------------------------------------------
+// Lista para el kiosco (cualquier usuario autenticado del restaurante)
+app.get('/api/asistencia/empleados', wrap(async (req, res) => {
+  const e = await readState();
+  const abiertas = {};
+  for (const a of (e.asistencias || [])) if (!a.salida && !abiertas[a.empleadoId]) abiertas[a.empleadoId] = a.entrada;
+  res.json(Object.values(e.empleados || {}).filter((x) => x.activo).map((x) => ({
+    id: x.id, nombre: x.nombre, puesto: x.puesto, requierePin: !!x.pin,
+    trabajando: !!abiertas[x.id], desde: abiertas[x.id] || null,
+  })));
+}));
+// Checar entrada/salida (toggle). Cualquier usuario autenticado (kiosco en sucursal).
+app.post('/api/asistencia/checar', wrap(async (req, res) => {
+  const { empleadoId, pin = '', sucursalId = null } = req.body || {};
+  const out = await withState((e) => {
+    if (!e.asistencias) e.asistencias = [];
+    const emp = (e.empleados || {})[empleadoId];
+    if (!emp || !emp.activo) throw bad('Empleado inexistente', 404);
+    if (emp.pin && String(emp.pin) !== String(pin)) throw bad('PIN incorrecto');
+    const now = new Date().toISOString();
+    const abierto = e.asistencias.find((a) => a.empleadoId === empleadoId && !a.salida);
+    if (abierto) {
+      abierto.salida = now;
+      abierto.horas = M.r2((new Date(now) - new Date(abierto.entrada)) / 3600000);
+      return { accion: 'salida', nombre: emp.nombre, horas: abierto.horas, hora: now };
+    }
+    const rec = { id: M.uid('asis'), empleadoId, nombre: emp.nombre, puesto: emp.puesto, sucursalId: sucursalId || emp.sucursalId || null, entrada: now, salida: null, horas: 0, fecha: now.slice(0, 10) };
+    e.asistencias.unshift(rec);
+    if (e.asistencias.length > 3000) e.asistencias = e.asistencias.slice(0, 3000);
+    return { accion: 'entrada', nombre: emp.nombre, hora: now };
+  });
+  res.json(out);
+}));
+// Reporte (admin / gerente)
+app.get('/api/asistencia', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  const all = e.asistencias || [];
+  const sn = (id) => (e.sucursales[id] || {}).nombre || '';
+  const ahora = new Date();
+  const activos = all.filter((a) => !a.salida).map((a) => ({ ...a, sucursal: sn(a.sucursalId), horasParcial: M.r2((ahora - new Date(a.entrada)) / 3600000) }));
+  const hoy = new Date().toISOString().slice(0, 10);
+  const delDia = all.filter((a) => a.fecha === hoy).map((a) => ({ ...a, sucursal: sn(a.sucursalId) }));
+  const recientes = all.slice(0, 60).map((a) => ({ ...a, sucursal: sn(a.sucursalId) }));
+  res.json({ activos, hoy: delDia, recientes });
 }));
 
 // ---------------------------------------------------------------------------
@@ -788,6 +836,7 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     return { canalId: cid, nombre: ch.nombre, comisionPct: ch.comisionPct, ventas: d.ventas, pedidos: d.pedidos, comision: comisionConIVA, neto: M.r2(d.ventas - comisionConIVA) };
   }).sort((a, b) => b.ventas - a.ventas);
   const comisionTotal = M.r2(canalesOut.reduce((s, c) => s + c.comision, 0));
+  const nominaBase = M.r2(Object.values(e.empleados || {}).filter((x) => x.activo).reduce((s, x) => s + x.salarioBase, 0));
   const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
     nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
     margen: M.r2(d.ingreso - d.costo), margenPct: d.ingreso ? M.r2((d.ingreso - d.costo) / d.ingreso * 100) : 0,
@@ -799,6 +848,7 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     descuentos, pedidos: peds.length,
     ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
     comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
+    nominaBase,
     canales: canalesOut,
     rentabilidad,
   });
