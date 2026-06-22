@@ -482,16 +482,59 @@ app.get('/api/inventario/auditorias', wrap(async (req, res) => {
   const e = await readState();
   res.json((e.conteos || []).slice(0, 20));
 }));
-app.post('/api/inventario/insumos', wrap(async (req, res) => {
+app.post('/api/inventario/insumos', soloAdmin, wrap(async (req, res) => {
   const { nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 } = req.body || {};
   if (!nombre || !unidad) throw bad('Falta nombre o unidad');
   const i = await withState((e) => { const ins = M.crearInsumo({ nombre, unidad, stock, costoUnitario, stockMin }); e.insumos[ins.id] = ins; return ins; });
   res.json(i);
 }));
-app.post('/api/inventario/insumos/:id/entrada', wrap(async (req, res) => {
+app.patch('/api/inventario/insumos/:id', soloAdmin, wrap(async (req, res) => {
+  const patch = req.body || {};
+  const i = await withState((e) => {
+    const ins = e.insumos[req.params.id];
+    if (!ins) throw bad('Insumo inexistente', 404);
+    if (patch.nombre != null) ins.nombre = patch.nombre;
+    if (patch.unidad != null) ins.unidad = patch.unidad;
+    if (patch.stock != null) ins.stock = M.r2(+patch.stock);
+    if (patch.stockMin != null) ins.stockMin = M.r2(+patch.stockMin);
+    if (patch.costoUnitario != null) ins.costoUnitario = M.r2(+patch.costoUnitario);
+    return ins;
+  });
+  res.json(i);
+}));
+app.delete('/api/inventario/insumos/:id', soloAdmin, wrap(async (req, res) => {
+  await withState((e) => {
+    const usado = Object.values(e.menu.productos).some((p) => (p.receta || []).some((r) => r.insumoId === req.params.id));
+    if (usado) throw bad('Ese insumo está en la receta de un producto. Quítalo de la receta primero.');
+    delete e.insumos[req.params.id];
+  });
+  res.json({ ok: true });
+}));
+app.post('/api/inventario/insumos/:id/entrada', soloAdmin, wrap(async (req, res) => {
   const { cantidad = 0 } = req.body || {};
   const i = await withState((e) => { const ins = e.insumos[req.params.id]; if (!ins) throw bad('Insumo inexistente', 404); ins.stock = M.r2(ins.stock + cantidad); return ins; });
   res.json(i);
+}));
+
+// Aplicar margen/food cost a TODOS los productos con receta (admin)
+// tipo='foodcost' -> precio = costoReceta / (valor/100) ; tipo='markup' -> precio = costoReceta * valor
+app.post('/api/menu/precios/aplicar', soloAdmin, wrap(async (req, res) => {
+  const { tipo = 'foodcost', valor, redondeo = 0 } = req.body || {};
+  if (!valor || valor <= 0) throw bad('Falta el valor');
+  const out = await withState((e) => {
+    let actualizados = 0, omitidos = 0;
+    const cambios = [];
+    for (const p of Object.values(e.menu.productos)) {
+      const costo = M.costoReceta(e, p);
+      if (!costo) { omitidos++; continue; }
+      let nuevo = tipo === 'markup' ? costo * valor : costo / (valor / 100);
+      if (redondeo > 0) nuevo = Math.ceil(nuevo / redondeo) * redondeo; else nuevo = M.r2(nuevo);
+      cambios.push({ nombre: p.nombre, antes: p.precioBase, despues: nuevo });
+      p.precioBase = nuevo; actualizados++;
+    }
+    return { actualizados, omitidos, cambios };
+  });
+  res.json(out);
 }));
 
 // ---------------------------------------------------------------------------
