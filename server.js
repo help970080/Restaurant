@@ -82,6 +82,11 @@ function soloAdmin(req, res, next) {
   if (r !== 'admin' && r !== 'gerente') return res.status(403).json({ error: 'Solo administradores o gerentes' });
   next();
 }
+function puedeCaja(req, res, next) {
+  const r = ctx().rol;
+  if (!['admin', 'gerente', 'cajero'].includes(r)) return res.status(403).json({ error: 'Solo caja (administrador, gerente o cajero) puede cobrar o manejar el turno' });
+  next();
+}
 function soloSuper(req, res, next) {
   if (ctx().rol !== 'superadmin') return res.status(403).json({ error: 'Solo super admin' });
   next();
@@ -460,7 +465,7 @@ app.get('/api/sucursales', wrap(async (req, res) => { const e = await readState(
 // ---------------------------------------------------------------------------
 //  CAJA
 // ---------------------------------------------------------------------------
-app.post('/api/caja/abrir', wrap(async (req, res) => {
+app.post('/api/caja/abrir', puedeCaja, wrap(async (req, res) => {
   const { sucursalId, fondoInicial = 0 } = req.body || {};
   if (!sucursalId) throw bad('Falta sucursalId');
   const t = await withState((e, c) => {
@@ -485,7 +490,7 @@ app.post('/api/caja/movimiento', wrap(async (req, res) => {
   });
   res.json(t);
 }));
-app.post('/api/caja/cerrar', wrap(async (req, res) => {
+app.post('/api/caja/cerrar', puedeCaja, wrap(async (req, res) => {
   const { turnoId, conteoEfectivo } = req.body || {};
   if (turnoId == null || conteoEfectivo == null) throw bad('Falta turnoId o conteoEfectivo');
   const t = await withState((e, c) => {
@@ -582,7 +587,7 @@ app.post('/api/pedidos/:folio/comanda', wrap(async (req, res) => {
   res.json(out);
 }));
 
-app.post('/api/pedidos/:folio/cobrar', wrap(async (req, res) => {
+app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
   const { folio } = req.params;
   const { pagos = [], recibido = 0 } = req.body || {};
   if (!pagos.length) throw bad('Faltan pagos');
