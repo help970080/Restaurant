@@ -26,6 +26,18 @@ function estadoInicial(meta = {}) {
   };
 }
 
+// ---- Canales de venta / delivery (México) -----------------------------------
+function canalesDefault() {
+  return {
+    local:    { id: 'local',    nombre: 'Mostrador / Propio', comisionPct: 0,  activo: true, esApp: false },
+    didi:     { id: 'didi',     nombre: 'DiDi Food',          comisionPct: 30, activo: true, esApp: true },
+    rappi:    { id: 'rappi',    nombre: 'Rappi',              comisionPct: 30, activo: true, esApp: true },
+    uber:     { id: 'uber',     nombre: 'Uber Eats',          comisionPct: 30, activo: true, esApp: true },
+    whatsapp: { id: 'whatsapp', nombre: 'WhatsApp / Teléfono', comisionPct: 0, activo: true, esApp: false },
+  };
+}
+const crearCanal = ({ nombre, comisionPct = 0, esApp = true }) => ({ id: uid('canal'), nombre, comisionPct: r2(comisionPct), activo: true, esApp });
+
 // ---- Promociones ------------------------------------------------------------
 const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0 }) => ({ id: uid('promo'), nombre, tipo, valor, activo: true });
 
@@ -91,10 +103,10 @@ function recalcularPedido(p) {
 }
 
 // ---- Crear pedido -----------------------------------------------------------
-function crearPedido(e, { sucursalId, codigo, tipoServicio = 'mostrador', mesaId = null, cliente = null, usuario = 'sistema', turnoId = null }) {
+function crearPedido(e, { sucursalId, codigo, tipoServicio = 'mostrador', mesaId = null, cliente = null, usuario = 'sistema', turnoId = null, canalId = 'local' }) {
   const folio = folioPedido(e, sucursalId, codigo);
   const ped = {
-    folio, sucursalId, tipoServicio, mesaId,
+    folio, sucursalId, tipoServicio, mesaId, canalId,
     estado: 'abierto',              // abierto -> cobrado | cancelado
     cliente, lineas: [], subtotal: 0, costoEnvio: 0, descuento: null, propina: 0, total: 0,
     pago: null, turnoId, creadoPor: usuario,
@@ -188,7 +200,7 @@ function descontarInventario(e, ped) {
 
 module.exports = {
   uid, r2, estadoInicial,
-  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
