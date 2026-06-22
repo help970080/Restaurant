@@ -1,0 +1,21 @@
+{
+  "name": "comandapro",
+  "version": "0.1.0",
+  "description": "POS y administracion de restaurante multi-tenant",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_integracion.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "pg-mem": "^2.9.1",
+    "supertest": "^7.2.2"
+  }
+}
