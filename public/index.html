@@ -278,9 +278,21 @@ const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
   ajustes:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.4l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 6.6V6a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 7.4l.06.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
   rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   asistencia:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'};
-const NAV_BASE=[['resumen','Resumen'],['pos','Punto de venta'],['cocina','Cocina'],['menu','Menú'],['inventario','Inventario'],['mesas','Mesas'],['asistencia','Asistencia'],['reportes','Reportes']];
+const NAV_LABELS={resumen:'Resumen',pos:'Punto de venta',cocina:'Cocina',menu:'Menú',inventario:'Inventario',mesas:'Mesas',asistencia:'Asistencia',reportes:'Reportes',promociones:'Promociones',rh:'Personal',ajustes:'Ajustes'};
+const NAV_ROLES={
+  admin:['resumen','pos','cocina','menu','inventario','mesas','asistencia','reportes','promociones','rh','ajustes'],
+  gerente:['resumen','pos','cocina','menu','inventario','mesas','asistencia','reportes','promociones','rh','ajustes'],
+  cajero:['resumen','pos','cocina','mesas','asistencia'],
+  mesero:['pos','mesas','cocina','asistencia'],
+  cocinero:['cocina','asistencia'],
+  repartidor:['cocina','asistencia']
+};
 function esAdmin(){return app.rol==='admin'||app.rol==='gerente';}
-function NAV(){return esAdmin()?[...NAV_BASE,['promociones','Promociones'],['rh','Personal'],['ajustes','Ajustes']]:NAV_BASE;}
+function puedeCobrar(){return ['admin','gerente','cajero'].includes(app.rol);}
+function rolViews(){return NAV_ROLES[app.rol]||['pos','asistencia'];}
+function puedeVer(v){return rolViews().includes(v);}
+function vistaInicial(){return rolViews()[0]||'pos';}
+function NAV(){return rolViews().map(k=>[k,NAV_LABELS[k]]);}
 
 // ===========================================================================
 //  Boot / login
@@ -293,11 +305,12 @@ async function boot(){
     if(app.rol==='superadmin'){renderSuper();return;}
     app.miSucursal=me.sucursalId;
     app.sucursales=await API.get('/api/sucursales');
-    if(!app.sucursalId)app.sucursalId=app.miSucursal||app.sucursales[0].id;
+    if(!esAdmin())app.sucursalId=app.miSucursal||app.sucursales[0].id;
+    else if(!app.sucursalId)app.sucursalId=app.miSucursal||app.sucursales[0].id;
     await refreshTurno();
     app.menu=await API.get('/api/menu');
     try{app.canales=await API.get('/api/canales');}catch{app.canales=[];}
-    renderShell();go('resumen');
+    renderShell();go(vistaInicial());
   }catch(e){API.token=null;renderLogin();}
 }
 function renderLogin(){
@@ -323,7 +336,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.1 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.2 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -337,7 +350,11 @@ function renderShell(){
 }
 function renderTopbar(){
   $('#sucSel').innerHTML=app.sucursales.map(s=>`<option value="${s.id}" ${s.id===app.sucursalId?'selected':''}>${s.nombre}</option>`).join('');
+  $('#sucSel').disabled=!esAdmin();
+  $('#sucSel').title=esAdmin()?'Cambiar de sucursal':'Tu sucursal asignada';
   const pill=$('#turnoPill'),btn=$('#btnTurno');
+  const caja=puedeCobrar();
+  pill.style.display=caja?'':'none';btn.style.display=caja?'':'none';
   if(app.turno){pill.className='turno-pill on';pill.textContent='Turno abierto · '+money(app.turno.fondoInicial);btn.textContent='Cerrar turno';btn.classList.remove('accent');}
   else{pill.className='turno-pill off';pill.textContent='Turno cerrado';btn.textContent='Abrir turno';btn.classList.add('accent');}
 }
@@ -346,7 +363,7 @@ async function renderNav(){
   $('#nav').innerHTML=NAV().map(([k,l])=>`<button data-v="${k}" class="${k===app.vista?'active':''}">${IC[k]}<span>${l}</span>${k==='cocina'&&badge?`<span class="badge">${badge}</span>`:''}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.v));
 }
-function go(v){app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
+function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
   ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia}[v])();
@@ -419,7 +436,7 @@ function vPOS(){
         <div class="trow" id="tDescRow" style="display:none;color:var(--green)"><span id="tDescLbl">Descuento</span><span class="mono" id="tDesc">$0.00</span></div>
         <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
         <div class="trow tot"><span>Total</span><span class="mono" id="tTotal">$0.00</span></div>
-        ${enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar cuenta</button></div>`:enDom?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button><button class="pay" id="btnCobrar">Cobrar</button></div>`:`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`}
+        ${(()=>{const pc=puedeCobrar();return enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button>${pc?`<button class="pay" id="btnCobrar">Cobrar cuenta</button>`:''}</div>`:enDom?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button>${pc?`<button class="pay" id="btnCobrar">Cobrar</button>`:''}</div>`:pc?`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`:`<div class="small" style="text-align:center;color:var(--muted);padding:10px">El cobro lo realiza caja</div>`;})()}
       </div></div></div>`;
   document.querySelectorAll('.cat').forEach(b=>b.onclick=()=>{app.pos.cat=b.dataset.cat;vPOS();});
   document.querySelectorAll('.svc button').forEach(b=>b.onclick=()=>onSvc(b.dataset.svc));
