@@ -334,6 +334,29 @@ app.post('/api/mesas/:id/cuenta', wrap(async (req, res) => {
   const m = await withState((e) => { const mesa = e.mesas[req.params.id]; if (!mesa) throw bad('Mesa inexistente', 404); if (mesa.estado === 'ocupada') mesa.estado = 'cuenta'; return mesa; });
   res.json(m);
 }));
+app.post('/api/mesas', wrap(async (req, res) => {
+  const { sucursalId, nombre } = req.body || {};
+  if (!sucursalId) throw bad('Falta sucursalId');
+  const m = await withState((e) => {
+    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
+    const n = Object.values(e.mesas).filter((x) => x.sucursalId === sucursalId).length;
+    const mesa = M.crearMesa({ nombre: nombre || ('Mesa ' + (n + 1)), sucursalId });
+    e.mesas[mesa.id] = mesa; return mesa;
+  });
+  res.json(m);
+}));
+app.post('/api/mesas/bulk', wrap(async (req, res) => {
+  const { sucursalId, cantidad = 6 } = req.body || {};
+  if (!sucursalId) throw bad('Falta sucursalId');
+  const arr = await withState((e) => {
+    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
+    const base = Object.values(e.mesas).filter((x) => x.sucursalId === sucursalId).length;
+    const out = [];
+    for (let i = 1; i <= cantidad; i++) { const m = M.crearMesa({ nombre: 'Mesa ' + (base + i), sucursalId }); e.mesas[m.id] = m; out.push(m); }
+    return out;
+  });
+  res.json(arr);
+}));
 
 // ---------------------------------------------------------------------------
 //  REPORTES
