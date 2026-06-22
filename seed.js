@@ -51,6 +51,10 @@ function buildTenantDoc(nombre = 'Jefe Burgers') {
   ];
   prods.forEach((p) => (e.menu.productos[p.id] = p));
 
+  // Promoción de ejemplo
+  const promo = M.crearPromocion({ nombre: 'Descuento 10%', tipo: 'porcentaje', valor: 10 });
+  e.promociones[promo.id] = promo;
+
   // Mesas (6 por sucursal)
   for (const suc of [a, b]) for (let i = 1; i <= 6; i++) { const m = M.crearMesa({ nombre: 'Mesa ' + i, sucursalId: suc.id }); e.mesas[m.id] = m; }
 
