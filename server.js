@@ -965,7 +965,15 @@ app.get('/api/reportes/resumen', wrap(async (req, res) => {
   const porPago = { efectivo: 0, tarjeta: 0, transferencia: 0 }; peds.forEach((p) => p.pago && p.pago.pagos.forEach((x) => porPago[x.metodo] = M.r2((porPago[x.metodo] || 0) + x.monto)));
   const porServicio = { mostrador: 0, domicilio: 0, mesa: 0 }; peds.forEach((p) => porServicio[p.tipoServicio] = M.r2(porServicio[p.tipoServicio] + p.total));
   const propinas = M.r2(peds.reduce((s, p) => s + (p.propina ? p.propina.monto : 0), 0));
-  res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, propinas, porProducto, porPago, porServicio });
+  const porHora = Array.from({ length: 24 }, () => ({ venta: 0, pedidos: 0 }));
+  const porDia = Array.from({ length: 7 }, () => ({ venta: 0, pedidos: 0 }));
+  for (const p of peds) {
+    const d = new Date((p.pago && p.pago.timestamp) || p.actualizado || p.creado);
+    const h = d.getHours(); const wd = d.getDay();
+    porHora[h].venta = M.r2(porHora[h].venta + p.total); porHora[h].pedidos++;
+    porDia[wd].venta = M.r2(porDia[wd].venta + p.total); porDia[wd].pedidos++;
+  }
+  res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, propinas, porProducto, porPago, porServicio, porHora, porDia });
 }));
 
 // estado completo (debug / export)
@@ -1025,6 +1033,9 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
     comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
     nominaBase,
+    manoDeObraPct: ingresos ? M.r2(nominaBase / ingresos * 100) : 0,
+    primeCost: M.r2(cogs + nominaBase),
+    primeCostPct: ingresos ? M.r2((cogs + nominaBase) / ingresos * 100) : 0,
     canales: canalesOut,
     rentabilidad,
   });
