@@ -128,7 +128,7 @@ app.get('/api/me', wrap(async (req, res) => {
   const c = ctx();
   if (c.rol === 'superadmin') return res.json({ username: c.username, rol: 'superadmin', sucursalId: null, tenant: { nombre: 'Super Admin', logo: null } });
   const e = await readState();
-  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null } });
+  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, fiscal: (e.config && e.config.fiscal) || {} } });
 }));
 
 // ---------------------------------------------------------------------------
@@ -810,7 +810,7 @@ app.get('/api/mesas', wrap(async (req, res) => {
   const { sucursalId } = req.query;
   const arr = Object.values(e.mesas).filter((m) => !sucursalId || m.sucursalId === sucursalId).map((m) => {
     const p = m.pedidoFolio ? e.pedidos[m.pedidoFolio] : null;
-    return { ...m, total: p ? p.total : 0, items: p ? p.lineas.length : 0, abierto: p ? p.creado : null };
+    return { ...m, total: p ? p.total : 0, items: p ? p.lineas.length : 0, abierto: p ? p.creado : null, atiende: p ? (p.atiende || null) : null };
   });
   res.json(arr);
 }));
@@ -868,6 +868,66 @@ app.get('/api/cancelaciones', puedeCaja, wrap(async (req, res) => {
   const { sucursalId } = req.query;
   const arr = (e.cancelaciones || []).filter((x) => !sucursalId || x.sucursalId === sucursalId);
   res.json(arr.slice(0, 100));
+}));
+// Transferir/mover la cuenta de una mesa a otra mesa libre
+app.post('/api/pedidos/:folio/transferir', wrap(async (req, res) => {
+  const { mesaDestinoId } = req.body || {};
+  const out = await withState((e) => {
+    const p = e.pedidos[req.params.folio];
+    if (!p) throw bad('Pedido inexistente', 404);
+    if (p.estado !== 'abierto') throw bad('Solo se puede mover una cuenta abierta', 409);
+    if (p.tipoServicio !== 'mesa') throw bad('Solo aplica a cuentas de mesa');
+    const dest = e.mesas[mesaDestinoId];
+    if (!dest) throw bad('Mesa destino inexistente', 404);
+    if (dest.sucursalId !== p.sucursalId) throw bad('La mesa destino es de otra sucursal');
+    if (dest.estado !== 'libre') throw bad('La mesa destino está ocupada');
+    const orig = p.mesaId && e.mesas[p.mesaId] ? e.mesas[p.mesaId] : null;
+    const origEstado = orig ? orig.estado : 'ocupada';
+    if (orig) { orig.estado = 'libre'; orig.pedidoFolio = null; }
+    p.mesaId = dest.id; p.actualizado = new Date().toISOString();
+    dest.estado = origEstado === 'libre' ? 'ocupada' : origEstado;
+    dest.pedidoFolio = p.folio;
+    return { mesa: dest.id, pedido: p.folio };
+  });
+  res.json(out);
+}));
+// Juntar: pasar las líneas de la mesa origen a la mesa destino y liberar origen
+app.post('/api/mesas/:destinoId/juntar', wrap(async (req, res) => {
+  const { origenId } = req.body || {};
+  const out = await withState((e, c) => {
+    const dest = e.mesas[req.params.destinoId];
+    const orig = e.mesas[origenId];
+    if (!dest || !orig) throw bad('Mesa inexistente', 404);
+    if (dest.id === orig.id) throw bad('Elige dos mesas distintas');
+    if (dest.sucursalId !== orig.sucursalId) throw bad('Las mesas son de distinta sucursal');
+    const po = orig.pedidoFolio ? e.pedidos[orig.pedidoFolio] : null;
+    if (!po || !po.lineas.length) throw bad('La mesa origen no tiene cuenta');
+    let destino = dest.pedidoFolio ? e.pedidos[dest.pedidoFolio] : null;
+    if (destino && destino.estado !== 'abierto') destino = null;
+    if (!destino) {
+      destino = M.crearPedido(e, { sucursalId: dest.sucursalId, codigo: e.sucursales[dest.sucursalId].codigo, tipoServicio: 'mesa', mesaId: dest.id, usuario: (c || {}).username });
+      dest.pedidoFolio = destino.folio; dest.estado = 'ocupada';
+    }
+    const teniaEnviado = po.lineas.some((l) => l.cocina === 'enviado');
+    for (const l of po.lineas) destino.lineas.push(l);
+    if (teniaEnviado && !destino.tiemposCocina.recibido) destino.tiemposCocina.recibido = po.tiemposCocina.recibido || new Date().toISOString();
+    M.recalcularPedido(destino); destino.actualizado = new Date().toISOString();
+    po.lineas = []; po.estado = 'cancelado'; po.canceladoEn = new Date().toISOString(); po.motivoCancelacion = 'Juntada con ' + dest.nombre; M.recalcularPedido(po);
+    orig.estado = 'libre'; orig.pedidoFolio = null;
+    return { destino: destino.folio, mesa: dest.id };
+  });
+  res.json(out);
+}));
+// Cambiar de mesero / quien atiende la cuenta
+app.post('/api/pedidos/:folio/atiende', wrap(async (req, res) => {
+  const { atiende } = req.body || {};
+  const out = await withState((e) => {
+    const p = e.pedidos[req.params.folio];
+    if (!p) throw bad('Pedido inexistente', 404);
+    p.atiende = (atiende || '').trim() || null; p.actualizado = new Date().toISOString();
+    return p;
+  });
+  res.json(out);
 }));
 app.post('/api/mesas', wrap(async (req, res) => {
   const { sucursalId, nombre } = req.body || {};
