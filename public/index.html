@@ -336,7 +336,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.2 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.3 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -366,7 +366,13 @@ async function renderNav(){
 function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
-  ({resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia}[v])();
+  const fn={resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia}[v];
+  Promise.resolve().then(fn).catch(err=>{
+    $('#view').innerHTML=`<div class="panel" style="text-align:center;padding:30px"><h3>No se pudo cargar</h3>
+      <div style="color:var(--muted);margin:8px 0 16px">${(err&&err.message)||'Error de conexión'}. El servidor pudo haberse reiniciado; espera unos segundos y reintenta.</div>
+      <button class="btn accent" id="retryView">Reintentar</button></div>`;
+    if($('#retryView'))$('#retryView').onclick=()=>go(v);
+  });
 }
 
 // ===========================================================================
