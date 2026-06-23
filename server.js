@@ -9,7 +9,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const M = require('./model');
-const { firmarToken, auth, ctx, readState, withState } = require('./context');
+const { firmarToken, auth, ctx, readState, withState, runPublic } = require('./context');
 const { buildTenantDoc } = require('./seed');
 
 const app = express();
@@ -128,7 +128,7 @@ app.get('/api/me', wrap(async (req, res) => {
   const c = ctx();
   if (c.rol === 'superadmin') return res.json({ username: c.username, rol: 'superadmin', sucursalId: null, tenant: { nombre: 'Super Admin', logo: null } });
   const e = await readState();
-  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, fiscal: (e.config && e.config.fiscal) || {} } });
+  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, row: c.row, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, fiscal: (e.config && e.config.fiscal) || {} } });
 }));
 
 // ---------------------------------------------------------------------------
@@ -1042,6 +1042,56 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
 }));
 
 // Fallback SPA: cualquier ruta que no sea /api sirve el frontend
+// ===========================================================================
+//  MENÚ QR PÚBLICO (sin login) — /qr/:row/:suc
+//  El cliente escanea, ve el menú y manda su pedido. Cae como cuenta abierta
+//  de mostrador (origen 'qr') que caja confirma y cobra. No se envía solo a
+//  cocina (control anti-abuso): caja/mesero lo revisa primero.
+// ===========================================================================
+const QR_PAGE = path.join(__dirname, 'public', 'qr.html');
+app.get('/qr/:row/:suc', (req, res) => res.sendFile(QR_PAGE));
+app.get('/qr/:row/:suc/menu', (req, res) => {
+  runPublic(req.params.row, async () => {
+    try {
+      const e = await readState();
+      if (!e) return res.status(404).json({ error: 'No disponible' });
+      const suc = e.sucursales[req.params.suc];
+      if (!suc) return res.status(404).json({ error: 'Sucursal no encontrada' });
+      const categorias = Object.values(e.menu.categorias).map((c) => ({ id: c.id, nombre: c.nombre, orden: c.orden || 0 })).sort((a, b) => a.orden - b.orden);
+      const productos = Object.values(e.menu.productos)
+        .filter((p) => p.activo && p.disponible !== false)
+        .map((p) => ({ id: p.id, nombre: p.nombre, precioBase: p.precioBase, categoriaId: p.categoriaId, conOpciones: (p.gruposIds || []).length > 0 }));
+      res.json({ tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null }, sucursal: { id: suc.id, nombre: suc.nombre }, categorias, productos });
+    } catch (err) { res.status(500).json({ error: 'Error al cargar el menú' }); }
+  });
+});
+app.post('/qr/:row/:suc/pedido', (req, res) => {
+  const { items = [], cliente = {} } = req.body || {};
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Tu pedido está vacío' });
+  if (items.length > 40) return res.status(400).json({ error: 'Demasiados productos' });
+  runPublic(req.params.row, async () => {
+    try {
+      const out = await withState((e) => {
+        const suc = e.sucursales[req.params.suc];
+        if (!suc) throw bad('Sucursal no encontrada', 404);
+        const p = M.crearPedido(e, { sucursalId: suc.id, codigo: suc.codigo, tipoServicio: 'mostrador', usuario: 'qr', canalId: 'local' });
+        p.origen = 'qr';
+        p.cliente = { nombre: String(cliente.nombre || 'Cliente QR').slice(0, 40), mesa: String(cliente.mesa || '').slice(0, 12) || null };
+        for (const it of items) {
+          const prod = e.menu.productos[it.productoId];
+          if (!prod || prod.activo === false || prod.disponible === false) continue;
+          const cantidad = Math.min(20, Math.max(1, parseInt(it.cantidad, 10) || 1));
+          p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos: [], notas: String(it.notas || '').slice(0, 120) }));
+        }
+        if (!p.lineas.length) throw bad('Ningún producto válido en el pedido');
+        M.recalcularPedido(p);
+        return { folio: p.folio, total: p.total, mesa: p.cliente.mesa };
+      });
+      res.json(out);
+    } catch (err) { res.status(err.status || 500).json({ error: err.message || 'No se pudo enviar el pedido' }); }
+  });
+});
+
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // ---------------------------------------------------------------------------
