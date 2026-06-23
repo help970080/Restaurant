@@ -21,6 +21,7 @@ function estadoInicial(meta = {}) {
     empleados: {},
     asistencias: [],
     reservas: [],
+    cancelaciones: [],
     pedidos: {},
     mesas: {},
     caja: { turnos: {} },
@@ -174,6 +175,8 @@ function turnoAbierto(e, sucursalId) {
 }
 function registrarVentaEnTurno(t, p) {
   for (const x of p.pago.pagos) t.movimientos.push(movimiento({ tipo: 'venta', monto: x.monto, metodoPago: x.metodo, pedidoFolio: p.folio, usuario: p.creadoPor, motivo: 'Venta ' + p.folio }));
+  // La propina en efectivo entra físicamente al cajón; se registra para que el corte cuadre.
+  if (p.propina && p.propina.monto > 0) t.movimientos.push(movimiento({ tipo: 'propina', monto: p.propina.monto, metodoPago: p.propina.metodo, pedidoFolio: p.folio, usuario: p.creadoPor, motivo: 'Propina ' + p.folio }));
   return t;
 }
 function registrarMovimiento(t, { tipo, monto, motivo, usuario }) {
@@ -188,10 +191,12 @@ function cerrarTurno(t, { usuario, conteoEfectivo }) {
   const vTr = sum((m) => m.tipo === 'venta' && m.metodoPago === 'transferencia');
   const ent = sum((m) => m.tipo === 'entrada');
   const sal = sum((m) => m.tipo === 'salida');
-  const espEf = r2(t.fondoInicial + vEf + ent - sal);
+  const propEf = sum((m) => m.tipo === 'propina' && m.metodoPago === 'efectivo');
+  const propTar = sum((m) => m.tipo === 'propina' && m.metodoPago !== 'efectivo');
+  const espEf = r2(t.fondoInicial + vEf + propEf + ent - sal); // las propinas en efectivo están en el cajón
   const dif = r2(conteoEfectivo - espEf);
   t.estado = 'cerrado'; t.cerradoPor = usuario; t.cerrado = new Date().toISOString(); t.conteo = r2(conteoEfectivo);
-  t.esperado = { efectivo: espEf, tarjeta: vTa, transferencia: vTr, ventaTotal: r2(vEf + vTa + vTr), fondoInicial: t.fondoInicial, entradas: ent, salidas: sal };
+  t.esperado = { efectivo: espEf, tarjeta: vTa, transferencia: vTr, ventaTotal: r2(vEf + vTa + vTr), fondoInicial: t.fondoInicial, entradas: ent, salidas: sal, propinasEfectivo: propEf, propinasTarjeta: propTar, propinasTotal: r2(propEf + propTar) };
   t.diferencia = dif;
   t.resultado = dif === 0 ? 'cuadrado' : (dif < 0 ? 'faltante' : 'sobrante');
   return t;
