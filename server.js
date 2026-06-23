@@ -623,6 +623,12 @@ app.get('/api/pedidos', wrap(async (req, res) => {
   if (estado) arr = arr.filter((p) => p.estado === estado);
   res.json(arr);
 }));
+app.get('/api/pedidos/:folio', wrap(async (req, res) => {
+  const e = await readState();
+  const p = e.pedidos[req.params.folio];
+  if (!p) throw bad('Pedido inexistente', 404);
+  res.json(p);
+}));
 
 app.get('/api/ventas/recientes', wrap(async (req, res) => {
   const e = await readState();
@@ -766,8 +772,29 @@ app.get('/api/mesas', wrap(async (req, res) => {
   res.json(arr);
 }));
 app.post('/api/mesas/:id/cuenta', wrap(async (req, res) => {
-  const m = await withState((e) => { const mesa = e.mesas[req.params.id]; if (!mesa) throw bad('Mesa inexistente', 404); if (mesa.estado === 'ocupada') mesa.estado = 'cuenta'; return mesa; });
+  const m = await withState((e) => {
+    const mesa = e.mesas[req.params.id];
+    if (!mesa) throw bad('Mesa inexistente', 404);
+    const p = mesa.pedidoFolio ? e.pedidos[mesa.pedidoFolio] : null;
+    if (!p || !p.lineas.length) throw bad('La mesa no tiene productos; agrega algo antes de pedir la cuenta');
+    if (mesa.estado === 'ocupada') mesa.estado = 'cuenta';
+    return mesa;
+  });
   res.json(m);
+}));
+// Liberar/anular una mesa (caja, gerente o admin): cancela la cuenta abierta sin cobrarla
+app.post('/api/mesas/:id/liberar', puedeCaja, wrap(async (req, res) => {
+  const out = await withState((e) => {
+    const mesa = e.mesas[req.params.id];
+    if (!mesa) throw bad('Mesa inexistente', 404);
+    if (mesa.pedidoFolio && e.pedidos[mesa.pedidoFolio]) {
+      const p = e.pedidos[mesa.pedidoFolio];
+      if (p.estado === 'abierto') { p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (ctx() || {}).username || null; }
+    }
+    mesa.estado = 'libre'; mesa.pedidoFolio = null;
+    return mesa;
+  });
+  res.json(out);
 }));
 app.post('/api/mesas', wrap(async (req, res) => {
   const { sucursalId, nombre } = req.body || {};
