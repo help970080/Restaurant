@@ -171,9 +171,11 @@
   .btn,.pay,.cat,.modal-foot button,.modal-foot a,.paytabs button,.svc button,.cuenta-btn{min-height:46px;display:inline-flex;align-items:center;justify-content:center}
   .mesa .mbody{padding:10px 12px 12px}
   .mesa .ms{font-size:12px;font-weight:600;margin-top:2px}
-  .mesa.libre .ms{color:var(--green)}.mesa.ocupada .ms{color:var(--accent-ink)}.mesa.cuenta .ms{color:var(--blue)}
+  .mesa.libre .ms{color:var(--green)}.mesa.ocupada .ms{color:var(--red)}.mesa.cuenta .ms{color:var(--accent-ink);font-weight:600}
   .mesa .mtot{font-family:var(--mono);font-weight:600;font-size:15px;margin-top:3px}
   .mesa .cuenta-btn{margin-top:8px;width:100%;background:var(--blue-bg);color:var(--blue);font-weight:600;font-size:12px;padding:6px;border:1px solid var(--blue-bg)}
+  .mesa .pay-btn{margin-top:6px;width:100%;background:var(--green);color:#fff;font-weight:700;font-size:13px;padding:8px;border:none;border-radius:9px;cursor:pointer}
+  .mesa .lib-btn{margin-top:4px;width:100%;background:none;color:var(--muted);font-size:12px;padding:4px;border:none;cursor:pointer;text-decoration:underline}
 
   /* MODAL */
   .ov{position:fixed;inset:0;background:rgba(20,18,12,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
@@ -336,7 +338,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.4 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.5 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -808,35 +810,82 @@ async function vMesas(){
   kdsTimer=setInterval(refrescarMesas,8000); // caja cobra -> la mesa se libera -> el mesero lo ve aquí
 }
 function mesasGrid(mesas){
-  const lbl={libre:'Libre',ocupada:'Ocupada',cuenta:'Pidió cuenta'};
-  return mesas.map(m=>`<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block;border:none;cursor:pointer">${mesaArt(m.estado)}</button>
-      <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div><div class="ms">${lbl[m.estado]}</div>${m.estado!=='libre'?`<div class="mtot">${money(m.total)}</div>`:''}${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}</div></div>`).join('');
+  const lbl={libre:'Libre',ocupada:'Ocupada',cuenta:'Por cobrar'};
+  const pc=puedeCobrar();
+  return mesas.map(m=>{
+    const abierta=m.estado==='ocupada'||m.estado==='cuenta';
+    return `<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block;border:none;cursor:pointer">${mesaArt(m.estado)}</button>
+      <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div>
+        <div class="ms">${lbl[m.estado]}</div>
+        ${abierta?`<div class="mtot">${money(m.total)}${m.items?` · ${m.items} item${m.items>1?'s':''}`:''}</div>`:''}
+        ${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}
+        ${pc&&abierta?`<button class="pay-btn" data-cobrarmesa="${m.id}">Cobrar ${money(m.total)}</button>`:''}
+        ${pc&&abierta?`<button class="lib-btn" data-liberar="${m.id}">Liberar</button>`:''}
+      </div></div>`;
+  }).join('');
 }
-function wireSalon(){
-  document.querySelectorAll('[data-abrir]').forEach(b=>b.onclick=()=>abrirMesa(b.dataset.abrir));
-  document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();try{await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);}catch(e){toast(e.message);}refrescarMesas();});
+function worklistHTML(mesas){
+  if(!puedeCobrar())return '';
+  const abiertas=mesas.filter(m=>m.estado==='ocupada'||m.estado==='cuenta');
+  if(!abiertas.length)return '';
+  const tot=abiertas.reduce((s,m)=>s+(m.total||0),0);
+  return `<div class="panel" style="margin-bottom:16px;border-color:var(--accent)"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Cuentas por cobrar <span class="small">${abiertas.length} cuenta(s) · ${money(tot)}</span></h3>
+    <table><thead><tr><th>Mesa</th><th>Estado</th><th class="num">Items</th><th class="num">Total</th><th></th></tr></thead><tbody>
+    ${abiertas.map(m=>`<tr><td style="font-weight:600">${m.nombre}</td><td>${m.estado==='cuenta'?'<span style="color:var(--accent-ink);font-weight:600">Pidió cuenta</span>':'Ocupada'}</td><td class="num">${m.items||0}</td><td class="num">${money(m.total)}</td><td class="num"><button class="btn dark" data-cobrarmesa="${m.id}" style="padding:7px 12px;font-size:13px;min-height:auto">Cobrar</button></td></tr>`).join('')}
+    </tbody></table></div>`;
 }
 function pintarSalon(mesas,sucNombre){
-  app._mesaNum={};app._mesaPrev={};mesas.forEach(m=>{app._mesaNum[m.id]=m.nombre.replace('Mesa ','');app._mesaPrev[m.id]=m.estado;});
-  $('#view').innerHTML=`<div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Salón · ${sucNombre} <span class="small" style="font-weight:400;color:var(--muted)">· se actualiza solo</span><button class="btn" id="addMesa" style="font-size:13px;margin-left:auto">+ Agregar mesa</button></h3>
-    <div class="mesas">${mesasGrid(mesas)}</div></div>`;
+  app._mesas=mesas;app._mesaNum={};app._mesaPrev={};
+  mesas.forEach(m=>{app._mesaNum[m.id]=m.nombre.replace('Mesa ','');app._mesaPrev[m.id]=m.estado;});
+  $('#view').innerHTML=`<div id="salonWrap">${worklistHTML(mesas)}
+    <div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Salón · ${sucNombre} <span class="small" style="font-weight:400;color:var(--muted)">· se actualiza solo</span><button class="btn" id="addMesa" style="font-size:13px;margin-left:auto">+ Agregar mesa</button></h3>
+    <div class="mesas">${mesasGrid(mesas)}</div></div></div>`;
   $('#addMesa').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
   wireSalon();
 }
+function wireSalon(){
+  document.querySelectorAll('[data-abrir]').forEach(b=>b.onclick=()=>abrirMesa(b.dataset.abrir));
+  document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();try{await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);refrescarMesas();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-cobrarmesa]').forEach(b=>b.onclick=(ev)=>{ev.stopPropagation();cobrarMesa(b.dataset.cobrarmesa);});
+  document.querySelectorAll('[data-liberar]').forEach(b=>b.onclick=(ev)=>{ev.stopPropagation();confirmarLiberar(b.dataset.liberar);});
+}
 async function refrescarMesas(){
-  if(app.vista!=='mesas')return;
+  if(app.vista!=='mesas'||ov.classList.contains('show'))return; // no refresques con un modal abierto (cobro)
   let mesas;try{mesas=await API.get('/api/mesas?sucursalId='+app.sucursalId);}catch{return;}
-  const cont=document.querySelector('.mesas');if(!cont)return;
+  if(!document.querySelector('#salonWrap'))return;
   const prev=app._mesaPrev||{};
   mesas.forEach(m=>{const antes=prev[m.id];if(antes&&antes!=='libre'&&m.estado==='libre')toast('✓ '+m.nombre+' cobrada y liberada');});
-  app._mesaNum={};app._mesaPrev={};mesas.forEach(m=>{app._mesaNum[m.id]=m.nombre.replace('Mesa ','');app._mesaPrev[m.id]=m.estado;});
-  cont.innerHTML=mesasGrid(mesas);
-  wireSalon();
+  pintarSalon(mesas,app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'');
+}
+async function cobrarMesa(mesaId){
+  const m=(app._mesas||[]).find(x=>x.id===mesaId);
+  if(!m||!m.pedidoFolio){toast('Esta mesa no tiene cuenta');return;}
+  try{const p=await API.get('/api/pedidos/'+m.pedidoFolio);
+    if(!p.lineas.length){toast('La mesa no tiene productos');return;}
+    app.pos={folio:p.folio,pedido:p,tipoServicio:'mesa',mesaId,cat:app.pos.cat};
+    cobrar();
+  }catch(e){toast(e.message);}
+}
+function confirmarLiberar(mesaId){
+  const m=(app._mesas||[]).find(x=>x.id===mesaId);const items=m&&m.items>0;
+  modal.innerHTML=`<h3>Liberar ${m?m.nombre:'mesa'}</h3>
+    <div class="sub">${items?`Esta mesa tiene ${m.items} producto(s) por ${money(m.total)}. Se CANCELARÁ la cuenta sin cobrar.`:'La mesa quedará libre.'}</div>
+    <div class="modal-foot"><button class="btn-ghost" id="lbCancel">Cancelar</button><button class="btn-primary" id="lbOk" style="background:var(--red);border-color:var(--red)">${items?'Cancelar cuenta y liberar':'Liberar'}</button></div>`;
+  ov.classList.add('show');
+  $('#lbCancel').onclick=closeModal;
+  $('#lbOk').onclick=async()=>{try{await API.post('/api/mesas/'+mesaId+'/liberar',{});closeModal();toast('Mesa liberada');refrescarMesas();}catch(e){toast(e.message);}};
 }
 async function abrirMesa(mesaId){
   if(!app.turno){toast('Abre el turno antes de atender mesas');return;}
-  try{const p=await API.post('/api/pedidos',{sucursalId:app.sucursalId,tipoServicio:'mesa',mesaId});
-    app.pos={folio:p.folio,pedido:p,tipoServicio:'mesa',mesaId,cat:app.pos.cat||cats()[0].id};go('pos');
+  const m=(app._mesas||[]).find(x=>x.id===mesaId);
+  try{
+    if(m&&m.pedidoFolio){ // mesa con cuenta abierta: cargar la cuenta existente
+      const p=await API.get('/api/pedidos/'+m.pedidoFolio);
+      app.pos={folio:p.folio,pedido:p,tipoServicio:'mesa',mesaId,cat:app.pos.cat||cats()[0].id};
+    }else{ // mesa libre: el pedido se crea hasta agregar el primer producto (no se ocupa en vacío)
+      app.pos={folio:null,pedido:null,tipoServicio:'mesa',mesaId,cat:app.pos.cat||cats()[0].id};
+    }
+    go('pos');
   }catch(e){toast(e.message);}
 }
 
