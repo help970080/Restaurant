@@ -340,7 +340,7 @@ async function boot(){
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   if(!API.token){renderLogin();return;}
   try{
-    const me=await API.get('/api/me');app.rol=me.rol;app.tenant=me.tenant;app.username=me.username;
+    const me=await API.get('/api/me');app.rol=me.rol;app.tenant=me.tenant;app.username=me.username;app.row=me.row;
     if(app.rol==='superadmin'){renderSuper();return;}
     app.miSucursal=me.sucursalId;
     app.sucursales=await API.get('/api/sucursales');
@@ -375,7 +375,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.13 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.14 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -1062,7 +1062,7 @@ async function vCaja(){
   ]);
   app._mesas=mesas;app._ventas=recientes;
   const mesasAb=mesas.filter(m=>m.estado==='ocupada'||m.estado==='cuenta').map(m=>({folio:m.pedidoFolio,etq:m.nombre,est:m.estado==='cuenta'?'Pidió cuenta':'Mesa ocupada',pidio:m.estado==='cuenta',items:m.items,total:m.total,esMesa:true,mesaId:m.id}));
-  const otros=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length).map(p=>({folio:p.folio,etq:p.tipoServicio==='domicilio'?('Domicilio'+(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:'')):'Mostrador',est:p.tipoServicio==='domicilio'?'A domicilio':'En mostrador',pidio:false,items:p.lineas.length,total:p.total,esMesa:false}));
+  const otros=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length).map(p=>({folio:p.folio,etq:p.origen==='qr'?('🔲 QR'+(p.cliente&&p.cliente.mesa?' · Mesa '+p.cliente.mesa:(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:''))):(p.tipoServicio==='domicilio'?('Domicilio'+(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:'')):'Mostrador'),est:p.origen==='qr'?'Pedido del cliente':(p.tipoServicio==='domicilio'?'A domicilio':'En mostrador'),pidio:p.origen==='qr',items:p.lineas.length,total:p.total,esMesa:false}));
   const cuentas=[...mesasAb,...otros];
   const totalCobrar=cuentas.reduce((s,c)=>s+(c.total||0),0);
   const resvHoy=reservas.filter(r=>r.fecha===hoy&&(r.estado==='pendiente'||r.estado==='confirmada')).sort((a,b)=>(a.hora||'').localeCompare(b.hora||''));
@@ -1302,6 +1302,11 @@ async function vAjustes(){
       ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>Menú QR / pedido en línea <span class="small">el cliente escanea, ve el menú y manda su pedido (sin comisión)</span></h3>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Pega un QR por sucursal en las mesas o en la entrada. El pedido llega a <b>Caja</b> como cuenta por cobrar (marcada 🔲 QR); ahí lo confirmas y cobras. El pago es en caja.</div>
+    <table><thead><tr><th>Sucursal</th><th>Enlace</th><th></th></tr></thead><tbody>
+    ${app.sucursales.map(s=>{const url=location.origin+'/qr/'+app.row+'/'+s.id;return `<tr><td style="font-weight:600">${s.nombre}</td><td><span class="mono" style="font-size:11px;word-break:break-all">${url}</span></td><td class="num" style="white-space:nowrap"><button class="btn" data-qrcopy="${url}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">Copiar</button><button class="btn dark" data-qrshow="${url}" data-qrnom="${s.nombre}" style="padding:7px 11px;font-size:12px;min-height:auto">Ver QR</button></td></tr>`;}).join('')}
+    </tbody></table></div>
   <div class="panel" style="margin-top:16px"><h3>IVA en tickets <span class="small">los precios del menú ya incluyen IVA; aquí solo se desglosa</span></h3>
     <div class="cols2"><div class="field"><label>Tasa de IVA (%)</label><input id="fxIva" type="number" class="mono" value="${fx.ivaTasa!=null?fx.ivaTasa:16}" placeholder="16"></div>
     <div class="field" style="display:flex;align-items:flex-end"><div class="small" style="color:var(--muted)">Pon 0 para no desglosar IVA (ej. si estás en RIF/RESICO sin trasladar IVA).</div></div></div>
@@ -1331,6 +1336,8 @@ async function vAjustes(){
     const ivaTasa=Math.max(0,+$('#fxIva').value||0);
     try{const r=await API.patch('/api/config',{fiscal:{ivaTasa}});app._fiscal=r.fiscal;if(app.tenant)app.tenant.fiscal=r.fiscal;toast('IVA actualizado');}catch(e){toast(e.message);}
   };
+  document.querySelectorAll('[data-qrcopy]').forEach(b=>b.onclick=()=>{navigator.clipboard.writeText(b.dataset.qrcopy).then(()=>toast('Enlace copiado')).catch(()=>toast('Copia manual: '+b.dataset.qrcopy));});
+  document.querySelectorAll('[data-qrshow]').forEach(b=>b.onclick=()=>mostrarQR(b.dataset.qrshow,b.dataset.qrnom));
   if($('#fxSave'))$('#fxSave').onclick=async()=>{
     const fiscal={razonSocial:$('#fxRazon').value.trim(),rfc:$('#fxRfc').value.trim(),domicilio:$('#fxDom').value.trim(),repLegal:$('#fxRep').value.trim(),ciudad:$('#fxCiudad').value.trim()};
     try{await API.patch('/api/config',{fiscal});app._fiscal=fiscal;toast('Datos para contratos guardados');}catch(e){toast(e.message);}
@@ -1564,6 +1571,16 @@ function modalAbrirTurno(){
     <div class="modal-foot"><button class="btn-ghost" id="tCancel">Cancelar</button><button class="btn-primary" id="tOk">Abrir</button></div>`;
   ov.classList.add('show');$('#tCancel').onclick=closeModal;
   $('#tOk').onclick=async()=>{try{app.turno=await API.post('/api/caja/abrir',{sucursalId:app.sucursalId,fondoInicial:+($('#fondo').value)||0});closeModal();renderTopbar();toast('Turno abierto');go(app.vista);}catch(e){toast(e.message);}};
+}
+function mostrarQR(url,nombre){
+  const w=window.open('','qr','width=420,height=560');if(!w){toast('Permite ventanas emergentes');return;}
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>QR ${nombre}</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
+    <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;text-align:center;padding:24px;color:#211a12}h1{font-size:22px;margin:4px 0}.s{color:#8a7f70;margin-bottom:18px}#qr{display:inline-block;padding:14px;background:#fff;border:1px solid #ece3d5;border-radius:16px}.u{font-size:11px;color:#8a7f70;word-break:break-all;margin-top:14px}button{margin-top:18px;padding:11px 20px;border:none;border-radius:10px;background:#211a12;color:#fff;font-weight:700;font-size:15px;cursor:pointer}@media print{button{display:none}}</style>
+    </head><body><div class="s">Escanea para ver el menú y pedir</div><h1>${nombre}</h1><div id="qr"></div><div class="u">${url}</div><button onclick="window.print()">Imprimir</button>
+    <script>window.onload=function(){new QRCode(document.getElementById('qr'),{text:${JSON.stringify(url)},width:280,height:280,correctLevel:QRCode.CorrectLevel.M});};<\/script>
+    </body></html>`);
+  w.document.close();
 }
 function imprimirCorte(r){
   const E=r.esperado;const suc=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
