@@ -16,10 +16,42 @@ function getPool() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('Falta DATABASE_URL');
   const ssl = /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false };
-  _pool = new Pool({ connectionString: url, ssl });
+  _pool = new Pool({
+    connectionString: url,
+    ssl,
+    max: 8,                       // Render free Postgres tiene pocas conexiones
+    idleTimeoutMillis: 30000,     // cierra conexiones inactivas antes de que la BD las tire
+    connectionTimeoutMillis: 10000,
+    keepAlive: true,
+  });
+  // CLAVE: sin este handler, un error de un cliente inactivo (la BD tira la conexión)
+  // emite un evento 'error' no manejado que TUMBA el proceso -> todo regresa 502.
+  _pool.on('error', (err) => {
+    console.error('[pg pool] error en cliente inactivo (se ignora, el pool reconecta):', err && err.message);
+  });
   return _pool;
 }
-const query = (text, params) => getPool().query(text, params);
+
+// Errores de conexión transitorios: la conexión murió pero reintentar con un cliente
+// nuevo del pool resuelve. No aplica a errores de SQL (esos sí se propagan).
+const TRANSIENT = /terminated unexpectedly|Connection terminated|terminating connection|ECONNRESET|ETIMEDOUT|server closed the connection|connection error|Client has encountered/i;
+
+async function query(text, params) {
+  let lastErr;
+  for (let intento = 0; intento < 3; intento++) {
+    try {
+      return await getPool().query(text, params);
+    } catch (e) {
+      lastErr = e;
+      if (TRANSIENT.test((e && e.message) || '')) {
+        await new Promise((r) => setTimeout(r, 150 * (intento + 1)));
+        continue; // reintenta con un cliente nuevo del pool
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
 
 async function initDB() {
   await query(`CREATE TABLE IF NOT EXISTS comandapro_state (
