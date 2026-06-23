@@ -70,7 +70,7 @@ const crearCategoria = ({ nombre, orden = 0 }) => ({ id: uid('cat'), nombre, ord
 const crearOpcion = ({ nombre, precioDelta = 0, porDefecto = false }) => ({ id: uid('opt'), nombre, precioDelta, porDefecto, activo: true });
 const crearGrupo = ({ nombre, tipo = 'unico', obligatorio = false, max = null, opciones = [] }) => ({ id: uid('grp'), nombre, tipo, obligatorio, max, opciones });
 const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [] }) =>
-  ({ id: uid('prod'), categoriaId, nombre, precioBase, gruposIds, destino, receta, activo: true });
+  ({ id: uid('prod'), categoriaId, nombre, precioBase, gruposIds, destino, receta, activo: true, disponible: true });
 const crearInsumo = ({ nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 }) => ({ id: uid('ins'), nombre, unidad, stock, costoUnitario, stockMin });
 const crearMesa = ({ nombre, sucursalId }) => ({ id: uid('mesa'), nombre, sucursalId, estado: 'libre', pedidoFolio: null });
 
@@ -140,10 +140,15 @@ function mandarComanda(ped) {
 }
 
 // ---- Pago -------------------------------------------------------------------
-function registrarPago(p, { pagos = [], recibido = 0 } = {}) {
+function registrarPago(p, { pagos = [], recibido = 0, propina = null } = {}) {
   const ef = pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
-  const cambio = recibido > 0 ? r2(recibido - ef) : 0;
+  const propMonto = propina && propina.monto > 0 ? r2(propina.monto) : 0;
+  const propEf = propina && propina.metodo === 'efectivo' ? propMonto : 0;
+  const efectivoTotal = ef + propEf;
+  const cambio = recibido > 0 ? r2(recibido - efectivoTotal) : 0;
   p.pago = { pagos, recibido, cambio: cambio > 0 ? cambio : 0, metodo: pagos.length === 1 ? pagos[0].metodo : 'mixto', timestamp: new Date().toISOString() };
+  // La propina NO es ingreso del restaurante (LFT 346-347): se guarda aparte, no suma a la venta.
+  p.propina = propMonto > 0 ? { monto: propMonto, metodo: (propina && propina.metodo) || 'efectivo' } : null;
   p.estado = 'cobrado';
   p.actualizado = new Date().toISOString();
   return p;
