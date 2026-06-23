@@ -454,7 +454,7 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
   const p = await withState((e) => {
     const prod = e.menu.productos[id];
     if (!prod) throw bad('Producto inexistente', 404);
-    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId']) if (k in patch) prod[k] = patch[k];
+    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible']) if (k in patch) prod[k] = patch[k];
     return prod;
   });
   res.json(p);
@@ -589,7 +589,7 @@ app.post('/api/pedidos/:folio/comanda', wrap(async (req, res) => {
 
 app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
   const { folio } = req.params;
-  const { pagos = [], recibido = 0 } = req.body || {};
+  const { pagos = [], recibido = 0, propina = null } = req.body || {};
   if (!pagos.length) throw bad('Faltan pagos');
   const out = await withState((e, c) => {
     const p = e.pedidos[folio];
@@ -603,7 +603,7 @@ app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
     if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
     p.turnoId = turno.id;
     M.mandarComanda(p); // dispara a cocina lo que falte (mostrador) o ronda final (mesa)
-    M.registrarPago(p, { pagos, recibido });
+    M.registrarPago(p, { pagos, recibido, propina });
     M.registrarVentaEnTurno(turno, p);
     M.descontarInventario(e, p);
     if (p.tipoServicio === 'mesa' && p.mesaId && e.mesas[p.mesaId]) {
@@ -873,7 +873,8 @@ app.get('/api/reportes/resumen', wrap(async (req, res) => {
   const porProducto = {}; peds.forEach((p) => p.lineas.forEach((l) => { porProducto[l.nombre] = porProducto[l.nombre] || { q: 0, total: 0 }; porProducto[l.nombre].q += l.cantidad; porProducto[l.nombre].total = M.r2(porProducto[l.nombre].total + l.importe); }));
   const porPago = { efectivo: 0, tarjeta: 0, transferencia: 0 }; peds.forEach((p) => p.pago && p.pago.pagos.forEach((x) => porPago[x.metodo] = M.r2((porPago[x.metodo] || 0) + x.monto)));
   const porServicio = { mostrador: 0, domicilio: 0, mesa: 0 }; peds.forEach((p) => porServicio[p.tipoServicio] = M.r2(porServicio[p.tipoServicio] + p.total));
-  res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, porProducto, porPago, porServicio });
+  const propinas = M.r2(peds.reduce((s, p) => s + (p.propina ? p.propina.monto : 0), 0));
+  res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, propinas, porProducto, porPago, porServicio });
 }));
 
 // estado completo (debug / export)
