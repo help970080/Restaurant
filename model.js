@@ -20,6 +20,7 @@ function estadoInicial(meta = {}) {
     promociones: {},
     empleados: {},
     asistencias: [],
+    reservas: [],
     pedidos: {},
     mesas: {},
     caja: { turnos: {} },
@@ -47,7 +48,10 @@ const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0
   activo: true, fechaBaja: null, creado: new Date().toISOString(),
 });
 
-// ---- Promociones ------------------------------------------------------------
+const crearReserva = ({ sucursalId = null, nombre, telefono = '', personas = 2, fecha, hora, mesaId = null, notas = '', creadoPor = '' }) => ({
+  id: uid('res'), sucursalId, nombre: String(nombre || '').trim(), telefono, personas: Math.max(1, +personas || 1),
+  fecha, hora, mesaId: mesaId || null, notas, estado: 'pendiente', creado: new Date().toISOString(), creadoPor,
+});
 const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0 }) => ({ id: uid('promo'), nombre, tipo, valor, activo: true });
 
 // Receta agregada de un combo: suma las recetas de sus productos componentes
@@ -209,7 +213,7 @@ function descontarInventario(e, ped) {
 
 module.exports = {
   uid, r2, estadoInicial,
-  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
