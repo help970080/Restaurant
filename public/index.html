@@ -336,7 +336,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.3 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.4 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -804,12 +804,34 @@ async function vMesas(){
     $('#crear1').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
     return;
   }
-  $('#view').innerHTML=`<div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center">Salón · ${sucNombre} <button class="btn" id="addMesa" style="font-size:13px">+ Agregar mesa</button></h3>
-    <div class="mesas">${mesas.map(m=>`<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block;border:none;cursor:pointer">${mesaArt(m.estado)}</button>
-      <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div><div class="ms">${lbl[m.estado]}</div>${m.estado!=='libre'?`<div class="mtot">${money(m.total)}</div>`:''}${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}</div></div>`).join('')}</div></div>`;
-  $('#addMesa').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
+  pintarSalon(mesas,sucNombre);
+  kdsTimer=setInterval(refrescarMesas,8000); // caja cobra -> la mesa se libera -> el mesero lo ve aquí
+}
+function mesasGrid(mesas){
+  const lbl={libre:'Libre',ocupada:'Ocupada',cuenta:'Pidió cuenta'};
+  return mesas.map(m=>`<div class="mesa ${m.estado}"><button data-abrir="${m.id}" style="background:none;padding:0;width:100%;display:block;border:none;cursor:pointer">${mesaArt(m.estado)}</button>
+      <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div><div class="ms">${lbl[m.estado]}</div>${m.estado!=='libre'?`<div class="mtot">${money(m.total)}</div>`:''}${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}</div></div>`).join('');
+}
+function wireSalon(){
   document.querySelectorAll('[data-abrir]').forEach(b=>b.onclick=()=>abrirMesa(b.dataset.abrir));
-  document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);vMesas();});
+  document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();try{await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);}catch(e){toast(e.message);}refrescarMesas();});
+}
+function pintarSalon(mesas,sucNombre){
+  app._mesaNum={};app._mesaPrev={};mesas.forEach(m=>{app._mesaNum[m.id]=m.nombre.replace('Mesa ','');app._mesaPrev[m.id]=m.estado;});
+  $('#view').innerHTML=`<div class="panel"><h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Salón · ${sucNombre} <span class="small" style="font-weight:400;color:var(--muted)">· se actualiza solo</span><button class="btn" id="addMesa" style="font-size:13px;margin-left:auto">+ Agregar mesa</button></h3>
+    <div class="mesas">${mesasGrid(mesas)}</div></div>`;
+  $('#addMesa').onclick=async()=>{await API.post('/api/mesas',{sucursalId:app.sucursalId});vMesas();};
+  wireSalon();
+}
+async function refrescarMesas(){
+  if(app.vista!=='mesas')return;
+  let mesas;try{mesas=await API.get('/api/mesas?sucursalId='+app.sucursalId);}catch{return;}
+  const cont=document.querySelector('.mesas');if(!cont)return;
+  const prev=app._mesaPrev||{};
+  mesas.forEach(m=>{const antes=prev[m.id];if(antes&&antes!=='libre'&&m.estado==='libre')toast('✓ '+m.nombre+' cobrada y liberada');});
+  app._mesaNum={};app._mesaPrev={};mesas.forEach(m=>{app._mesaNum[m.id]=m.nombre.replace('Mesa ','');app._mesaPrev[m.id]=m.estado;});
+  cont.innerHTML=mesasGrid(mesas);
+  wireSalon();
 }
 async function abrirMesa(mesaId){
   if(!app.turno){toast('Abre el turno antes de atender mesas');return;}
