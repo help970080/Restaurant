@@ -762,6 +762,48 @@ app.post('/api/menu/precios/aplicar', soloAdmin, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 //  MESAS
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  RESERVAS
+// ---------------------------------------------------------------------------
+app.get('/api/reservas', wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId, fecha } = req.query;
+  let arr = (e.reservas || []).filter((r) => (!sucursalId || r.sucursalId === sucursalId) && (!fecha || r.fecha === fecha));
+  arr = arr.map((r) => ({ ...r, mesaNombre: r.mesaId && e.mesas[r.mesaId] ? e.mesas[r.mesaId].nombre : null }));
+  arr.sort((a, b) => (a.fecha + (a.hora || '')).localeCompare(b.fecha + (b.hora || '')));
+  res.json(arr);
+}));
+app.post('/api/reservas', puedeCaja, wrap(async (req, res) => {
+  const { sucursalId, nombre, telefono, personas, fecha, hora, mesaId, notas } = req.body || {};
+  if (!nombre || !fecha || !hora) throw bad('Faltan nombre, fecha u hora');
+  const r = await withState((e, c) => {
+    if (!e.reservas) e.reservas = [];
+    if (mesaId && !e.mesas[mesaId]) throw bad('Mesa inexistente');
+    const nueva = M.crearReserva({ sucursalId: sucursalId || null, nombre, telefono, personas, fecha, hora, mesaId, notas, creadoPor: c.username });
+    e.reservas.unshift(nueva);
+    return nueva;
+  });
+  res.json(r);
+}));
+app.patch('/api/reservas/:id', puedeCaja, wrap(async (req, res) => {
+  const b = req.body || {};
+  const r = await withState((e) => {
+    const x = (e.reservas || []).find((z) => z.id === req.params.id);
+    if (!x) throw bad('Reserva inexistente', 404);
+    for (const k of ['nombre', 'telefono', 'personas', 'fecha', 'hora', 'mesaId', 'notas', 'estado']) if (k in b) x[k] = b[k];
+    if ('personas' in b) x.personas = Math.max(1, +b.personas || 1);
+    return x;
+  });
+  res.json(r);
+}));
+app.delete('/api/reservas/:id', puedeCaja, wrap(async (req, res) => {
+  await withState((e) => { e.reservas = (e.reservas || []).filter((z) => z.id !== req.params.id); return true; });
+  res.json({ ok: true });
+}));
+
+// ---------------------------------------------------------------------------
+//  RESERVAS placeholder end
+// ---------------------------------------------------------------------------
 app.get('/api/mesas', wrap(async (req, res) => {
   const e = await readState();
   const { sucursalId } = req.query;
