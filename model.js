@@ -112,7 +112,7 @@ function recalcularPedido(p) {
   p.subtotal = r2(p.lineas.reduce((s, l) => s + l.importe, 0));
   let d = 0;
   if (p.descuento) d = p.descuento.tipo === 'porcentaje' ? p.subtotal * (p.descuento.valor / 100) : p.descuento.valor;
-  p.total = r2(p.subtotal + (p.costoEnvio || 0) - d + (p.propina || 0));
+  p.total = r2(p.subtotal + (p.costoEnvio || 0) - d); // la propina NO entra al total del consumo
   return p;
 }
 
