@@ -30,6 +30,11 @@ function auth(req, res, next) {
 
 const ctx = () => als.getStore();
 
+// Corre una función dentro del contexto de un tenant SIN auth (para el menú QR público).
+function runPublic(row, fn) {
+  return als.run({ row: Number(row), rol: 'public', username: 'qr', sucursalId: null }, fn);
+}
+
 // ---- Acceso al estado del tenant del request -------------------------------
 function readState() {
   const c = ctx();
@@ -46,4 +51,4 @@ async function withState(fn) {
   return result;
 }
 
-module.exports = { als, firmarToken, auth, ctx, readState, withState };
+module.exports = { als, firmarToken, auth, ctx, readState, withState, runPublic };
