@@ -153,8 +153,15 @@
 
   /* KDS */
   .kds{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
-  .ko{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .ko{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;border-left-width:6px}
   .ko.listo{border-color:var(--green)}
+  .ko-fresh{border-left-color:var(--green)}.ko-warn{border-left-color:var(--accent)}.ko-late{border-left-color:var(--red)}
+  .ko-late .ko-head .timer{color:var(--red);font-weight:700}.ko-warn .ko-head .timer{color:var(--accent-ink)}
+  .ko-ready{border-left-color:var(--green);opacity:.85}
+  .allday{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:12px;padding:10px 14px;margin-bottom:14px}
+  .allday .ad-lbl{font-weight:700;font-size:13px;opacity:.8}
+  .allday .ad-chip{background:rgba(255,255,255,.14);padding:5px 11px;border-radius:999px;font-size:13px}
+  .allday .ad-chip b{color:var(--accent)}
   .ko-head{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;font-weight:600;border-bottom:1px solid var(--line)}
   .ko-head .folio{font-family:var(--mono)}.ko-head .timer{font-family:var(--mono);font-size:13px}.ko-head .timer.warn{color:var(--red)}
   .ko-srv{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:0 14px;margin-top:6px}
@@ -251,6 +258,7 @@ const API = {
   get(p){return this.call('GET',p);},post(p,b){return this.call('POST',p,b);},patch(p,b){return this.call('PATCH',p,b);},del(p){return this.call('DELETE',p);},
 };
 const money=n=>'$'+(+(n||0)).toFixed(2);
+function ivaTasa(){const f=(app.tenant&&app.tenant.fiscal)||app._fiscal||{};return f.ivaTasa!=null?+f.ivaTasa:16;}
 const $=s=>document.querySelector(s);
 const ov=$('#ov'),modal=$('#modal');
 function closeModal(){ov.classList.remove('show');modal.innerHTML='';}
@@ -363,7 +371,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.10 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.12 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -681,6 +689,7 @@ function ticketHTML(p){
   ${desc?`<div class="row"><span>Descuento${p.descuento&&p.descuento.motivo?' ('+p.descuento.motivo+')':''}</span><span>-${money(desc)}</span></div>`:''}
   ${p.costoEnvio?`<div class="row"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}
   <div class="row tot"><span>TOTAL</span><span>${money(p.total)}</span></div>
+  ${(()=>{const iva=ivaTasa();if(!iva)return '';const base=Math.round(p.total/(1+iva/100)*100)/100;const imp=Math.round((p.total-base)*100)/100;return `<div class="row" style="font-size:11px"><span>Base gravable</span><span>${money(base)}</span></div><div class="row" style="font-size:11px"><span>IVA ${iva}% (incluido)</span><span>${money(imp)}</span></div>`;})()}
   ${p.propina&&p.propina.monto?`<div class="row"><span>Propina (${nm[p.propina.metodo]||p.propina.metodo})</span><span>${money(p.propina.monto)}</span></div><div class="row tot"><span>TOTAL + PROPINA</span><span>${money(p.total+p.propina.monto)}</span></div>`:''}<hr>
   <div class="row"><span>Pago</span><span>${nm[p.pago.metodo]||p.pago.metodo}</span></div>
   ${p.pago.metodo==='efectivo'&&p.pago.recibido?`<div class="row"><span>Recibido</span><span>${money(p.pago.recibido)}</span></div><div class="row"><span>Cambio</span><span>${money(p.pago.cambio||0)}</span></div>`:''}
@@ -713,10 +722,18 @@ async function pintarCocina(){
   const ordenes=await API.get('/api/cocina?sucursalId='+app.sucursalId);
   if(!ordenes.length){$('#view').innerHTML=`<div class="panel"><div class="empty">No hay órdenes en cocina.<br>Cobra un pedido (o manda una comanda de mesa) y aparecerá aquí.</div></div>`;return;}
   const now=Date.now();
-  $('#view').innerHTML=`<div class="kds">${ordenes.map(p=>{
+  // Conteo all-day: total de piezas pendientes por producto (no entregadas)
+  const allday={};
+  ordenes.forEach(p=>{if(!p.listo)p.items.forEach(l=>{allday[l.nombre]=(allday[l.nombre]||0)+l.cantidad;});});
+  const adArr=Object.entries(allday).sort((a,b)=>b[1]-a[1]);
+  const tier=min=>min>=12?'late':min>=6?'warn':'fresh';
+  $('#view').innerHTML=`
+  ${adArr.length?`<div class="allday"><span class="ad-lbl">Por preparar:</span>${adArr.map(([n,q])=>`<span class="ad-chip"><b>${q}×</b> ${n}</span>`).join('')}</div>`:''}
+  <div class="kds">${ordenes.map(p=>{
     const min=Math.floor((now-new Date(p.recibido).getTime())/60000);
-    const srv=p.tipoServicio==='mesa'?mesaNombre(p.mesaId):p.tipoServicio;
-    return `<div class="ko ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer ${min>=10?'warn':''}">${min} min</span></div><div class="ko-srv">${srv}</div>
+    const srv=p.tipoServicio==='mesa'?mesaNombre(p.mesaId):(p.tipoServicio==='domicilio'?'🛵 Domicilio':'🧾 Mostrador');
+    const tk=p.listo?'ready':tier(min);
+    return `<div class="ko ko-${tk} ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer">${p.listo?'LISTO':min+' min'}</span></div><div class="ko-srv">${srv}</div>
       <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
       <div class="ko-foot">${p.listo?`<button class="b-entregar" data-entregar="${p.folio}">Entregar</button>`:`<button class="b-listo" data-listo="${p.folio}">Marcar listo</button>`}</div></div>`;}).join('')}</div>`;
   document.querySelectorAll('[data-listo]').forEach(b=>b.onclick=async()=>{await API.post(`/api/cocina/${b.dataset.listo}/listo`);pintarCocina();});
@@ -912,8 +929,10 @@ function mesasGrid(mesas){
       <div class="mbody"><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:18px">${m.nombre}</div>
         <div class="ms">${lbl[m.estado]}</div>
         ${abierta?`<div class="mtot">${money(m.total)}${m.items?` · ${m.items} item${m.items>1?'s':''}`:''}</div>`:''}
+        ${abierta&&m.atiende?`<div class="ms" style="color:var(--accent-ink)">👤 ${m.atiende}</div>`:''}
         ${m.estado==='ocupada'?`<button class="cuenta-btn" data-cuenta="${m.id}">Pedir cuenta</button>`:''}
         ${pc&&abierta?`<button class="pay-btn" data-cobrarmesa="${m.id}">Cobrar ${money(m.total)}</button>`:''}
+        ${abierta?`<button class="lib-btn" data-acc="${m.id}" style="border-style:solid">⋯ Mover · Juntar · Mesero</button>`:''}
         ${pc&&abierta?`<button class="lib-btn" data-liberar="${m.id}">Liberar</button>`:''}
       </div></div>`;
   }).join('');
@@ -942,6 +961,22 @@ function wireSalon(){
   document.querySelectorAll('[data-cuenta]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();try{await API.post(`/api/mesas/${b.dataset.cuenta}/cuenta`);refrescarMesas();}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-cobrarmesa]').forEach(b=>b.onclick=(ev)=>{ev.stopPropagation();cobrarMesa(b.dataset.cobrarmesa);});
   document.querySelectorAll('[data-liberar]').forEach(b=>b.onclick=(ev)=>{ev.stopPropagation();confirmarLiberar(b.dataset.liberar);});
+  document.querySelectorAll('[data-acc]').forEach(b=>b.onclick=(ev)=>{ev.stopPropagation();modalMesaAcciones(b.dataset.acc);});
+}
+function modalMesaAcciones(mesaId){
+  const m=(app._mesas||[]).find(x=>x.id===mesaId);if(!m){toast('Mesa no encontrada');return;}
+  const libres=(app._mesas||[]).filter(x=>x.estado==='libre'&&x.id!==mesaId);
+  const ocupadas=(app._mesas||[]).filter(x=>(x.estado==='ocupada'||x.estado==='cuenta')&&x.id!==mesaId);
+  modal.innerHTML=`<h3>${m.nombre} · acciones</h3><div class="sub">${m.items||0} item(s) · ${money(m.total)}${m.atiende?' · atiende '+m.atiende:''}</div>
+    <div class="field"><label>Cambiar de mesa (transferir)</label><div style="display:flex;gap:8px"><select id="accDest">${libres.length?libres.map(x=>`<option value="${x.id}">${x.nombre}</option>`).join(''):'<option value="">No hay mesas libres</option>'}</select><button class="btn" id="accMover" ${libres.length?'':'disabled'} style="white-space:nowrap">Mover</button></div></div>
+    <div class="field"><label>Juntar con otra mesa (trae su cuenta aquí)</label><div style="display:flex;gap:8px"><select id="accJunt">${ocupadas.length?ocupadas.map(x=>`<option value="${x.id}">${x.nombre} · ${money(x.total)}</option>`).join(''):'<option value="">No hay otras cuentas abiertas</option>'}</select><button class="btn" id="accJuntar" ${ocupadas.length?'':'disabled'} style="white-space:nowrap">Juntar</button></div></div>
+    <div class="field"><label>Mesero que atiende</label><div style="display:flex;gap:8px"><input id="accMesero" value="${m.atiende||''}" placeholder="Nombre del mesero"><button class="btn" id="accAtiende" style="white-space:nowrap">Guardar</button></div></div>
+    <div class="modal-foot"><button class="btn-ghost" id="accCerrar">Cerrar</button></div>`;
+  ov.classList.add('show');
+  $('#accCerrar').onclick=closeModal;
+  if($('#accMover'))$('#accMover').onclick=async()=>{const dest=$('#accDest').value;if(!dest)return;try{await API.post('/api/pedidos/'+m.pedidoFolio+'/transferir',{mesaDestinoId:dest});closeModal();toast('Cuenta movida');refrescarVistaCaja();}catch(e){toast(e.message);}};
+  if($('#accJuntar'))$('#accJuntar').onclick=async()=>{const orig=$('#accJunt').value;if(!orig)return;if(!confirm('¿Juntar esa cuenta en '+m.nombre+'?'))return;try{await API.post('/api/mesas/'+mesaId+'/juntar',{origenId:orig});closeModal();toast('Mesas juntadas');refrescarVistaCaja();}catch(e){toast(e.message);}};
+  $('#accAtiende').onclick=async()=>{if(!m.pedidoFolio){toast('La mesa no tiene cuenta');return;}try{await API.post('/api/pedidos/'+m.pedidoFolio+'/atiende',{atiende:$('#accMesero').value});closeModal();toast('Mesero actualizado');refrescarVistaCaja();}catch(e){toast(e.message);}};
 }
 async function refrescarMesas(){
   if(app.vista!=='mesas'||ov.classList.contains('show'))return; // no refresques con un modal abierto (cobro)
@@ -1256,6 +1291,10 @@ async function vAjustes(){
       ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>IVA en tickets <span class="small">los precios del menú ya incluyen IVA; aquí solo se desglosa</span></h3>
+    <div class="cols2"><div class="field"><label>Tasa de IVA (%)</label><input id="fxIva" type="number" class="mono" value="${fx.ivaTasa!=null?fx.ivaTasa:16}" placeholder="16"></div>
+    <div class="field" style="display:flex;align-items:flex-end"><div class="small" style="color:var(--muted)">Pon 0 para no desglosar IVA (ej. si estás en RIF/RESICO sin trasladar IVA).</div></div></div>
+    <button class="btn accent" id="fxIvaSave">Guardar IVA</button></div>
   <div class="panel" style="margin-top:16px"><h3>Datos para contratos <span class="small">del comitente (restaurante) — se usan al generar contratos de comisión</span></h3>
     <div class="cols2"><div class="field"><label>Razón social / nombre fiscal</label><input id="fxRazon" value="${fx.razonSocial||''}" placeholder="Ej. Jefe Burgers SA de CV o tu nombre"></div>
     <div class="field"><label>RFC</label><input id="fxRfc" value="${fx.rfc||''}" class="mono"></div></div>
@@ -1277,6 +1316,10 @@ async function vAjustes(){
   document.querySelectorAll('[data-togglecanal]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/canales/'+b.dataset.togglecanal,{activo:b.dataset.act!=='true'});app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-delcanal]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar este canal?'))return;try{await API.del('/api/canales/'+b.dataset.delcanal);app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
   $('#addCanal').onclick=modalNuevoCanal;
+  if($('#fxIvaSave'))$('#fxIvaSave').onclick=async()=>{
+    const ivaTasa=Math.max(0,+$('#fxIva').value||0);
+    try{const r=await API.patch('/api/config',{fiscal:{ivaTasa}});app._fiscal=r.fiscal;if(app.tenant)app.tenant.fiscal=r.fiscal;toast('IVA actualizado');}catch(e){toast(e.message);}
+  };
   if($('#fxSave'))$('#fxSave').onclick=async()=>{
     const fiscal={razonSocial:$('#fxRazon').value.trim(),rfc:$('#fxRfc').value.trim(),domicilio:$('#fxDom').value.trim(),repLegal:$('#fxRep').value.trim(),ciudad:$('#fxCiudad').value.trim()};
     try{await API.patch('/api/config',{fiscal});app._fiscal=fiscal;toast('Datos para contratos guardados');}catch(e){toast(e.message);}
