@@ -218,6 +218,12 @@
   .cuentas-strip .cs-lbl{font-weight:700;font-size:13px;color:var(--accent-ink)}
   .cuentas-strip .cs-chip{background:var(--ink);color:#fff;border:none;border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;cursor:pointer}
   .cuentas-strip .cs-chip:hover{opacity:.88}
+  .tip-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .tip-row .tip-btn{padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);font-weight:600;font-size:13px;cursor:pointer}
+  .tip-row .tip-btn.active{background:var(--green);color:#fff;border-color:var(--green)}
+  .tip-row input{max-width:92px}
+  .prod.agotado{opacity:.5;filter:grayscale(.7);cursor:not-allowed;position:relative}
+  .prod .ago-badge{position:absolute;top:8px;left:8px;background:var(--red);color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;z-index:2}
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -355,7 +361,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.8 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.9 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -449,7 +455,7 @@ function vPOS(){
   const cat=app.menu.categorias[app.pos.cat];
   $('#view').innerHTML=`<div class="pos">
     <div class="pos-menu"><div id="cuentasAbiertas"></div><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
-      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>`<button class="prod" data-prod="${p.id}">${prodArt(p,cat.nombre)}<div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`).join('')}</div></div>
+      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>{const ago=p.disponible===false;return `<button class="prod${ago?' agotado':''}" data-prod="${p.id}"${ago?' disabled':''}>${prodArt(p,cat.nombre)}${ago?'<span class="ago-badge">Agotado</span>':''}<div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`;}).join('')}</div></div>
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}${c.comisionPct?` · ${c.comisionPct}%`:''}</button>`).join('')}</div>`:''}
@@ -584,19 +590,28 @@ function cobrar(){
   const canal=(app.canales||[]).find(c=>c.id===ped.canalId);
   const metodos=canal&&canal.esApp?['plataforma','tarjeta','efectivo']:['efectivo','tarjeta','transferencia'];
   const nm={plataforma:'Plataforma',efectivo:'Efectivo',tarjeta:'Tarjeta',transferencia:'Transferencia'};
-  let metodo=metodos[0];
+  const r2c=n=>Math.round(n*100)/100;
+  let metodo=metodos[0];let tipPct=0;let tipMonto=0;
+  const propina=()=>tipPct!=null?r2c(ped.total*tipPct/100):r2c(tipMonto||0);
+  const totalCon=()=>r2c(ped.total+propina());
   const render=()=>{
-    modal.innerHTML=`<h3>Cobrar ${money(ped.total)}</h3><div class="sub">${ped.folio}${canal&&canal.esApp?' · '+canal.nombre:''}</div>
+    const pr=propina(),tc=totalCon();
+    modal.innerHTML=`<h3 id="cobTit">Cobrar ${money(tc)}</h3><div class="sub" id="cobSub">${ped.folio}${canal&&canal.esApp?' · '+canal.nombre:''}${pr>0?' · propina '+money(pr):''}</div>
       <div class="paytabs">${metodos.map(m=>`<button data-m="${m}" class="${m===metodo?'active':''}">${nm[m]}</button>`).join('')}</div>
-      ${metodo==='efectivo'?`<div class="field"><label>Efectivo recibido</label><input id="recib" type="number" class="mono" placeholder="${ped.total}"></div><div class="cambio" id="cambio"></div>`:`<div class="bignum">${money(ped.total)}</div>${metodo==='plataforma'?'<div class="sub" style="text-align:center">El cobro lo hace la plataforma; aquí solo se registra la venta.</div>':''}`}
+      ${metodo!=='plataforma'?`<div class="field"><label>Propina (va completa al personal · no es venta)</label><div class="tip-row">${[0,10,15,20].map(p=>`<button class="tip-btn ${tipPct===p?'active':''}" data-tip="${p}">${p===0?'Sin':p+'%'}</button>`).join('')}<input id="tipC" type="number" class="mono" placeholder="$ otra" value="${tipPct==null?tipMonto:''}"></div></div>`:''}
+      ${metodo==='efectivo'?`<div class="field"><label>Efectivo recibido</label><input id="recib" type="number" class="mono" placeholder="${tc}"></div><div class="cambio" id="cambio"></div>`:`<div class="bignum">${money(tc)}</div>${metodo==='plataforma'?'<div class="sub" style="text-align:center">El cobro lo hace la plataforma; aquí solo se registra la venta.</div>':''}`}
       <div class="modal-foot"><button class="btn-ghost" id="pCancel">Cancelar</button><button class="btn-primary" id="pOk">Confirmar cobro</button></div>`;
+    const actualizaCambio=()=>{const ri=$('#recib');if(!ri)return;const r=+ri.value||0,t=totalCon(),c=r-t;$('#cambio').textContent=r>0?(c>=0?'Cambio: '+money(c):'Faltan '+money(-c)):'';$('#cambio').style.color=c<0?'var(--red)':'var(--green)';};
     modal.querySelectorAll('.paytabs button').forEach(b=>b.onclick=()=>{metodo=b.dataset.m;render();});
-    if(metodo==='efectivo'){const ri=$('#recib');ri.addEventListener('input',()=>{const r=+ri.value||0,c=r-ped.total;$('#cambio').textContent=r>0?(c>=0?'Cambio: '+money(c):'Faltan '+money(-c)):'';$('#cambio').style.color=c<0?'var(--red)':'var(--green)';});setTimeout(()=>ri.focus(),50);}
+    modal.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>{tipPct=+b.dataset.tip;tipMonto=0;render();});
+    const tcInp=$('#tipC');if(tcInp)tcInp.oninput=()=>{tipPct=null;tipMonto=+tcInp.value||0;const t=totalCon();$('#cobTit').textContent='Cobrar '+money(t);$('#cobSub').textContent=ped.folio+(propina()>0?' · propina '+money(propina()):'');const ri=$('#recib');if(ri)ri.placeholder=t;const bn=modal.querySelector('.bignum');if(bn)bn.textContent=money(t);actualizaCambio();};
+    if(metodo==='efectivo'){const ri=$('#recib');ri.addEventListener('input',actualizaCambio);setTimeout(()=>ri.focus(),50);}
     $('#pCancel').onclick=closeModal;
-    $('#pOk').onclick=async()=>{let recibido=0,pagos;
-      if(metodo==='efectivo'){recibido=+($('#recib').value)||ped.total;if(recibido<ped.total){toast('El efectivo no alcanza');return;}pagos=[{metodo:'efectivo',monto:ped.total}];}
+    $('#pOk').onclick=async()=>{const pr=propina(),tc=totalCon();let recibido=0,pagos;
+      if(metodo==='efectivo'){recibido=+($('#recib').value)||tc;if(recibido<tc){toast('El efectivo no alcanza');return;}pagos=[{metodo:'efectivo',monto:ped.total}];}
       else pagos=[{metodo,monto:ped.total}];
-      try{const p=await API.post(`/api/pedidos/${ped.folio}/cobrar`,{pagos,recibido});closeModal();ticketFinal(p);
+      const propinaObj=pr>0?{monto:pr,metodo}:null;
+      try{const p=await API.post(`/api/pedidos/${ped.folio}/cobrar`,{pagos,recibido,propina:propinaObj});closeModal();ticketFinal(p);
         const wasMesa=app.pos.tipoServicio==='mesa';app.pos={folio:null,pedido:null,tipoServicio:wasMesa?'mostrador':app.pos.tipoServicio,mesaId:null,cat:app.pos.cat};renderNav();
       }catch(e){toast(e.message);}};
   };
@@ -634,7 +649,8 @@ function ticketHTML(p){
   <div class="row"><span>Subtotal</span><span>${money(p.subtotal)}</span></div>
   ${desc?`<div class="row"><span>Descuento${p.descuento&&p.descuento.motivo?' ('+p.descuento.motivo+')':''}</span><span>-${money(desc)}</span></div>`:''}
   ${p.costoEnvio?`<div class="row"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}
-  <div class="row tot"><span>TOTAL</span><span>${money(p.total)}</span></div><hr>
+  <div class="row tot"><span>TOTAL</span><span>${money(p.total)}</span></div>
+  ${p.propina&&p.propina.monto?`<div class="row"><span>Propina (${nm[p.propina.metodo]||p.propina.metodo})</span><span>${money(p.propina.monto)}</span></div><div class="row tot"><span>TOTAL + PROPINA</span><span>${money(p.total+p.propina.monto)}</span></div>`:''}<hr>
   <div class="row"><span>Pago</span><span>${nm[p.pago.metodo]||p.pago.metodo}</span></div>
   ${p.pago.metodo==='efectivo'&&p.pago.recibido?`<div class="row"><span>Recibido</span><span>${money(p.pago.recibido)}</span></div><div class="row"><span>Cambio</span><span>${money(p.pago.cambio||0)}</span></div>`:''}
   <div class="gr">¡Gracias por su compra!<br>${(app.tenant&&app.tenant.nombre)||''}</div>
@@ -648,7 +664,7 @@ function imprimirTicket(p){
 }
 function ticketFinal(p){
   modal.innerHTML=`<h3>${p.folio}</h3><div class="sub">${p.tipoServicio} · cobrado</div>
-    <div class="breakdown">${p.lineas.map(l=>`<div class="b"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>`).join('')}${p.costoEnvio?`<div class="b"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}<div class="b hl"><span>Total</span><span>${money(p.total)}</span></div><div class="b"><span>Pago (${p.pago.metodo})</span><span>${money(p.pago.recibido||p.total)}</span></div>${p.pago.cambio?`<div class="b"><span>Cambio</span><span>${money(p.pago.cambio)}</span></div>`:''}</div>
+    <div class="breakdown">${p.lineas.map(l=>`<div class="b"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>`).join('')}${p.costoEnvio?`<div class="b"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}<div class="b hl"><span>Total</span><span>${money(p.total)}</span></div>${p.propina&&p.propina.monto?`<div class="b"><span>Propina</span><span>${money(p.propina.monto)}</span></div>`:''}<div class="b"><span>Pago (${p.pago.metodo})</span><span>${money(p.pago.recibido||p.total)}</span></div>${p.pago.cambio?`<div class="b"><span>Cambio</span><span>${money(p.pago.cambio)}</span></div>`:''}</div>
     <div class="modal-foot"><button class="btn-ghost" id="okPrint">🖨 Imprimir ticket</button><button class="btn-primary" id="okDone">Listo</button></div>`;
   ov.classList.add('show');
   $('#okPrint').onclick=()=>imprimirTicket(p);
@@ -684,10 +700,11 @@ async function vMenu(){
   const fcMap={};inv.foodCost.forEach(f=>fcMap[f.id]=f);
   $('#view').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn dark" id="addProd">+ Nuevo producto</button></div>
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
-    <table><thead><tr><th>Producto</th><th>Destino</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];return `<tr><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td></tr>`;}).join('')}
+    <table><thead><tr><th>Producto</th><th>Destino</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th></tr></thead><tbody>
+    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}`;
   $('#addProd').onclick=modalNuevoProducto;
+  document.querySelectorAll('[data-86]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/menu/productos/'+b.dataset['86'],{disponible:b.dataset.disp==='1'});app.menu=await API.get('/api/menu');toast(b.dataset.disp==='1'?'Producto reactivado':'Producto marcado como agotado');vMenu();}catch(e){toast(e.message);}});
 }
 function modalNuevoProducto(){
   modal.innerHTML=`<h3>Nuevo producto</h3><div class="sub">Se agrega al menú de inmediato</div>
@@ -974,6 +991,7 @@ async function vCaja(){
       <div class="bar-row"><div class="bn">Efectivo</div><div class="bt"><div class="bf" style="width:${pct(resumen.porPago.efectivo,resumen.venta)}%;background:var(--green)"></div></div><div class="bv">${money(resumen.porPago.efectivo)}</div></div>
       <div class="bar-row"><div class="bn">Tarjeta</div><div class="bt"><div class="bf" style="width:${pct(resumen.porPago.tarjeta,resumen.venta)}%;background:var(--blue)"></div></div><div class="bv">${money(resumen.porPago.tarjeta)}</div></div>
       <div class="bar-row"><div class="bn">Transfer.</div><div class="bt"><div class="bf" style="width:${pct(resumen.porPago.transferencia,resumen.venta)}%;background:var(--accent)"></div></div><div class="bv">${money(resumen.porPago.transferencia)}</div></div>
+      ${resumen.propinas?`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)"><span style="font-weight:600">Propinas a repartir</span><span style="font-family:'Bricolage Grotesque';font-weight:700;color:var(--green)">${money(resumen.propinas)}</span></div><div class="small" style="color:var(--muted)">No es venta; va completa al personal.</div>`:''}
       <div style="margin-top:14px"><h3 style="font-size:14px">Últimas ventas</h3>${recientes.length?`<table><tbody>${recientes.map(p=>`<tr><td class="mono" style="font-size:12px">${p.folio}</td><td>${new Date(p.actualizado||p.creado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(p.total)}</td><td class="num"><button class="btn" data-print="${p.folio}" style="padding:6px 10px;font-size:12px;min-height:auto">🖨</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Sin ventas aún.</div>'}</div>
     </div>
     <div class="panel"><h3>Reservas de hoy <span class="small">${resvHoy.length}</span></h3>
