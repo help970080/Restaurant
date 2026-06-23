@@ -212,6 +212,10 @@
   .resv-sub{color:var(--muted);font-size:13px;margin-top:2px}
   .resv-acc{display:flex;gap:6px;flex-wrap:wrap}
   .chip.ok{background:#e7f5ec;color:var(--green)}
+  .cuentas-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff7ec;border:1px solid var(--accent);border-radius:12px;padding:8px 12px;margin-bottom:12px}
+  .cuentas-strip .cs-lbl{font-weight:700;font-size:13px;color:var(--accent-ink)}
+  .cuentas-strip .cs-chip{background:var(--ink);color:#fff;border:none;border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;cursor:pointer}
+  .cuentas-strip .cs-chip:hover{opacity:.88}
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -348,7 +352,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.6 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.7 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -441,7 +445,7 @@ function vPOS(){
   const ped=app.pos.pedido;const enMesa=app.pos.tipoServicio==='mesa';const enDom=app.pos.tipoServicio==='domicilio';
   const cat=app.menu.categorias[app.pos.cat];
   $('#view').innerHTML=`<div class="pos">
-    <div class="pos-menu"><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
+    <div class="pos-menu"><div id="cuentasAbiertas"></div><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
       <div class="pgrid">${prodsDe(app.pos.cat).map(p=>`<button class="prod" data-prod="${p.id}">${prodArt(p,cat.nombre)}<div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`).join('')}</div></div>
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
@@ -454,7 +458,7 @@ function vPOS(){
         <div class="trow" id="tDescRow" style="display:none;color:var(--green)"><span id="tDescLbl">Descuento</span><span class="mono" id="tDesc">$0.00</span></div>
         <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
         <div class="trow tot"><span>Total</span><span class="mono" id="tTotal">$0.00</span></div>
-        ${(()=>{const pc=puedeCobrar();return enMesa?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button>${pc?`<button class="pay" id="btnCobrar">Cobrar cuenta</button>`:''}</div>`:enDom?`<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button>${pc?`<button class="pay" id="btnCobrar">Cobrar</button>`:''}</div>`:pc?`<button class="pay" id="btnCobrar" disabled>Cobrar</button>`:`<div class="small" style="text-align:center;color:var(--muted);padding:10px">El cobro lo realiza caja</div>`;})()}
+        ${(()=>{const pc=puedeCobrar();return `<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button>${pc?`<button class="pay" id="btnCobrar">Cobrar${enMesa?' cuenta':''}</button>`:''}</div>${pc?'':`<div class="small" style="text-align:center;color:var(--muted);padding:8px">El cobro lo realiza caja</div>`}`;})()}
       </div></div></div>`;
   document.querySelectorAll('.cat').forEach(b=>b.onclick=()=>{app.pos.cat=b.dataset.cat;vPOS();});
   document.querySelectorAll('.svc button').forEach(b=>b.onclick=()=>onSvc(b.dataset.svc));
@@ -467,6 +471,7 @@ function vPOS(){
   if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
   if($('#btnComanda'))$('#btnComanda').onclick=mandarComanda;
   renderLines();
+  cargarCuentasAbiertasPOS();
 }
 function mesaNombre(id){return 'Mesa '+(app._mesaNum&&app._mesaNum[id]||'');}
 function onSvc(s){
@@ -527,7 +532,35 @@ function modalModificadores(prod){
 }
 async function mandarComanda(){
   if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
-  try{const r=await API.post(`/api/pedidos/${app.pos.folio}/comanda`);toast(r.enviadas?r.enviadas+' a cocina':'Nada nuevo que mandar');renderNav();}catch(e){toast(e.message);}
+  const tipo=app.pos.tipoServicio;
+  try{
+    const r=await API.post(`/api/pedidos/${app.pos.folio}/comanda`);
+    renderNav();
+    if(!puedeCobrar()&&(tipo==='mostrador'||tipo==='domicilio')){
+      // el mesero manda a cocina y deja la cuenta ABIERTA para que caja la cobre
+      toast('✓ Enviado a cocina · caja lo cobrará',{tipo:'ok',ms:4500});
+      app.pos={folio:null,pedido:null,tipoServicio:tipo,mesaId:null,cat:app.pos.cat};
+      vPOS();
+    }else{
+      toast(r.enviadas?r.enviadas+' a cocina':'Nada nuevo que mandar');
+    }
+  }catch(e){toast(e.message);}
+}
+async function cargarCuentasAbiertasPOS(){
+  if(!puedeCobrar())return;
+  const cont=$('#cuentasAbiertas');if(!cont)return;
+  let abiertos=[];try{abiertos=await API.get('/api/pedidos?estado=abierto&sucursalId='+app.sucursalId);}catch{return;}
+  abiertos=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length); // las mesas se cobran en la pestaña Mesas
+  if(!abiertos.length){cont.innerHTML='';return;}
+  cont.innerHTML=`<div class="cuentas-strip"><span class="cs-lbl">Cuentas por cobrar (${abiertos.length}):</span>${abiertos.map(p=>`<button class="cs-chip" data-cobrarped="${p.folio}">${p.tipoServicio==='domicilio'?'🛵 Domicilio':'🧾 Mostrador'}${p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:''} · ${money(p.total)}</button>`).join('')}</div>`;
+  cont.querySelectorAll('[data-cobrarped]').forEach(b=>b.onclick=()=>cobrarPedidoAbierto(b.dataset.cobrarped));
+}
+async function cobrarPedidoAbierto(folio){
+  try{const p=await API.get('/api/pedidos/'+folio);
+    if(!p.lineas.length){toast('El pedido no tiene productos');return;}
+    app.pos={folio:p.folio,pedido:p,tipoServicio:p.tipoServicio,mesaId:null,canalId:p.canalId,cat:app.pos.cat};
+    vPOS();
+  }catch(e){toast(e.message);}
 }
 async function aplicarPromocion(){
   if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
