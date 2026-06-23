@@ -480,13 +480,14 @@ app.get('/api/caja/turno-actual', wrap(async (req, res) => {
   const sucursalId = req.query.sucursalId;
   res.json(M.turnoAbierto(e, sucursalId) || null);
 }));
-app.post('/api/caja/movimiento', wrap(async (req, res) => {
+app.post('/api/caja/movimiento', puedeCaja, wrap(async (req, res) => {
   const { sucursalId, tipo, monto, motivo } = req.body || {};
   if (!['entrada', 'salida'].includes(tipo)) throw bad('tipo debe ser entrada o salida');
+  if (!(+monto > 0)) throw bad('Monto inválido');
   const t = await withState((e, c) => {
     const turno = M.turnoAbierto(e, sucursalId);
     if (!turno) throw bad('No hay turno abierto');
-    return M.registrarMovimiento(turno, { tipo, monto, motivo, usuario: c.username });
+    return M.registrarMovimiento(turno, { tipo, monto: M.r2(+monto), motivo: motivo || (tipo === 'entrada' ? 'Entrada de efectivo' : 'Retiro de efectivo'), usuario: c.username });
   });
   res.json(t);
 }));
@@ -826,17 +827,47 @@ app.post('/api/mesas/:id/cuenta', wrap(async (req, res) => {
 }));
 // Liberar/anular una mesa (caja, gerente o admin): cancela la cuenta abierta sin cobrarla
 app.post('/api/mesas/:id/liberar', puedeCaja, wrap(async (req, res) => {
-  const out = await withState((e) => {
+  const { motivo = '' } = req.body || {};
+  const out = await withState((e, c) => {
     const mesa = e.mesas[req.params.id];
     if (!mesa) throw bad('Mesa inexistente', 404);
     if (mesa.pedidoFolio && e.pedidos[mesa.pedidoFolio]) {
       const p = e.pedidos[mesa.pedidoFolio];
-      if (p.estado === 'abierto') { p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (ctx() || {}).username || null; }
+      if (p.estado === 'abierto') {
+        p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (c || {}).username || null; p.motivoCancelacion = motivo;
+        if (p.lineas.length) registrarCancelacion(e, p, mesa.nombre, motivo, c);
+      }
     }
     mesa.estado = 'libre'; mesa.pedidoFolio = null;
     return mesa;
   });
   res.json(out);
+}));
+// Cancelar un pedido abierto de mostrador/domicilio (caja/gerente/admin) con motivo
+app.post('/api/pedidos/:folio/cancelar', puedeCaja, wrap(async (req, res) => {
+  const { motivo = '' } = req.body || {};
+  const out = await withState((e, c) => {
+    const p = e.pedidos[req.params.folio];
+    if (!p) throw bad('Pedido inexistente', 404);
+    if (p.estado === 'cobrado') throw bad('No se puede cancelar un pedido ya cobrado', 409);
+    if (p.estado === 'cancelado') return p;
+    p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (c || {}).username || null; p.motivoCancelacion = motivo;
+    if (p.tipoServicio === 'mesa' && p.mesaId && e.mesas[p.mesaId]) { e.mesas[p.mesaId].estado = 'libre'; e.mesas[p.mesaId].pedidoFolio = null; }
+    if (p.lineas.length) registrarCancelacion(e, p, p.tipoServicio === 'domicilio' ? 'Domicilio' : 'Mostrador', motivo, c);
+    return p;
+  });
+  res.json(out);
+}));
+function registrarCancelacion(e, p, etiqueta, motivo, c) {
+  if (!e.cancelaciones) e.cancelaciones = [];
+  e.cancelaciones.unshift({ id: M.uid('canc'), folio: p.folio, sucursalId: p.sucursalId, tipoServicio: p.tipoServicio, etiqueta, items: p.lineas.length, total: p.total, motivo: motivo || '(sin motivo)', usuario: (c || {}).username || null, fecha: new Date().toISOString() });
+  if (e.cancelaciones.length > 2000) e.cancelaciones = e.cancelaciones.slice(0, 2000);
+}
+app.get('/api/cancelaciones', puedeCaja, wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId } = req.query;
+  const arr = (e.cancelaciones || []).filter((x) => !sucursalId || x.sucursalId === sucursalId);
+  res.json(arr.slice(0, 100));
 }));
 app.post('/api/mesas', wrap(async (req, res) => {
   const { sucursalId, nombre } = req.body || {};
