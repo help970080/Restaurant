@@ -162,6 +162,10 @@
   .allday .ad-lbl{font-weight:700;font-size:13px;opacity:.8}
   .allday .ad-chip{background:rgba(255,255,255,.14);padding:5px 11px;border-radius:999px;font-size:13px}
   .allday .ad-chip b{color:var(--accent)}
+  .hbars{display:flex;align-items:flex-end;gap:5px;height:130px;padding-top:8px}
+  .hbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+  .hbar-fill{width:100%;max-width:26px;background:var(--accent);border-radius:5px 5px 0 0;min-height:3px;transition:height .2s}
+  .hbar-lbl{font-size:10px;color:var(--muted);margin-top:4px;font-family:var(--mono)}
   .ko-head{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;font-weight:600;border-bottom:1px solid var(--line)}
   .ko-head .folio{font-family:var(--mono)}.ko-head .timer{font-family:var(--mono);font-size:13px}.ko-head .timer.warn{color:var(--red)}
   .ko-srv{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:0 14px;margin-top:6px}
@@ -371,7 +375,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.12 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.13 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -1182,6 +1186,12 @@ async function vReportes(){
   <div class="cols">
     <div class="panel"><h3>Por servicio</h3>${['mostrador','domicilio','mesa'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porServicio[k]/(res.venta||1)*100}%"></div></div><div class="bv">${money(res.porServicio[k])}</div></div>`).join('')}</div>
     <div class="panel"><h3>Por método de pago</h3>${['efectivo','tarjeta','transferencia'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porPago[k]/(res.venta||1)*100}%;background:${k==='efectivo'?'var(--green)':k==='tarjeta'?'var(--blue)':'var(--accent)'}"></div></div><div class="bv">${money(res.porPago[k])}</div></div>`).join('')}</div></div>
+  ${(()=>{const ph=res.porHora||[];const maxH=Math.max(1,...ph.map(x=>x.venta));const horas=ph.map((x,h)=>({h,...x})).filter(x=>x.venta>0);if(!horas.length)return '';const picoH=horas.reduce((a,b)=>b.venta>a.venta?b:a);
+    return `<div class="panel" style="margin-top:16px"><h3>Ventas por hora <span class="small">hora pico: ${String(picoH.h).padStart(2,'0')}:00 · ${money(picoH.venta)}</span></h3>
+    <div class="hbars">${ph.map((x,h)=>x.venta>0?`<div class="hbar"><div class="hbar-fill" style="height:${Math.round(x.venta/maxH*100)}%" title="${money(x.venta)} · ${x.pedidos} ped"></div><div class="hbar-lbl">${String(h).padStart(2,'0')}</div></div>`:'').join('')}</div></div>`;})()}
+  ${(()=>{const pd=res.porDia||[];const dias=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];const maxD=Math.max(1,...pd.map(x=>x.venta));if(!pd.some(x=>x.venta>0))return '';const picoD=pd.map((x,i)=>({i,...x})).reduce((a,b)=>b.venta>a.venta?b:a);
+    return `<div class="panel" style="margin-top:16px"><h3>Ventas por día de la semana <span class="small">mejor día: ${dias[picoD.i]}</span></h3>
+    ${pd.map((x,i)=>`<div class="bar-row"><div class="bn">${dias[i]}</div><div class="bt"><div class="bf" style="width:${Math.round(x.venta/maxD*100)}%"></div></div><div class="bv">${money(x.venta)}</div></div>`).join('')}</div>`;})()}
   <div class="panel" style="margin-top:16px"><h3>Cortes de caja</h3>${cortes.length?`<table><thead><tr><th>Cierre</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th><th>Resultado</th></tr></thead><tbody>
     ${cortes.map(t=>`<tr><td>${new Date(t.cerrado).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(t.esperado.efectivo)}</td><td class="num">${money(t.conteo)}</td><td class="num" style="color:${t.diferencia<0?'var(--red)':t.diferencia>0?'var(--accent-ink)':'var(--green)'}">${money(t.diferencia)}</td><td><span class="chip ${t.resultado==='faltante'?'low':t.resultado==='cuadrado'?'ok':''}">${t.resultado}</span></td></tr>`).join('')}
   </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>
@@ -1204,6 +1214,7 @@ async function renderFinanciero(){
     <div class="kpi"><div class="lab">Ticket promedio</div><div class="val">${money(fin.ticketPromedio)}</div></div>
     <div class="kpi"><div class="lab">Descuentos otorgados</div><div class="val">${money(fin.descuentos)}</div></div>
     <div class="kpi"><div class="lab">Pedidos cobrados</div><div class="val">${fin.pedidos}</div></div>
+    <div class="kpi"><div class="lab">Costo de mano de obra</div><div class="val" style="color:${fin.manoDeObraPct<=30?'var(--green)':fin.manoDeObraPct<=35?'var(--accent-ink)':'var(--red)'}">${fin.manoDeObraPct}%</div><div class="lab" style="margin-top:2px">nómina/ventas · meta 25–35%</div></div>
   </div>
   <div class="cols" style="margin-top:16px">
     <div class="panel"><h3>Prime cost <span class="small">la métrica que más se vigila · meta 55–65%</span></h3>
