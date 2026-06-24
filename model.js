@@ -70,8 +70,8 @@ function recetaDeCombo(e, componentes = []) {
 const crearCategoria = ({ nombre, orden = 0 }) => ({ id: uid('cat'), nombre, orden, visible: true });
 const crearOpcion = ({ nombre, precioDelta = 0, porDefecto = false }) => ({ id: uid('opt'), nombre, precioDelta, porDefecto, activo: true });
 const crearGrupo = ({ nombre, tipo = 'unico', obligatorio = false, max = null, opciones = [] }) => ({ id: uid('grp'), nombre, tipo, obligatorio, max, opciones });
-const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [] }) =>
-  ({ id: uid('prod'), categoriaId, nombre, precioBase, gruposIds, destino, receta, activo: true, disponible: true });
+const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], descripcion = '' }) =>
+  ({ id: uid('prod'), categoriaId, nombre, descripcion, precioBase, gruposIds, destino, receta, activo: true, disponible: true });
 const crearInsumo = ({ nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 }) => ({ id: uid('ins'), nombre, unidad, stock, costoUnitario, stockMin });
 const crearMesa = ({ nombre, sucursalId }) => ({ id: uid('mesa'), nombre, sucursalId, estado: 'libre', pedidoFolio: null });
 
