@@ -435,13 +435,13 @@ app.post('/api/menu/grupos', soloAdmin, wrap(async (req, res) => {
   res.json(g);
 }));
 app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
-  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null } = req.body || {};
+  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '' } = req.body || {};
   if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
   const p = await withState((e) => {
     if (!e.menu.categorias[categoriaId]) throw bad('Categoría inexistente');
     let finalReceta = receta, esCombo = false;
     if (componentes && componentes.length) { finalReceta = M.recetaDeCombo(e, componentes); esCombo = true; }
-    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta });
+    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta, descripcion });
     if (esCombo) { prod.esCombo = true; prod.componentes = componentes; }
     if (foto) prod.foto = foto;
     e.menu.productos[prod.id] = prod; return prod;
@@ -454,7 +454,7 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
   const p = await withState((e) => {
     const prod = e.menu.productos[id];
     if (!prod) throw bad('Producto inexistente', 404);
-    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible']) if (k in patch) prod[k] = patch[k];
+    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion']) if (k in patch) prod[k] = patch[k];
     return prod;
   });
   res.json(p);
@@ -1060,7 +1060,7 @@ app.get('/qr/:row/:suc/menu', (req, res) => {
       const categorias = Object.values(e.menu.categorias).map((c) => ({ id: c.id, nombre: c.nombre, orden: c.orden || 0 })).sort((a, b) => a.orden - b.orden);
       const productos = Object.values(e.menu.productos)
         .filter((p) => p.activo && p.disponible !== false)
-        .map((p) => ({ id: p.id, nombre: p.nombre, precioBase: p.precioBase, categoriaId: p.categoriaId, conOpciones: (p.gruposIds || []).length > 0 }));
+        .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, conOpciones: (p.gruposIds || []).length > 0 }));
       res.json({ tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null }, sucursal: { id: suc.id, nombre: suc.nombre }, categorias, productos });
     } catch (err) { res.status(500).json({ error: 'Error al cargar el menú' }); }
   });
