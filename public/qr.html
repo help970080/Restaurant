@@ -77,7 +77,7 @@ function render(){
   $('#cats').innerHTML=MENU.categorias.map(c=>`<button class="cat ${c.id===MENU.cat0?'active':''}" data-c="${c.id}">${c.nombre}</button>`).join('');
   const ps=prodsDe(MENU.cat0);
   $('#list').innerHTML=ps.length?ps.map(p=>{const q=cart[p.id]?cart[p.id].qty:0;
-    return `<div class="prod"><div><div class="nm">${p.nombre}</div><div class="pr">${money(p.precioBase)}</div></div>
+    return `<div class="prod"><div><div class="nm">${p.nombre}</div>${p.descripcion?`<div class="muted" style="margin:2px 0 3px;max-width:230px">${p.descripcion}</div>`:''}<div class="pr">${money(p.precioBase)}${p.conOpciones?'+':''}</div></div>
       ${q>0?`<div class="qty"><button data-dec="${p.id}">−</button><span>${q}</span><button data-inc="${p.id}">+</button></div>`:`<button class="add" data-inc="${p.id}">+</button>`}</div>`;}).join(''):'<div class="empty">Sin productos en esta categoría.</div>';
   document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{MENU.cat0=b.dataset.c;render();});
   document.querySelectorAll('[data-inc]').forEach(b=>b.onclick=()=>chg(b.dataset.inc,1));
