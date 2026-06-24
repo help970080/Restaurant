@@ -237,6 +237,7 @@
   .prod .ago-badge{position:absolute;top:8px;left:8px;background:var(--red);color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;z-index:2}
   .lnk-split{display:block;width:100%;background:none;border:1px dashed var(--line);border-radius:10px;color:var(--accent-ink);font-weight:600;font-size:13px;padding:7px;margin:8px 0 4px;cursor:pointer}
   .lnk-split:hover{background:var(--soft)}
+  .prod .pdesc{font-size:11px;color:var(--muted);margin:2px 0 4px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -375,7 +376,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.14 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.15 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -469,7 +470,7 @@ function vPOS(){
   const cat=app.menu.categorias[app.pos.cat];
   $('#view').innerHTML=`<div class="pos">
     <div class="pos-menu"><div id="cuentasAbiertas"></div><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
-      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>{const ago=p.disponible===false;return `<button class="prod${ago?' agotado':''}" data-prod="${p.id}"${ago?' disabled':''}>${prodArt(p,cat.nombre)}${ago?'<span class="ago-badge">Agotado</span>':''}<div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`;}).join('')}</div></div>
+      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>{const ago=p.disponible===false;return `<button class="prod${ago?' agotado':''}" data-prod="${p.id}"${ago?' disabled':''}>${prodArt(p,cat.nombre)}${ago?'<span class="ago-badge">Agotado</span>':''}<div class="meta"><div class="nm">${p.nombre}</div>${p.descripcion?`<div class="pdesc">${p.descripcion}</div>`:''}<div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`;}).join('')}</div></div>
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}${c.comisionPct?` · ${c.comisionPct}%`:''}</button>`).join('')}</div>`:''}
@@ -753,7 +754,7 @@ async function vMenu(){
   $('#view').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn dark" id="addProd">+ Nuevo producto</button></div>
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
     <table><thead><tr><th>Producto</th><th>Destino</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
+    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}`;
   $('#addProd').onclick=modalNuevoProducto;
   document.querySelectorAll('[data-86]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/menu/productos/'+b.dataset['86'],{disponible:b.dataset.disp==='1'});app.menu=await API.get('/api/menu');toast(b.dataset.disp==='1'?'Producto reactivado':'Producto marcado como agotado');vMenu();}catch(e){toast(e.message);}});
