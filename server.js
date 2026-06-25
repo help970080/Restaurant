@@ -865,9 +865,13 @@ function registrarCancelacion(e, p, etiqueta, motivo, c) {
 }
 app.get('/api/cancelaciones', puedeCaja, wrap(async (req, res) => {
   const e = await readState();
-  const { sucursalId } = req.query;
-  const arr = (e.cancelaciones || []).filter((x) => !sucursalId || x.sucursalId === sucursalId);
-  res.json(arr.slice(0, 100));
+  const { sucursalId, desde, hasta } = req.query;
+  const d = desde ? new Date(desde).getTime() : null;
+  const h = hasta ? new Date(hasta).getTime() : null;
+  const arr = (e.cancelaciones || []).filter((x) => (!sucursalId || x.sucursalId === sucursalId)
+    && (d == null || new Date(x.fecha).getTime() >= d)
+    && (h == null || new Date(x.fecha).getTime() <= h));
+  res.json(arr.slice(0, 200));
 }));
 // Transferir/mover la cuenta de una mesa a otra mesa libre
 app.post('/api/pedidos/:folio/transferir', wrap(async (req, res) => {
@@ -956,10 +960,20 @@ app.post('/api/mesas/bulk', wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 //  REPORTES
 // ---------------------------------------------------------------------------
+// --- Filtro de pedidos cobrados por sucursal y rango de fechas (para reportes) ---
+function _fechaPed(p) { return new Date((p.pago && p.pago.timestamp) || p.actualizado || p.creado).getTime(); }
+function pedsCobrados(e, sucursalId, desde, hasta) {
+  const d = desde ? new Date(desde).getTime() : null;
+  const h = hasta ? new Date(hasta).getTime() : null;
+  return Object.values(e.pedidos).filter((p) => p.estado === 'cobrado'
+    && (!sucursalId || p.sucursalId === sucursalId)
+    && (d == null || _fechaPed(p) >= d)
+    && (h == null || _fechaPed(p) <= h));
+}
 app.get('/api/reportes/resumen', wrap(async (req, res) => {
   const e = await readState();
-  const { sucursalId } = req.query;
-  const peds = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado' && (!sucursalId || p.sucursalId === sucursalId));
+  const { sucursalId, desde, hasta } = req.query;
+  const peds = pedsCobrados(e, sucursalId, desde, hasta);
   const venta = M.r2(peds.reduce((s, p) => s + p.total, 0));
   const porProducto = {}; peds.forEach((p) => p.lineas.forEach((l) => { porProducto[l.nombre] = porProducto[l.nombre] || { q: 0, total: 0 }; porProducto[l.nombre].q += l.cantidad; porProducto[l.nombre].total = M.r2(porProducto[l.nombre].total + l.importe); }));
   const porPago = { efectivo: 0, tarjeta: 0, transferencia: 0 }; peds.forEach((p) => p.pago && p.pago.pagos.forEach((x) => porPago[x.metodo] = M.r2((porPago[x.metodo] || 0) + x.monto)));
@@ -984,8 +998,8 @@ app.get('/api/estado', wrap(async (req, res) => { res.json(await readState()); }
 // ---------------------------------------------------------------------------
 app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
   const e = await readState();
-  const { sucursalId } = req.query;
-  const peds = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado' && (!sucursalId || p.sucursalId === sucursalId));
+  const { sucursalId, desde, hasta } = req.query;
+  const peds = pedsCobrados(e, sucursalId, desde, hasta);
   const canales = e.config.canales || M.canalesDefault();
   let ingresos = 0, cogs = 0, descuentos = 0;
   const porProd = {};
