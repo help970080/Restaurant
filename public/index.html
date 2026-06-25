@@ -163,6 +163,11 @@
   .allday .ad-chip{background:rgba(255,255,255,.14);padding:5px 11px;border-radius:999px;font-size:13px}
   .allday .ad-chip b{color:var(--accent)}
   .ko-est{font-size:10px;background:var(--soft);color:var(--accent-ink);padding:1px 6px;border-radius:999px;font-weight:700;vertical-align:middle;margin-left:4px}
+  .offbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 16px;font-size:13px;font-weight:600}
+  .offbar.off{background:#fde7e3;color:#a3331f;border-bottom:1px solid #f3c5bb}
+  .offbar.on{background:#e7f5ec;color:#1f7a47;border-bottom:1px solid #c5e6d2}
+  .offbar button{background:var(--ink);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
+  .offbar .offcount{margin-left:auto}
   .hbars{display:flex;align-items:flex-end;gap:5px;height:130px;padding-top:8px}
   .hbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
   .hbar-fill{width:100%;max-width:26px;background:var(--accent);border-radius:5px 5px 0 0;min-height:3px;transition:height .2s}
@@ -369,8 +374,23 @@ async function boot(){
     await refreshTurno();
     app.menu=await API.get('/api/menu');
     try{app.canales=await API.get('/api/canales');}catch{app.canales=[];}
+    guardarCacheOffline();
     renderShell();go(vistaInicial());
-  }catch(e){API.token=null;renderLogin();}
+  }catch(e){
+    if(!navigator.onLine && hidratarCacheOffline()){
+      renderShell();renderConexion();toast('Sin conexión — modo offline',{ms:4500});abrirComandaOffline();
+      return;
+    }
+    API.token=null;renderLogin();
+  }
+}
+function guardarCacheOffline(){
+  try{localStorage.setItem('cp_cache',JSON.stringify({tenant:app.tenant,rol:app.rol,username:app.username,row:app.row,miSucursal:app.miSucursal,sucursalId:app.sucursalId,sucursales:app.sucursales,menu:app.menu,canales:app.canales,ts:Date.now()}));}catch{}
+}
+function hidratarCacheOffline(){
+  try{const c=JSON.parse(localStorage.getItem('cp_cache')||'null');if(!c||!c.menu)return false;
+    app.tenant=c.tenant;app.rol=c.rol;app.username=c.username;app.row=c.row;app.miSucursal=c.miSucursal;app.sucursalId=c.sucursalId;app.sucursales=c.sucursales||[];app.menu=c.menu;app.canales=c.canales||[];app.turno=null;return true;
+  }catch{return false;}
 }
 function renderLogin(){
   $('#app').innerHTML=`<div class="login"><form class="login-card" id="lf">
@@ -385,6 +405,77 @@ function renderLogin(){
 async function refreshTurno(){app.turno=await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId);}
 
 // ===========================================================================
+//  MODO OFFLINE — el cobro queda solo en línea; aquí se capturan pedidos
+// ===========================================================================
+app.online=navigator.onLine;
+function colaOffline(){try{return JSON.parse(localStorage.getItem('cp_offline')||'[]');}catch{return[];}}
+function setColaOffline(a){localStorage.setItem('cp_offline',JSON.stringify(a));renderConexion();}
+function renderConexion(){
+  const bar=$('#offbar');if(!bar)return;
+  const n=colaOffline().length;const off=!app.online;
+  if(!off&&!n){bar.style.display='none';return;}
+  bar.style.display='';bar.className='offbar '+(off?'off':'on');
+  bar.innerHTML=`<span>${off?'🔴 Sin conexión — modo offline':'🟢 En línea'}</span>${off?`<button id="offTomar">Tomar pedido offline</button>`:''}${n?`<span class="offcount">${n} pedido(s) por sincronizar</span>${!off?`<button id="offSync">Sincronizar ahora</button>`:''}`:''}`;
+  if($('#offTomar'))$('#offTomar').onclick=abrirComandaOffline;
+  if($('#offSync'))$('#offSync').onclick=()=>sincronizarOffline(false);
+}
+window.addEventListener('online',()=>{app.online=true;renderConexion();sincronizarOffline(true);});
+window.addEventListener('offline',()=>{app.online=false;renderConexion();toast('Sin conexión — modo offline',{ms:3500});});
+
+function abrirComandaOffline(){
+  app._off={tipo:'mostrador',lineas:[],cat:(Object.values(app.menu.categorias).sort((a,b)=>(a.orden||0)-(b.orden||0))[0]||{}).id,cliente:{}};
+  renderComandaOffline();
+}
+function renderComandaOffline(){
+  const o=app._off;const cats=Object.values(app.menu.categorias).sort((a,b)=>(a.orden||0)-(b.orden||0));
+  const prods=Object.values(app.menu.productos).filter(p=>p.activo&&p.disponible!==false&&p.categoriaId===o.cat);
+  const total=o.lineas.reduce((s,l)=>s+l.precioBase*l.cantidad,0);
+  $('#view').innerHTML=`<div class="panel" style="border-color:var(--accent)"><h3>Comanda offline <span class="small">se guarda en este equipo y se envía a cocina al reconectar</span></h3>
+    <div class="svc" style="margin-bottom:10px">${['mostrador','domicilio'].map(s=>`<button data-osvc="${s}" class="${o.tipo===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>
+    <div class="small" style="color:var(--muted);margin-bottom:8px">Offline solo captura productos a precio base (sin modificadores). Anota el detalle en la nota.</div>
+    <div class="cats">${cats.map(c=>`<button class="cat ${c.id===o.cat?'active':''}" data-ocat="${c.id}">${c.nombre}</button>`).join('')}</div>
+    <div class="pgrid" style="margin-top:10px">${prods.map(p=>`<button class="prod" data-oadd="${p.id}"><div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}</span></div></div></button>`).join('')||'<div class="empty">Sin productos.</div>'}</div>
+  </div>
+  <div class="panel"><h3>Pedido (${o.lineas.reduce((s,l)=>s+l.cantidad,0)} items · ${money(total)})</h3>
+    ${o.lineas.length?o.lineas.map((l,i)=>`<div class="bar-row" style="align-items:center"><div class="bn" style="flex:1">${l.cantidad}× ${l.nombre}</div><div class="bv">${money(l.precioBase*l.cantidad)}</div><button class="btn" data-odec="${i}" style="padding:4px 9px;min-height:auto;margin-left:8px">−</button></div>`).join(''):'<div class="empty">Agrega productos.</div>'}
+    <div class="field" style="margin-top:10px"><label>Nombre / mesa / nota</label><input id="offNota" value="${(o.cliente.nombre||'').replace(/"/g,'&quot;')}" placeholder="Ej. Mesa 4 / Juan / 2 grandes"></div>
+    <button class="btn accent" id="offGuardar" ${o.lineas.length?'':'disabled'} style="width:100%">Guardar pedido offline</button>
+  </div>`;
+  document.querySelectorAll('[data-osvc]').forEach(b=>b.onclick=()=>{o.tipo=b.dataset.osvc;renderComandaOffline();});
+  document.querySelectorAll('[data-ocat]').forEach(b=>b.onclick=()=>{o.cat=b.dataset.ocat;renderComandaOffline();});
+  document.querySelectorAll('[data-oadd]').forEach(b=>b.onclick=()=>{const p=app.menu.productos[b.dataset.oadd];const ex=o.lineas.find(l=>l.productoId===p.id);if(ex)ex.cantidad++;else o.lineas.push({productoId:p.id,nombre:p.nombre,precioBase:p.precioBase,cantidad:1});renderComandaOffline();});
+  document.querySelectorAll('[data-odec]').forEach(b=>b.onclick=()=>{const i=+b.dataset.odec;o.lineas[i].cantidad--;if(o.lineas[i].cantidad<=0)o.lineas.splice(i,1);renderComandaOffline();});
+  $('#offGuardar').onclick=()=>{
+    if(!o.lineas.length)return;
+    const nota=$('#offNota').value.trim();
+    const cola=colaOffline();
+    cola.push({sucursalId:app.sucursalId,tipoServicio:o.tipo,canalId:'local',cliente:nota?{nombre:nota}:{},lineas:o.lineas.map(l=>({productoId:l.productoId,cantidad:l.cantidad,notas:''})),creado:new Date().toISOString()});
+    setColaOffline(cola);
+    toast('✓ Pedido guardado offline',{tipo:'ok'});
+    if(app.online)sincronizarOffline(true);
+    abrirComandaOffline();
+  };
+}
+async function sincronizarOffline(silencioso){
+  if(!navigator.onLine||!API.token)return;
+  const cola=colaOffline();if(!cola.length){if(!silencioso)toast('No hay pedidos offline');return;}
+  if(!silencioso)toast('Sincronizando…');
+  const quedan=[];let okN=0,errN=0;
+  for(const o of cola){
+    try{
+      const ped=await API.post('/api/pedidos',{sucursalId:o.sucursalId,tipoServicio:o.tipoServicio,canalId:o.canalId||'local'});
+      if(o.cliente&&(o.cliente.nombre||o.cliente.direccion))await API.patch('/api/pedidos/'+ped.folio,{cliente:o.cliente});
+      for(const l of o.lineas)await API.post('/api/pedidos/'+ped.folio+'/lineas',{productoId:l.productoId,cantidad:l.cantidad,notas:l.notas||''});
+      await API.post('/api/pedidos/'+ped.folio+'/comanda');
+      okN++;
+    }catch(e){errN++;quedan.push(o);}
+  }
+  setColaOffline(quedan);
+  toast(okN+' pedido(s) sincronizado(s)'+(errN?' · '+errN+' pendiente(s)':''),{tipo:okN?'ok':undefined,ms:4500});
+  if(app.vista==='cocina')pintarCocina();else if(app.vista==='caja')vCaja();
+}
+
+// ===========================================================================
 //  Shell
 // ===========================================================================
 function brandSidebar(){
@@ -395,8 +486,9 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.18 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.19 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
+      <div id="offbar" class="offbar" style="display:none"></div>
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
         <div class="turno-pill off" id="turnoPill">Turno cerrado</div>
@@ -405,7 +497,7 @@ function renderShell(){
   $('#logout').onclick=()=>{API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
   $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
   $('#btnTurno').onclick=()=>app.turno?modalCerrarTurno():modalAbrirTurno();
-  renderTopbar();renderNav();
+  renderTopbar();renderNav();renderConexion();
 }
 function renderTopbar(){
   $('#sucSel').innerHTML=app.sucursales.map(s=>`<option value="${s.id}" ${s.id===app.sucursalId?'selected':''}>${s.nombre}</option>`).join('');
@@ -1766,6 +1858,7 @@ function modalCerrarTurno(){
     }catch(e){toast(e.message);}};
 }
 
+if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{});});}
 boot();
 </script>
 </body>
