@@ -435,13 +435,13 @@ app.post('/api/menu/grupos', soloAdmin, wrap(async (req, res) => {
   res.json(g);
 }));
 app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
-  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '' } = req.body || {};
+  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '', estacion = 'Cocina' } = req.body || {};
   if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
   const p = await withState((e) => {
     if (!e.menu.categorias[categoriaId]) throw bad('Categoría inexistente');
     let finalReceta = receta, esCombo = false;
     if (componentes && componentes.length) { finalReceta = M.recetaDeCombo(e, componentes); esCombo = true; }
-    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta, descripcion });
+    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta, descripcion, estacion });
     if (esCombo) { prod.esCombo = true; prod.componentes = componentes; }
     if (foto) prod.foto = foto;
     e.menu.productos[prod.id] = prod; return prod;
@@ -454,7 +454,7 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
   const p = await withState((e) => {
     const prod = e.menu.productos[id];
     if (!prod) throw bad('Producto inexistente', 404);
-    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion']) if (k in patch) prod[k] = patch[k];
+    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion', 'estacion']) if (k in patch) prod[k] = patch[k];
     return prod;
   });
   res.json(p);
@@ -649,7 +649,7 @@ app.get('/api/cocina', wrap(async (req, res) => {
   const arr = Object.values(e.pedidos)
     .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado'))
     .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
-    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado').map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
+    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado').map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
   res.json(arr);
 }));
 app.post('/api/cocina/:folio/listo', wrap(async (req, res) => {
