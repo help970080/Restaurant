@@ -162,6 +162,7 @@
   .allday .ad-lbl{font-weight:700;font-size:13px;opacity:.8}
   .allday .ad-chip{background:rgba(255,255,255,.14);padding:5px 11px;border-radius:999px;font-size:13px}
   .allday .ad-chip b{color:var(--accent)}
+  .ko-est{font-size:10px;background:var(--soft);color:var(--accent-ink);padding:1px 6px;border-radius:999px;font-weight:700;vertical-align:middle;margin-left:4px}
   .hbars{display:flex;align-items:flex-end;gap:5px;height:130px;padding-top:8px}
   .hbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
   .hbar-fill{width:100%;max-width:26px;background:var(--accent);border-radius:5px 5px 0 0;min-height:3px;transition:height .2s}
@@ -376,7 +377,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.15 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.16 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -727,20 +728,26 @@ async function pintarCocina(){
   const ordenes=await API.get('/api/cocina?sucursalId='+app.sucursalId);
   if(!ordenes.length){$('#view').innerHTML=`<div class="panel"><div class="empty">No hay órdenes en cocina.<br>Cobra un pedido (o manda una comanda de mesa) y aparecerá aquí.</div></div>`;return;}
   const now=Date.now();
-  // Conteo all-day: total de piezas pendientes por producto (no entregadas)
-  const allday={};
-  ordenes.forEach(p=>{if(!p.listo)p.items.forEach(l=>{allday[l.nombre]=(allday[l.nombre]||0)+l.cantidad;});});
+  // estaciones presentes
+  const estaciones=[...new Set(ordenes.flatMap(p=>p.items.map(l=>l.estacion||'Cocina')))].sort();
+  if(!app.cocinaEst||(app.cocinaEst!=='__all'&&!estaciones.includes(app.cocinaEst)))app.cocinaEst='__all';
+  const est=app.cocinaEst;
+  const visibles=ordenes.map(p=>({...p,items:est==='__all'?p.items:p.items.filter(l=>(l.estacion||'Cocina')===est)})).filter(p=>p.items.length);
+  // all-day por lo visible
+  const allday={};visibles.forEach(p=>{if(!p.listo)p.items.forEach(l=>{allday[l.nombre]=(allday[l.nombre]||0)+l.cantidad;});});
   const adArr=Object.entries(allday).sort((a,b)=>b[1]-a[1]);
   const tier=min=>min>=12?'late':min>=6?'warn':'fresh';
-  $('#view').innerHTML=`
-  ${adArr.length?`<div class="allday"><span class="ad-lbl">Por preparar:</span>${adArr.map(([n,q])=>`<span class="ad-chip"><b>${q}×</b> ${n}</span>`).join('')}</div>`:''}
-  <div class="kds">${ordenes.map(p=>{
+  const tabs=estaciones.length>1?`<div class="cats" style="margin-bottom:12px"><button class="cat ${est==='__all'?'active':''}" data-est="__all">Todas</button>${estaciones.map(s=>`<button class="cat ${est===s?'active':''}" data-est="${s}">${s}</button>`).join('')}</div>`:'';
+  $('#view').innerHTML=`${tabs}
+  ${adArr.length?`<div class="allday"><span class="ad-lbl">Por preparar${est!=='__all'?' · '+est:''}:</span>${adArr.map(([n,q])=>`<span class="ad-chip"><b>${q}×</b> ${n}</span>`).join('')}</div>`:''}
+  <div class="kds">${visibles.map(p=>{
     const min=Math.floor((now-new Date(p.recibido).getTime())/60000);
     const srv=p.tipoServicio==='mesa'?mesaNombre(p.mesaId):(p.tipoServicio==='domicilio'?'🛵 Domicilio':'🧾 Mostrador');
     const tk=p.listo?'ready':tier(min);
     return `<div class="ko ko-${tk} ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer">${p.listo?'LISTO':min+' min'}</span></div><div class="ko-srv">${srv}</div>
-      <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
+      <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${est==='__all'&&estaciones.length>1?` <span class="ko-est">${l.estacion||'Cocina'}</span>`:''}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
       <div class="ko-foot">${p.listo?`<button class="b-entregar" data-entregar="${p.folio}">Entregar</button>`:`<button class="b-listo" data-listo="${p.folio}">Marcar listo</button>`}</div></div>`;}).join('')}</div>`;
+  document.querySelectorAll('[data-est]').forEach(b=>b.onclick=()=>{app.cocinaEst=b.dataset.est;pintarCocina();});
   document.querySelectorAll('[data-listo]').forEach(b=>b.onclick=async()=>{await API.post(`/api/cocina/${b.dataset.listo}/listo`);pintarCocina();});
   document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=async()=>{await API.post(`/api/cocina/${b.dataset.entregar}/entregar`);toast('Orden entregada');pintarCocina();renderNav();});
 }
@@ -753,11 +760,13 @@ async function vMenu(){
   const fcMap={};inv.foodCost.forEach(f=>fcMap[f.id]=f);
   $('#view').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn dark" id="addProd">+ Nuevo producto</button></div>
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
-    <table><thead><tr><th>Producto</th><th>Destino</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
+    <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
+    <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th></tr></thead><tbody>
+    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}`;
   $('#addProd').onclick=modalNuevoProducto;
   document.querySelectorAll('[data-86]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/menu/productos/'+b.dataset['86'],{disponible:b.dataset.disp==='1'});app.menu=await API.get('/api/menu');toast(b.dataset.disp==='1'?'Producto reactivado':'Producto marcado como agotado');vMenu();}catch(e){toast(e.message);}});
+  document.querySelectorAll('[data-estprod]').forEach(inp=>inp.onchange=async()=>{const est=inp.value.trim()||'Cocina';try{await API.patch('/api/menu/productos/'+inp.dataset.estprod,{estacion:est});const pr=app.menu.productos[inp.dataset.estprod];if(pr)pr.estacion=est;toast('Estación: '+est);}catch(e){toast(e.message);}});
 }
 function modalNuevoProducto(){
   modal.innerHTML=`<h3>Nuevo producto</h3><div class="sub">Se agrega al menú de inmediato</div>
