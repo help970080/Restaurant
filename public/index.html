@@ -265,6 +265,24 @@ const API = {
 };
 const money=n=>'$'+(+(n||0)).toFixed(2);
 function ivaTasa(){const f=(app.tenant&&app.tenant.fiscal)||app._fiscal||{};return f.ivaTasa!=null?+f.ivaTasa:16;}
+function rangoPeriodo(preset){
+  const now=new Date();const sod=d=>{const x=new Date(d);x.setHours(0,0,0,0);return x;};const eod=d=>{const x=new Date(d);x.setHours(23,59,59,999);return x;};
+  let desde=null,hasta=null,label='Todo';
+  if(preset==='hoy'){desde=sod(now);hasta=eod(now);label='Hoy';}
+  else if(preset==='ayer'){const y=new Date(now);y.setDate(y.getDate()-1);desde=sod(y);hasta=eod(y);label='Ayer';}
+  else if(preset==='semana'){const wd=(now.getDay()+6)%7;const mon=new Date(now);mon.setDate(now.getDate()-wd);desde=sod(mon);hasta=eod(now);label='Esta semana';}
+  else if(preset==='mes'){desde=sod(new Date(now.getFullYear(),now.getMonth(),1));hasta=eod(now);label='Este mes';}
+  else if(preset==='mespasado'){desde=sod(new Date(now.getFullYear(),now.getMonth()-1,1));hasta=eod(new Date(now.getFullYear(),now.getMonth(),0));label='Mes pasado';}
+  return {desde,hasta,label};
+}
+function periodoAnterior(desde,hasta){
+  if(!desde||!hasta)return {desde:null,hasta:null};
+  const dur=hasta.getTime()-desde.getTime();const prevHasta=new Date(desde.getTime()-1);const prevDesde=new Date(prevHasta.getTime()-dur);
+  return {desde:prevDesde,hasta:prevHasta};
+}
+function qsRango(suc,r){let q=suc?('sucursalId='+suc):'';if(r&&r.desde)q+=(q?'&':'')+'desde='+encodeURIComponent(r.desde.toISOString())+'&hasta='+encodeURIComponent(r.hasta.toISOString());return q?('?'+q):'';}
+function crecimiento(actual,previo){if(previo==null||previo===0)return null;return Math.round((actual-previo)/previo*1000)/10;}
+function badgeCrec(pct){if(pct==null)return '';const up=pct>=0;return `<span style="font-size:12px;font-weight:700;color:${up?'var(--green)':'var(--red)'}">${up?'▲':'▼'} ${Math.abs(pct)}%</span>`;}
 const $=s=>document.querySelector(s);
 const ov=$('#ov'),modal=$('#modal');
 function closeModal(){ov.classList.remove('show');modal.innerHTML='';}
@@ -377,7 +395,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.17 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.18 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -1201,11 +1219,21 @@ function modalReserva(r){
 //  REPORTES
 // ===========================================================================
 async function vReportes(){
-  const [res,cortes]=await Promise.all([API.get('/api/reportes/resumen?sucursalId='+app.sucursalId),API.get('/api/caja/cortes?sucursalId='+app.sucursalId)]);
+  const preset=app.repRango||'todo';
+  const r=rangoPeriodo(preset);
+  const prev=periodoAnterior(r.desde,r.hasta);
+  const [res,cortes]=await Promise.all([API.get('/api/reportes/resumen'+qsRango(app.sucursalId,r)),API.get('/api/caja/cortes?sucursalId='+app.sucursalId)]);
+  let resPrev=null;if(r.desde){try{resPrev=await API.get('/api/reportes/resumen'+qsRango(app.sucursalId,prev));}catch{}}
+  app._repRes=res;app._repRango=r;
+  const crecVenta=resPrev?crecimiento(res.venta,resPrev.venta):null;
+  const crecTicket=resPrev?crecimiento(res.ticketPromedio,resPrev.ticketPromedio):null;
+  const presets=[['hoy','Hoy'],['ayer','Ayer'],['semana','Semana'],['mes','Mes'],['mespasado','Mes pasado'],['todo','Todo']];
   const rows=Object.entries(res.porProducto||{}).sort((a,b)=>b[1].total-a[1].total);
-  $('#view').innerHTML=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><button class="btn dark" id="repEjec">📄 Resumen ejecutivo (inversionista)</button><button class="btn" id="repCSV">⬇ Exportar a CSV (Excel)</button></div>
-  <div class="kpis"><div class="kpi accent"><div class="lab">Venta total</div><div class="val">${money(res.venta)}</div></div>
+  $('#view').innerHTML=`<div class="cats" style="margin-bottom:12px">${presets.map(([k,l])=>`<button class="cat ${k===preset?'active':''}" data-rango="${k}">${l}</button>`).join('')}</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center"><span class="small" style="color:var(--muted)">Periodo: <b>${r.label}</b>${resPrev?' · vs periodo anterior':''}</span><button class="btn dark" id="repEjec" style="margin-left:auto">📄 Resumen ejecutivo (inversionista)</button><button class="btn" id="repCSV">⬇ Exportar a CSV (Excel)</button></div>
+  <div class="kpis"><div class="kpi accent"><div class="lab">Venta total ${crecVenta!=null?badgeCrec(crecVenta):''}</div><div class="val">${money(res.venta)}</div>${resPrev?`<div class="lab" style="margin-top:2px">antes ${money(resPrev.venta)}</div>`:''}</div>
     <div class="kpi"><div class="lab">Pedidos</div><div class="val">${res.pedidos}</div></div>
+    <div class="kpi"><div class="lab">Ticket promedio ${crecTicket!=null?badgeCrec(crecTicket):''}</div><div class="val">${money(res.ticketPromedio)}</div></div>
     <div class="kpi"><div class="lab">Unidades</div><div class="val">${Object.values(res.porProducto||{}).reduce((s,x)=>s+x.q,0)}</div></div></div>
   <div class="panel" style="margin-bottom:16px"><h3>Ventas por producto</h3><table><thead><tr><th>Producto</th><th class="num">Piezas</th><th class="num">Importe</th><th class="num">% total</th></tr></thead><tbody>
     ${rows.map(([n,d])=>`<tr><td>${n}</td><td class="num">${d.q}</td><td class="num">${money(d.total)}</td><td class="num">${(d.total/res.venta*100||0).toFixed(1)}%</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">Sin ventas</td></tr>'}
@@ -1226,6 +1254,7 @@ async function vReportes(){
   if(esAdmin())renderFinanciero();
   if($('#repCSV'))$('#repCSV').onclick=()=>exportarReportesCSV(res);
   if($('#repEjec'))$('#repEjec').onclick=resumenEjecutivo;
+  document.querySelectorAll('[data-rango]').forEach(b=>b.onclick=()=>{app.repRango=b.dataset.rango;vReportes();});
 }
 function descargarCSV(nombre,filas){
   const csv=filas.map(r=>r.map(c=>{const s=String(c==null?'':c);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join(',')).join('\r\n');
@@ -1246,19 +1275,23 @@ function exportarReportesCSV(res){
 }
 async function resumenEjecutivo(){
   toast('Generando resumen…');
+  const r=app._repRango||rangoPeriodo(app.repRango||'todo');const prev=periodoAnterior(r.desde,r.hasta);
   let fin={},canc=[],porSuc=[];
   const [res,finR,cancR]=await Promise.all([
-    API.get('/api/reportes/resumen'),
-    API.get('/api/reportes/financiero').catch(()=>({})),
-    API.get('/api/cancelaciones').catch(()=>([]))
+    API.get('/api/reportes/resumen'+qsRango(null,r)),
+    API.get('/api/reportes/financiero'+qsRango(null,r)).catch(()=>({})),
+    API.get('/api/cancelaciones'+qsRango(null,r)).catch(()=>([]))
   ]);
   fin=finR;canc=cancR;
-  for(const s of app.sucursales){try{const r=await API.get('/api/reportes/resumen?sucursalId='+s.id);porSuc.push({nombre:s.nombre,venta:r.venta,pedidos:r.pedidos});}catch{}}
+  let resPrev=null;if(r.desde){try{resPrev=await API.get('/api/reportes/resumen'+qsRango(null,prev));}catch{}}
+  const crecV=resPrev?crecimiento(res.venta,resPrev.venta):null;
+  for(const s of app.sucursales){try{const rr=await API.get('/api/reportes/resumen'+qsRango(s.id,r));porSuc.push({nombre:s.nombre,venta:rr.venta,pedidos:rr.pedidos});}catch{}}
   const ph=res.porHora||[];const picoH=ph.map((x,h)=>({h,...x})).filter(x=>x.venta>0).reduce((a,b)=>b.venta>a.venta?b:a,{h:0,venta:0});
   const pd=res.porDia||[];const dias=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];const picoD=pd.map((x,i)=>({i,...x})).reduce((a,b)=>b.venta>a.venta?b:a,{i:0,venta:0});
   const top=Object.entries(res.porProducto||{}).sort((a,b)=>b[1].total-a[1].total).slice(0,5);
   const cancTotal=canc.reduce((s,x)=>s+(x.total||0),0);
   const foodPct=fin.foodCostPct!=null?fin.foodCostPct:(fin.cogs&&fin.ingresos?Math.round(fin.cogs/fin.ingresos*1000)/10:null);
+  const crecTxt=crecV!=null?`<span style="color:${crecV>=0?'#1f9d57':'#d4503b'};font-weight:700"> ${crecV>=0?'▲':'▼'} ${Math.abs(crecV)}% vs ${money(resPrev.venta)}</span>`:'';
   const w=window.open('','ejec','width=820,height=900');if(!w){toast('Permite ventanas emergentes');return;}
   const row=(a,b,c)=>`<tr><td>${a}</td><td style="text-align:right;font-weight:700">${b}</td>${c!=null?`<td style="text-align:right;color:#6b6256">${c}</td>`:'<td></td>'}</tr>`;
   const kpi=(l,v,extra)=>`<div class="k"><div class="kl">${l}</div><div class="kv">${v}</div>${extra?`<div class="ke">${extra}</div>`:''}</div>`;
@@ -1272,9 +1305,9 @@ async function resumenEjecutivo(){
   .foot{margin-top:26px;color:#8a7f70;font-size:11px;text-align:center}
   button{margin:18px 6px 0;padding:11px 22px;border:none;border-radius:10px;background:#211a12;color:#fff;font-weight:700;cursor:pointer}
   @media print{button{display:none}}</style></head><body>
-  <h1>${(app.tenant&&app.tenant.nombre)||'Negocio'}</h1><div class="sub">Resumen ejecutivo · ${new Date().toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})} · datos acumulados</div>
+  <h1>${(app.tenant&&app.tenant.nombre)||'Negocio'}</h1><div class="sub">Resumen ejecutivo · ${r.label}${r.desde?' ('+r.desde.toLocaleDateString('es-MX')+' a '+r.hasta.toLocaleDateString('es-MX')+')':' · datos acumulados'}</div>
   <div class="kpis">
-    ${kpi('Venta total',money(res.venta))}
+    ${kpi('Venta total',money(res.venta),crecTxt||(r.desde?'sin periodo anterior':''))}
     ${kpi('Tickets',res.pedidos,'prom '+money(res.ticketPromedio))}
     ${kpi('Food cost',foodPct!=null?foodPct+'%':'—','meta 28-35%')}
     ${kpi('Prime cost',fin.primeCostPct!=null?fin.primeCostPct+'%':'—','meta 55-65%')}
@@ -1302,7 +1335,7 @@ async function resumenEjecutivo(){
 }
 function pctTxt(part,total){return total>0?Math.round(part/total*100)+'%':'0%';}
 async function renderFinanciero(){
-  let fin;try{fin=await API.get('/api/reportes/financiero?sucursalId='+app.sucursalId);}catch{return;}
+  let fin;try{fin=await API.get('/api/reportes/financiero'+qsRango(app.sucursalId,app._repRango));}catch{return;}
   const col=v=>v<=35?'var(--green)':v<=45?'var(--accent-ink)':'var(--red)';
   const r=fin.rentabilidad||[];
   $('#finBlock').innerHTML=`
