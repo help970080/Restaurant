@@ -377,7 +377,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.16 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.17 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
@@ -794,7 +794,8 @@ async function vInventario(){
   const faltantes=inv.insumos.filter(i=>i.bajo).map(i=>{const sug=Math.round((i.stockMin*2-i.stock)*100)/100;return {...i,sug:sug>0?sug:i.stockMin,costoSug:Math.round((sug>0?sug:i.stockMin)*i.costoUnitario*100)/100};});
   const totalCompra=Math.round(faltantes.reduce((s,i)=>s+i.costoSug,0)*100)/100;
   app._faltantes={lista:faltantes,total:totalCompra};
-  $('#view').innerHTML=`<div class="kpis">
+  $('#view').innerHTML=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><button class="btn dark" id="invPrint">🖨 Imprimir inventario</button><button class="btn" id="invCSV">⬇ Exportar a CSV</button></div>
+  <div class="kpis">
       <div class="kpi accent"><div class="lab">Valor del inventario</div><div class="val">${money(inv.valuacion)}</div></div>
       <div class="kpi"><div class="lab">Insumos por reabastecer</div><div class="val" style="color:${bajos?'var(--red)':'var(--green)'}">${bajos}</div></div>
       <div class="kpi"><div class="lab">Último conteo</div><div class="val" style="font-size:18px">${auds.length?new Date(auds[0].fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'}):'—'}</div>${auds.length?`<div class="lab" style="margin-top:2px;color:${auds[0].mermaTotal>0?'var(--red)':'var(--green)'}">merma ${money(auds[0].mermaTotal)}</div>`:''}</div>
@@ -822,6 +823,21 @@ async function vInventario(){
   if($('#aplicarMargen'))$('#aplicarMargen').onclick=modalAplicarMargen;
   if($('#copiarCompra'))$('#copiarCompra').onclick=copiarListaCompra;
   if($('#imprimirCompra'))$('#imprimirCompra').onclick=imprimirListaCompra;
+  if($('#invPrint'))$('#invPrint').onclick=()=>imprimirInventario(inv);
+  if($('#invCSV'))$('#invCSV').onclick=()=>{const f=[['Insumo','Unidad','Existencia','Mínimo','Costo unitario','Valor','Estado']];inv.insumos.forEach(i=>f.push([i.nombre,i.unidad,i.stock,i.stockMin,i.costoUnitario,Math.round(i.stock*i.costoUnitario*100)/100,i.bajo?'BAJO':'OK']));f.push([],['Valor total',,,,,inv.valuacion]);descargarCSV('inventario_'+new Date().toLocaleDateString('es-MX').replace(/\//g,'-')+'.csv',f);toast('CSV descargado');};
+}
+function imprimirInventario(inv){
+  const suc=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
+  const w=window.open('','inv','width=780,height=900');if(!w){toast('Permite ventanas emergentes');return;}
+  const filas=inv.insumos.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(i=>`<tr${i.bajo?' style="color:#d4503b;font-weight:600"':''}><td>${i.nombre}</td><td style="text-align:right">${i.stock} ${i.unidad}</td><td style="text-align:right">${i.stockMin}</td><td style="text-align:right">${money(i.costoUnitario)}</td><td style="text-align:right">${money(Math.round(i.stock*i.costoUnitario*100)/100)}</td><td style="text-align:center">${i.bajo?'⚠ BAJO':'✓'}</td><td style="width:90px;border-bottom:1px solid #aaa"></td></tr>`).join('');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Inventario</title>
+  <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#211a12;max-width:740px;margin:0 auto;padding:28px}h1{font-size:20px;margin:0}.sub{color:#8a7f70;margin:2px 0 16px}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;border-bottom:2px solid #211a12;padding:6px 4px;font-size:11px;text-transform:uppercase}td{padding:6px 4px;border-bottom:1px solid #f0ebe2}th.r,td.r{text-align:right}.tot{margin-top:14px;font-weight:800;font-size:15px;text-align:right}button{margin-top:18px;padding:11px 22px;border:none;border-radius:10px;background:#211a12;color:#fff;font-weight:700;cursor:pointer}@media print{button{display:none}}</style></head><body>
+  <h1>${(app.tenant&&app.tenant.nombre)||''} · Inventario</h1><div class="sub">${suc} · ${new Date().toLocaleString('es-MX')}</div>
+  <table><thead><tr><th>Insumo</th><th class="r">Existencia</th><th class="r">Mín</th><th class="r">Costo U.</th><th class="r">Valor</th><th style="text-align:center">Estado</th><th>Conteo físico</th></tr></thead><tbody>${filas}</tbody></table>
+  <div class="tot">Valor total del inventario: ${money(inv.valuacion)}</div>
+  <div style="text-align:center"><button onclick="window.print()">Imprimir / PDF</button></div>
+  </body></html>`);
+  w.document.close();
 }
 function listaCompraTexto(){
   const f=app._faltantes||{lista:[],total:0};
@@ -1187,7 +1203,8 @@ function modalReserva(r){
 async function vReportes(){
   const [res,cortes]=await Promise.all([API.get('/api/reportes/resumen?sucursalId='+app.sucursalId),API.get('/api/caja/cortes?sucursalId='+app.sucursalId)]);
   const rows=Object.entries(res.porProducto||{}).sort((a,b)=>b[1].total-a[1].total);
-  $('#view').innerHTML=`<div class="kpis"><div class="kpi accent"><div class="lab">Venta total</div><div class="val">${money(res.venta)}</div></div>
+  $('#view').innerHTML=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><button class="btn dark" id="repEjec">📄 Resumen ejecutivo (inversionista)</button><button class="btn" id="repCSV">⬇ Exportar a CSV (Excel)</button></div>
+  <div class="kpis"><div class="kpi accent"><div class="lab">Venta total</div><div class="val">${money(res.venta)}</div></div>
     <div class="kpi"><div class="lab">Pedidos</div><div class="val">${res.pedidos}</div></div>
     <div class="kpi"><div class="lab">Unidades</div><div class="val">${Object.values(res.porProducto||{}).reduce((s,x)=>s+x.q,0)}</div></div></div>
   <div class="panel" style="margin-bottom:16px"><h3>Ventas por producto</h3><table><thead><tr><th>Producto</th><th class="num">Piezas</th><th class="num">Importe</th><th class="num">% total</th></tr></thead><tbody>
@@ -1207,7 +1224,83 @@ async function vReportes(){
   </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>
   <div id="finBlock"></div>`;
   if(esAdmin())renderFinanciero();
+  if($('#repCSV'))$('#repCSV').onclick=()=>exportarReportesCSV(res);
+  if($('#repEjec'))$('#repEjec').onclick=resumenEjecutivo;
 }
+function descargarCSV(nombre,filas){
+  const csv=filas.map(r=>r.map(c=>{const s=String(c==null?'':c);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join(',')).join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=nombre;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function exportarReportesCSV(res){
+  const fecha=new Date().toLocaleDateString('es-MX');const suc=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
+  const f=[['ComandaPro · Reporte de ventas'],[ (app.tenant&&app.tenant.nombre)||'', suc, fecha],[],
+    ['Venta total',res.venta],['Pedidos',res.pedidos],['Ticket promedio',res.ticketPromedio],['Propinas',res.propinas||0],[],
+    ['VENTAS POR PRODUCTO'],['Producto','Piezas','Importe']];
+  Object.entries(res.porProducto||{}).sort((a,b)=>b[1].total-a[1].total).forEach(([n,d])=>f.push([n,d.q,d.total]));
+  f.push([],['POR SERVICIO'],['Servicio','Importe']);['mostrador','domicilio','mesa'].forEach(k=>f.push([k,res.porServicio[k]]));
+  f.push([],['POR MÉTODO DE PAGO'],['Método','Importe']);['efectivo','tarjeta','transferencia'].forEach(k=>f.push([k,res.porPago[k]]));
+  f.push([],['POR HORA'],['Hora','Venta','Pedidos']);(res.porHora||[]).forEach((x,h)=>{if(x.venta>0)f.push([String(h).padStart(2,'0')+':00',x.venta,x.pedidos]);});
+  descargarCSV(`reporte_ventas_${fecha.replace(/\//g,'-')}.csv`,f);
+  toast('CSV descargado');
+}
+async function resumenEjecutivo(){
+  toast('Generando resumen…');
+  let fin={},canc=[],porSuc=[];
+  const [res,finR,cancR]=await Promise.all([
+    API.get('/api/reportes/resumen'),
+    API.get('/api/reportes/financiero').catch(()=>({})),
+    API.get('/api/cancelaciones').catch(()=>([]))
+  ]);
+  fin=finR;canc=cancR;
+  for(const s of app.sucursales){try{const r=await API.get('/api/reportes/resumen?sucursalId='+s.id);porSuc.push({nombre:s.nombre,venta:r.venta,pedidos:r.pedidos});}catch{}}
+  const ph=res.porHora||[];const picoH=ph.map((x,h)=>({h,...x})).filter(x=>x.venta>0).reduce((a,b)=>b.venta>a.venta?b:a,{h:0,venta:0});
+  const pd=res.porDia||[];const dias=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];const picoD=pd.map((x,i)=>({i,...x})).reduce((a,b)=>b.venta>a.venta?b:a,{i:0,venta:0});
+  const top=Object.entries(res.porProducto||{}).sort((a,b)=>b[1].total-a[1].total).slice(0,5);
+  const cancTotal=canc.reduce((s,x)=>s+(x.total||0),0);
+  const foodPct=fin.foodCostPct!=null?fin.foodCostPct:(fin.cogs&&fin.ingresos?Math.round(fin.cogs/fin.ingresos*1000)/10:null);
+  const w=window.open('','ejec','width=820,height=900');if(!w){toast('Permite ventanas emergentes');return;}
+  const row=(a,b,c)=>`<tr><td>${a}</td><td style="text-align:right;font-weight:700">${b}</td>${c!=null?`<td style="text-align:right;color:#6b6256">${c}</td>`:'<td></td>'}</tr>`;
+  const kpi=(l,v,extra)=>`<div class="k"><div class="kl">${l}</div><div class="kv">${v}</div>${extra?`<div class="ke">${extra}</div>`:''}</div>`;
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Resumen ejecutivo</title>
+  <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#211a12;max-width:780px;margin:0 auto;padding:30px}
+  h1{font-size:24px;margin:0}.sub{color:#8a7f70;margin:2px 0 18px}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+  .k{border:1px solid #ece3d5;border-radius:12px;padding:12px}.kl{font-size:11px;color:#8a7f70;text-transform:uppercase;letter-spacing:.04em}.kv{font-size:22px;font-weight:800;font-family:Georgia,serif}.ke{font-size:11px;color:#8a7f70;margin-top:2px}
+  h2{font-size:15px;margin:22px 0 8px;border-bottom:2px solid #211a12;padding-bottom:4px}
+  table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 4px;border-bottom:1px solid #f0ebe2}
+  .foot{margin-top:26px;color:#8a7f70;font-size:11px;text-align:center}
+  button{margin:18px 6px 0;padding:11px 22px;border:none;border-radius:10px;background:#211a12;color:#fff;font-weight:700;cursor:pointer}
+  @media print{button{display:none}}</style></head><body>
+  <h1>${(app.tenant&&app.tenant.nombre)||'Negocio'}</h1><div class="sub">Resumen ejecutivo · ${new Date().toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})} · datos acumulados</div>
+  <div class="kpis">
+    ${kpi('Venta total',money(res.venta))}
+    ${kpi('Tickets',res.pedidos,'prom '+money(res.ticketPromedio))}
+    ${kpi('Food cost',foodPct!=null?foodPct+'%':'—','meta 28-35%')}
+    ${kpi('Prime cost',fin.primeCostPct!=null?fin.primeCostPct+'%':'—','meta 55-65%')}
+    ${kpi('Mano de obra',fin.manoDeObraPct!=null?fin.manoDeObraPct+'%':'—','nómina/ventas')}
+    ${kpi('Margen bruto',foodPct!=null?(100-foodPct).toFixed(0)+'%':'—','sobre insumos')}
+    ${kpi('Propinas',money(res.propinas||0),'al personal')}
+    ${kpi('Cancelaciones',canc.length,money(cancTotal))}
+  </div>
+  <h2>Ventas por sucursal</h2><table>${porSuc.map(s=>row(s.nombre,money(s.venta),s.pedidos+' tickets')).join('')||row('—','','')}</table>
+  <h2>Mezcla de venta</h2><table>
+    ${row('Mostrador',money(res.porServicio.mostrador),pctTxt(res.porServicio.mostrador,res.venta))}
+    ${row('Domicilio',money(res.porServicio.domicilio),pctTxt(res.porServicio.domicilio,res.venta))}
+    ${row('Mesa',money(res.porServicio.mesa),pctTxt(res.porServicio.mesa,res.venta))}
+  </table>
+  <h2>Top 5 productos</h2><table>${top.map(([n,d])=>row(n,money(d.total),d.q+' pzas')).join('')||row('—','','')}</table>
+  <h2>Operación</h2><table>
+    ${row('Hora pico',String(picoH.h).padStart(2,'0')+':00',money(picoH.venta))}
+    ${row('Mejor día',dias[picoD.i],money(picoD.venta))}
+    ${row('Mezcla de pago','Efectivo '+pctTxt(res.porPago.efectivo,res.venta)+' · Tarjeta '+pctTxt(res.porPago.tarjeta,res.venta),'')}
+  </table>
+  <div class="foot">Generado por ComandaPro · ${new Date().toLocaleString('es-MX')}</div>
+  <div style="text-align:center"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
+  </body></html>`);
+  w.document.close();
+}
+function pctTxt(part,total){return total>0?Math.round(part/total*100)+'%':'0%';}
 async function renderFinanciero(){
   let fin;try{fin=await API.get('/api/reportes/financiero?sucursalId='+app.sucursalId);}catch{return;}
   const col=v=>v<=35?'var(--green)':v<=45?'var(--accent-ink)':'var(--red)';
