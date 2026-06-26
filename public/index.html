@@ -245,6 +245,30 @@
   .lnk-split:hover{background:var(--soft)}
   .prod .pdesc{font-size:11px;color:var(--muted);margin:2px 0 4px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+  .navtog{display:none}
+  .navbk{display:none}
+  @media(max-width:820px){
+    .navtog{display:inline-flex;align-items:center;justify-content:center;background:var(--paper);border:1px solid var(--line);border-radius:9px;width:40px;height:40px;font-size:20px;flex:0 0 auto;cursor:pointer}
+    .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:60;width:80%;max-width:280px;transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,.4)}
+    .shell.navopen .sidebar{transform:none}
+    .navbk{display:block;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:55;opacity:0;pointer-events:none;transition:opacity .25s}
+    .shell.navopen .navbk{opacity:1;pointer-events:auto}
+    .app-main{width:100%}
+    .topbar{padding:10px 14px;gap:9px;flex-wrap:wrap}
+    .vtitle{font-size:18px}
+    select.suc{padding:7px 9px;font-size:13px;max-width:130px}
+    .turno-pill{font-size:12px;padding:6px 9px}
+    .topbar .btn{padding:8px 12px;font-size:13px}
+    .view{padding:14px}
+    .kpis{grid-template-columns:repeat(2,1fr);gap:10px}
+    .pos{grid-template-columns:1fr;height:auto;gap:14px}
+    .ticket{height:auto;max-height:none;overflow:visible}
+    .pgrid{grid-template-columns:repeat(2,1fr);gap:10px}
+    .cols2,.cols2-wide,.grid2{grid-template-columns:1fr!important}
+    .view table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+    .panel{padding:14px}
+  }
+  @media(max-width:420px){.pgrid{grid-template-columns:1fr}.kpis{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -485,11 +509,12 @@ function brandSidebar(){
 }
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
+    <div class="navbk" id="navbk"></div>
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.21 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.22 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div id="offbar" class="offbar" style="display:none"></div>
-      <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
+      <div class="topbar"><button class="navtog" id="navTog" aria-label="Menú">☰</button><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <select class="suc" id="sucSel"></select>
         <div class="turno-pill off" id="turnoPill">Turno cerrado</div>
         <button class="btn accent" id="btnTurno">Abrir turno</button>
@@ -497,6 +522,9 @@ function renderShell(){
   $('#logout').onclick=()=>{API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
   $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
   $('#btnTurno').onclick=()=>app.turno?modalCerrarTurno():modalAbrirTurno();
+  const cerrarNav=()=>$('#app').querySelector('.shell').classList.remove('navopen');
+  if($('#navTog'))$('#navTog').onclick=()=>$('#app').querySelector('.shell').classList.toggle('navopen');
+  if($('#navbk'))$('#navbk').onclick=cerrarNav;
   renderTopbar();renderNav();renderConexion();
 }
 function renderTopbar(){
@@ -512,7 +540,7 @@ function renderTopbar(){
 async function renderNav(){
   let badge=0;try{badge=(await API.get('/api/cocina?sucursalId='+app.sucursalId)).length;}catch{}
   $('#nav').innerHTML=NAV().map(([k,l])=>`<button data-v="${k}" class="${k===app.vista?'active':''}">${IC[k]}<span>${l}</span>${k==='cocina'&&badge?`<span class="badge">${badge}</span>`:''}</button>`).join('');
-  document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.v));
+  document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{const sh=$('#app').querySelector('.shell');if(sh)sh.classList.remove('navopen');go(b.dataset.v);});
 }
 function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
