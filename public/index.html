@@ -486,7 +486,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.20 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.21 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div id="offbar" class="offbar" style="display:none"></div>
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
@@ -1595,7 +1595,7 @@ function modalNuevoUsuario(){
 // ===========================================================================
 function renderSuper(){
   $('#app').innerHTML=`<style>
-    .spr{--sbg:#eef1f7;--ssurf:#fff;--ssurf2:#f1f4f9;--sline:#dde3ec;--stxt:#1b2330;--sdim:#5b6675;--sfaint:#97a2b2;--sacc:#E8A33D;--sgrn:#178a55;--sred:#d6432d;background:var(--sbg);color:var(--stxt);min-height:100vh;font-size:14.5px}
+    .spr{--sbg:#eef1f7;--ssurf:#fff;--ssurf2:#f1f4f9;--sline:#dde3ec;--stxt:#1b2330;--sdim:#5b6675;--sfaint:#97a2b2;--sacc:#E8A33D;--sgrn:#178a55;--sred:#d6432d;background:var(--sbg);color:var(--stxt);height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:14.5px}
     .spr .top{background:linear-gradient(90deg,#1b2330,#2a3547);color:#fff;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
     .spr .top h1{font-size:1.15rem;display:flex;align-items:center;gap:10px;font-weight:800}
     .spr .badge{background:var(--sacc);color:#1a1408;font-size:.65rem;font-weight:800;padding:3px 8px;border-radius:6px;letter-spacing:.04em}
