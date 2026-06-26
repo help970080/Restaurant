@@ -34,6 +34,7 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   const sys = await db.loadSys();
   const u = sys.usuarios[username];
   if (!u || !bcrypt.compareSync(password, u.passHash)) throw bad('Usuario o contraseña incorrectos', 401);
+  if (u.rol !== 'superadmin' && sys.tenants[u.row] && sys.tenants[u.row].activo === false) throw bad('Esta cuenta está suspendida. Contacta al proveedor.', 403);
   const token = firmarToken({ row: u.row, rol: u.rol, username, sucursalId: u.sucursalId || null });
   if (u.rol === 'superadmin') return res.json({ token, tenant: { nombre: 'Super Admin', logo: null, rol: 'superadmin' } });
   const tdoc = await db.loadState(u.row);
@@ -100,25 +101,52 @@ app.get('/api/super/tenants', soloSuper, wrap(async (req, res) => {
   const out = [];
   for (const [row, t] of Object.entries(sys.tenants)) {
     const usuarios = Object.values(sys.usuarios).filter((u) => u.row === +row).length;
-    let sucursales = 0;
-    try { const doc = await db.loadState(+row); sucursales = doc ? Object.keys(doc.sucursales).length : 0; } catch {}
-    out.push({ row: +row, nombre: t.nombre, usuarios, sucursales });
+    let sucursales = 0, productos = 0;
+    try { const doc = await db.loadState(+row); if (doc) { sucursales = Object.keys(doc.sucursales).length; productos = Object.keys(doc.menu.productos || {}).length; } } catch {}
+    out.push({ row: +row, nombre: t.nombre, usuarios, sucursales, productos, activo: t.activo !== false, creado: t.creado || null });
   }
   res.json(out);
 }));
 app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
-  const { nombre, adminUser, adminPass } = req.body || {};
-  if (!nombre || !adminUser || !adminPass) throw bad('Falta nombre, adminUser o adminPass');
+  const b = req.body || {};
+  const nombre = (b.nombre || '').trim();
+  const adminUser = (b.adminUser || b.adminUsuario || '').trim();
+  let adminPass = b.adminPass || b.adminPassword || '';
+  const adminNombre = (b.adminNombre || 'Administrador').trim();
+  if (!nombre || !adminUser) throw bad('Falta nombre del restaurante o usuario admin');
+  if (!adminPass) adminPass = Math.random().toString(36).slice(2, 8) + Math.floor(10 + Math.random() * 89);
   const sys = await db.loadSys();
   if (sys.usuarios[adminUser]) throw bad('Ese usuario admin ya existe', 409);
   const row = sys.nextRow || 1;
   const doc = buildTenantDoc(nombre);
   await db.insertState(row, doc);
-  sys.tenants[row] = { nombre };
-  sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
+  sys.tenants[row] = { nombre, activo: true, creado: new Date().toISOString() };
+  sys.usuarios[adminUser] = { row, rol: 'admin', nombre: adminNombre, passHash: bcrypt.hashSync(adminPass, 10) };
   sys.nextRow = row + 1;
   await db.saveSys(sys);
-  res.json({ ok: true, row, nombre });
+  res.json({ ok: true, row, nombre, adminUsuario: adminUser, adminPassword: adminPass });
+}));
+// Suspender / reactivar un restaurante
+app.patch('/api/super/tenants/:row', soloSuper, wrap(async (req, res) => {
+  const row = +req.params.row;
+  const { activo } = req.body || {};
+  const sys = await db.loadSys();
+  if (!sys.tenants[row]) throw bad('Restaurante inexistente', 404);
+  sys.tenants[row].activo = activo !== false;
+  await db.saveSys(sys);
+  res.json({ ok: true, row, activo: sys.tenants[row].activo });
+}));
+// Entrar como soporte: token del admin del restaurante
+app.post('/api/super/enter/:row', soloSuper, wrap(async (req, res) => {
+  const row = +req.params.row;
+  const sys = await db.loadSys();
+  if (!sys.tenants[row]) throw bad('Restaurante inexistente', 404);
+  const entry = Object.entries(sys.usuarios).find(([, u]) => u.row === row && u.rol === 'admin') || Object.entries(sys.usuarios).find(([, u]) => u.row === row);
+  if (!entry) throw bad('Ese restaurante no tiene usuarios', 404);
+  const [username, u] = entry;
+  const token = firmarToken({ row, rol: u.rol, username, sucursalId: u.sucursalId || null });
+  const doc = await db.loadState(row);
+  res.json({ token, tenant: { nombre: doc ? doc.meta.nombre : sys.tenants[row].nombre, logo: (doc && doc.config && doc.config.logo) || null, rol: u.rol } });
 }));
 
 // ---------------------------------------------------------------------------
