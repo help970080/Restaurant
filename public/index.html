@@ -486,7 +486,7 @@ function brandSidebar(){
 function renderShell(){
   $('#app').innerHTML=`<div class="shell">
     <nav class="sidebar"><div class="logo" id="brand">${brandSidebar()}</div><div class="nav" id="nav"></div>
-      <div class="side-foot"><span>v0.9.19 · API</span><button id="logout">Salir</button></div></nav>
+      <div class="side-foot"><span>v0.9.20 · API</span><button id="logout">Salir</button></div></nav>
     <div class="app-main">
       <div id="offbar" class="offbar" style="display:none"></div>
       <div class="topbar"><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
@@ -1594,16 +1594,92 @@ function modalNuevoUsuario(){
 //  SUPER ADMIN  — crea y administra restaurantes (como CobraPro)
 // ===========================================================================
 function renderSuper(){
-  $('#app').innerHTML=`<div class="shell">
-    <nav class="sidebar"><div class="logo"><span class="brandtext">Comanda<b>Pro</b></span></div>
-      <div class="nav"><button class="active">${IC.ajustes}<span>Restaurantes</span></button></div>
-      <div class="side-foot"><span>Super Admin</span><button id="logout">Salir</button></div></nav>
-    <div class="app-main"><div class="topbar"><div class="vtitle">Restaurantes</div><div class="spacer"></div>
-      <button class="btn accent" id="newTenant">+ Crear restaurante</button></div>
-      <div class="view" id="view"><div class="loading">Cargando…</div></div></div></div>`;
-  $('#logout').onclick=()=>{API.token=null;app.rol=null;app.tenant=null;boot();};
-  $('#newTenant').onclick=modalNuevoTenant;
-  vSuperTenants();
+  $('#app').innerHTML=`<style>
+    .spr{--sbg:#eef1f7;--ssurf:#fff;--ssurf2:#f1f4f9;--sline:#dde3ec;--stxt:#1b2330;--sdim:#5b6675;--sfaint:#97a2b2;--sacc:#E8A33D;--sgrn:#178a55;--sred:#d6432d;background:var(--sbg);color:var(--stxt);min-height:100vh;font-size:14.5px}
+    .spr .top{background:linear-gradient(90deg,#1b2330,#2a3547);color:#fff;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+    .spr .top h1{font-size:1.15rem;display:flex;align-items:center;gap:10px;font-weight:800}
+    .spr .badge{background:var(--sacc);color:#1a1408;font-size:.65rem;font-weight:800;padding:3px 8px;border-radius:6px;letter-spacing:.04em}
+    .spr .wrap{max-width:980px;margin:0 auto;padding:22px 18px 60px}
+    .spr .panel{background:var(--ssurf);border:1px solid var(--sline);border-radius:14px;padding:20px;margin-bottom:18px}
+    .spr .panel h3{font-size:1rem;margin-bottom:4px}
+    .spr .panel .psub{color:var(--sdim);font-size:.8rem;margin-bottom:16px}
+    .spr .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .spr .field label{font-size:.72rem;color:var(--sdim);display:block;margin-bottom:4px}
+    .spr .field input{width:100%;padding:10px;background:var(--ssurf2);border:1px solid var(--sline);border-radius:8px;color:var(--stxt);font-family:inherit;font-size:.9rem}
+    .spr .kp{display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+    .spr .kp .b{background:var(--ssurf);border:1px solid var(--sline);border-radius:12px;padding:14px 20px;flex:1;min-width:120px}
+    .spr .kp .b .l{font-size:.7rem;color:var(--sfaint);text-transform:uppercase;letter-spacing:.05em}
+    .spr .kp .b .v{font-size:1.7rem;font-weight:800;margin-top:2px}
+    .spr table{width:100%;border-collapse:collapse;margin-top:6px}
+    .spr th{text-align:left;font-size:.7rem;color:var(--sfaint);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;border-bottom:1px solid var(--sline)}
+    .spr td{padding:11px 10px;border-bottom:1px solid var(--sline);font-size:.88rem}
+    .spr .pill{font-size:.68rem;padding:3px 9px;border-radius:20px;font-weight:700}
+    .spr .pill.on{background:#d8f0df;color:var(--sgrn)}.spr .pill.off{background:#fde0db;color:var(--sred)}
+    .spr .muted{color:var(--sfaint);font-size:.78rem}
+    .spr .sbtn{background:var(--ssurf2);border:1px solid var(--sline);color:var(--stxt);padding:8px 12px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600}
+    .spr .sbtn.gold{background:linear-gradient(180deg,#f0b429,#E8A33D);border-color:var(--sacc);color:#1a1408}
+    .spr .sbtn.lite{background:transparent;border-color:rgba(255,255,255,.3);color:#fff}
+    @media(max-width:680px){.spr .grid{grid-template-columns:1fr}.spr table{display:block;overflow-x:auto;white-space:nowrap}}
+  </style>
+  <div class="spr">
+    <div class="top"><h1>🍔 ComandaPro <span class="badge">PANEL MAESTRO</span></h1>
+      <div style="display:flex;gap:10px;align-items:center"><span class="muted" style="color:#cbd3df">${app.username||''}</span><button class="sbtn lite" id="sprLogout">Salir</button></div></div>
+    <div class="wrap">
+      <div class="kp" id="sprKpis"></div>
+      <div class="panel">
+        <h3>＋ Nuevo restaurante</h3>
+        <div class="psub">Se crea con su menú base, 2 sucursales y un administrador. El admin se autogestiona y sus datos quedan aislados de los demás.</div>
+        <div class="grid">
+          <div class="field"><label>Nombre del restaurante</label><input id="t-nombre" placeholder="Ej. Jefe Burgers, Tacos El Güero"></div>
+          <div class="field"><label>Nombre del administrador</label><input id="t-admnom" value="Administrador"></div>
+          <div class="field"><label>Usuario del admin (único en el sistema)</label><input id="t-admuser" autocomplete="off" placeholder="ej. jefeburgers"></div>
+          <div class="field"><label>Contraseña (vacío = se genera una)</label><input id="t-admpass" autocomplete="off" placeholder="opcional"></div>
+        </div>
+        <button class="sbtn gold" style="margin-top:14px" id="sprCrear">Crear restaurante</button>
+      </div>
+      <div class="panel">
+        <h3>Restaurantes registrados</h3>
+        <div class="psub">Cada quien maneja su operación. Puedes entrar a uno para dar soporte, o suspenderlo.</div>
+        <table><thead><tr><th>Restaurante</th><th>Usuarios</th><th>Sucursales</th><th>Productos</th><th>Estado</th><th></th></tr></thead><tbody id="sprTb"><tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Cargando…</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>`;
+  $('#sprLogout').onclick=()=>{API.token=null;app.rol=null;app.tenant=null;boot();};
+  $('#sprCrear').onclick=sprCrear;
+  sprCargar();
+}
+async function sprCargar(){
+  let list;try{list=await API.get('/api/super/tenants');}catch(e){toast(e.message);return;}
+  $('#sprKpis').innerHTML=`<div class="b"><div class="l">Restaurantes</div><div class="v">${list.length}</div></div>
+    <div class="b"><div class="l">Activos</div><div class="v">${list.filter(t=>t.activo).length}</div></div>
+    <div class="b"><div class="l">Sucursales</div><div class="v">${list.reduce((s,t)=>s+(t.sucursales||0),0)}</div></div>
+    <div class="b"><div class="l">Usuarios</div><div class="v">${list.reduce((s,t)=>s+(t.usuarios||0),0)}</div></div>`;
+  $('#sprTb').innerHTML=list.length?list.map(t=>`<tr>
+    <td><b>${t.nombre}</b><div class="muted">#${t.row}${t.creado?' · creado '+new Date(t.creado).toLocaleDateString('es-MX'):''}</div></td>
+    <td>${t.usuarios}</td><td>${t.sucursales}</td><td>${t.productos!=null?t.productos:'—'}</td>
+    <td><span class="pill ${t.activo?'on':'off'}">${t.activo?'Activo':'Suspendido'}</span></td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="sbtn" data-enter="${t.row}">Entrar (soporte)</button>
+      <button class="sbtn" data-toggle="${t.row}" data-act="${t.activo?0:1}">${t.activo?'Suspender':'Reactivar'}</button>
+    </td></tr>`).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Aún no hay restaurantes. Crea el primero arriba.</td></tr>';
+  document.querySelectorAll('[data-enter]').forEach(b=>b.onclick=()=>sprEntrar(+b.dataset.enter));
+  document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>sprToggle(+b.dataset.toggle,b.dataset.act==='1'));
+}
+async function sprCrear(){
+  const nombre=$('#t-nombre').value.trim(),adminUsuario=$('#t-admuser').value.trim(),adminPassword=$('#t-admpass').value,adminNombre=$('#t-admnom').value.trim();
+  if(!nombre||!adminUsuario){toast('Nombre del restaurante y usuario admin son obligatorios');return;}
+  try{const d=await API.post('/api/super/tenants',{nombre,adminUsuario,adminPassword,adminNombre});
+    alert(`Restaurante creado:\n\nRestaurante: ${d.nombre}\nUsuario admin: ${d.adminUsuario}\nContraseña: ${d.adminPassword}\n\nEntrégale estos datos al dueño. Con eso entra y configura su menú y equipo.`);
+    ['t-nombre','t-admuser','t-admpass'].forEach(id=>$('#'+id).value='');sprCargar();
+  }catch(e){toast(e.message);}
+}
+async function sprEntrar(row){
+  try{const d=await API.post('/api/super/enter/'+row);API.token=d.token;app.tenant=d.tenant;app.sucursalId=null;app.rol=null;boot();toast('Entraste como soporte. Sal para volver al panel.',{ms:4000});}
+  catch(e){toast(e.message);}
+}
+async function sprToggle(row,activo){
+  if(!confirm(activo?'¿Reactivar este restaurante?':'¿Suspender este restaurante? Sus usuarios no podrán entrar.'))return;
+  try{await API.patch('/api/super/tenants/'+row,{activo});sprCargar();}catch(e){toast(e.message);}
 }
 async function vSuperTenants(){
   const tenants=await API.get('/api/super/tenants');
