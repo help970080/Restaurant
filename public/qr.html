@@ -72,8 +72,13 @@ header::after{
 }
 .prod{
   background:var(--card);border-radius:var(--radio);padding:13px 14px;margin-bottom:9px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:var(--sombra);
+  display:flex;align-items:center;gap:13px;box-shadow:var(--sombra);
 }
+.p-ico{
+  width:54px;height:54px;border-radius:14px;flex:none;display:grid;place-items:center;
+  font-size:26px;background:var(--bg);border:1px solid var(--linea);
+}
+.prod .cuerpo{flex:1;min-width:0}
 .prod .nm{font-weight:700;font-size:15px;line-height:1.25}
 .prod .ds{color:var(--muted);font-size:12.5px;margin:2px 0 4px;line-height:1.35}
 .prod .pr{font-weight:800;font-size:14.5px}
@@ -333,7 +338,8 @@ function fichaProducto(p) {
       ? `<div class="qty"><button onclick="cambiar('${p.id}',-1)">−</button><span>${enCarrito}</span><button onclick="cambiar('${p.id}',1)">+</button></div>`
       : `<button class="add" onclick="cambiar('${p.id}',1)">+</button>`);
   return `<div class="prod">
-      <div>
+      ${p.icono ? `<div class="p-ico" aria-hidden="true">${p.icono}</div>` : ''}
+      <div class="cuerpo">
         <div class="nm">${esc(p.nombre)}</div>
         ${p.descripcion ? `<div class="ds">${esc(p.descripcion)}</div>` : ''}
         <div class="pr mono">${money(p.precioBase)}${p.conOpciones ? ' <i>+ opciones</i>' : ''}</div>
@@ -474,6 +480,7 @@ function abrirCuenta() {
 function pintarCuenta() {
   const lineas = carrito.map((l, i) => `
     <div class="row">
+      ${l.prod.icono ? `<div class="p-ico" style="width:40px;height:40px;font-size:20px;border-radius:11px" aria-hidden="true">${l.prod.icono}</div>` : ''}
       <div class="d">
         <b>${esc(l.prod.nombre)}</b>
         ${l.mods.length ? `<small>${esc(l.mods.map((m) => m.nombre).join(' · '))}</small>` : ''}
@@ -568,7 +575,7 @@ function abrirSeguimiento(folio, aviso, demo) {
   seguimiento = { folio, demo: !!demo, timer: null };
   carrito.length = 0;
   refrescarBarra();
-  $('#btnMesero').style.display = '';
+  $('#btnMesero').style.display = 'none'; // en esta pantalla va como botón normal
   if (aviso === 'fallo') toast('El pago no se completó. Puedes intentar de nuevo.');
   refrescarSeguimiento();
   seguimiento.timer = setInterval(() => {
@@ -578,9 +585,10 @@ function abrirSeguimiento(folio, aviso, demo) {
 }
 
 async function refrescarSeguimiento() {
+  if (!seguimiento) return;
   try {
     const r = await fetch(`/qr/${ROW}/${SUC}/pedido/${seguimiento.folio}`);
-    if (!r.ok) return;
+    if (!r.ok || !seguimiento) return;
     pintarSeguimiento(await r.json());
   } catch (e) { /* reintenta en el siguiente ciclo */ }
 }
@@ -618,7 +626,30 @@ function pintarSeguimiento(p) {
       ${!p.pagado && seguimiento.demo
         ? `<button class="cta" onclick="simularPago()">Simular el cobro (demo)</button>`
         : ''}
-      ${p.pagado ? `<button class="cta" onclick="location.href='/qr/${ROW}/${SUC}${mesa ? '?mesa=' + encodeURIComponent(mesa) : ''}'">Pedir algo más</button>` : ''}
+      ${p.pagado ? `<button class="cta" onclick="volverAlMenu()">Pedir algo más</button>` : ''}
+      <button class="cta sec" onclick="llamarMesero()">🔔 Llamar al mesero</button>
+      ${p.paso >= 4 ? `<button class="cta sec" onclick="cerrarPedido()">Cerrar</button>` : ''}
+    </div>`;
+}
+
+function volverAlMenu() {
+  if (seguimiento && seguimiento.timer) clearInterval(seguimiento.timer);
+  location.href = `/qr/${ROW}/${SUC}${mesa ? '?mesa=' + encodeURIComponent(mesa) : ''}`;
+}
+
+// Cierra la sesión del cliente. No intentamos cerrar la pestaña: el navegador
+// solo lo permite si él mismo la abrió, así que despedimos y dejamos la puerta.
+function cerrarPedido() {
+  if (seguimiento && seguimiento.timer) clearInterval(seguimiento.timer);
+  seguimiento = null;
+  $('#btnMesero').style.display = 'none';
+  $('#cartbar').classList.remove('on');
+  $('#app').innerHTML = `
+    <div class="msg" style="padding-top:90px">
+      <div class="big">🌺</div>
+      <h3>Gracias por tu visita</h3>
+      <p>Ya puedes cerrar esta pantalla.<br>Vuelve pronto.</p>
+      <button class="cta" style="max-width:280px;margin:26px auto 0" onclick="volverAlMenu()">Ver el menú otra vez</button>
     </div>`;
 }
 
