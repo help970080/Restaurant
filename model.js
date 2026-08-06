@@ -190,6 +190,7 @@ function cerrarTurno(t, { usuario, conteoEfectivo }) {
   const vEf = sum((m) => m.tipo === 'venta' && m.metodoPago === 'efectivo');
   const vTa = sum((m) => m.tipo === 'venta' && m.metodoPago === 'tarjeta');
   const vTr = sum((m) => m.tipo === 'venta' && m.metodoPago === 'transferencia');
+  const vMp = sum((m) => m.tipo === 'venta' && m.metodoPago === 'mercadopago'); // cobros del menú QR
   const ent = sum((m) => m.tipo === 'entrada');
   const sal = sum((m) => m.tipo === 'salida');
   const propEf = sum((m) => m.tipo === 'propina' && m.metodoPago === 'efectivo');
@@ -197,7 +198,7 @@ function cerrarTurno(t, { usuario, conteoEfectivo }) {
   const espEf = r2(t.fondoInicial + vEf + propEf + ent - sal); // las propinas en efectivo están en el cajón
   const dif = r2(conteoEfectivo - espEf);
   t.estado = 'cerrado'; t.cerradoPor = usuario; t.cerrado = new Date().toISOString(); t.conteo = r2(conteoEfectivo);
-  t.esperado = { efectivo: espEf, tarjeta: vTa, transferencia: vTr, ventaTotal: r2(vEf + vTa + vTr), fondoInicial: t.fondoInicial, entradas: ent, salidas: sal, propinasEfectivo: propEf, propinasTarjeta: propTar, propinasTotal: r2(propEf + propTar) };
+  t.esperado = { efectivo: espEf, tarjeta: vTa, transferencia: vTr, mercadopago: vMp, ventaTotal: r2(vEf + vTa + vTr + vMp), fondoInicial: t.fondoInicial, entradas: ent, salidas: sal, propinasEfectivo: propEf, propinasTarjeta: propTar, propinasTotal: r2(propEf + propTar) };
   t.diferencia = dif;
   t.resultado = dif === 0 ? 'cuadrado' : (dif < 0 ? 'faltante' : 'sobrante');
   return t;
