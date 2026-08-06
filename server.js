@@ -1105,7 +1105,7 @@ app.get('/qr/:row/:suc/menu', (req, res) => {
       const categorias = Object.values(e.menu.categorias).map((c) => ({ id: c.id, nombre: c.nombre, orden: c.orden || 0 })).sort((a, b) => a.orden - b.orden);
       const productos = Object.values(e.menu.productos)
         .filter((p) => p.activo && p.disponible !== false)
-        .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, estacion: p.estacion || 'Cocina', gruposIds: p.gruposIds || [], conOpciones: (p.gruposIds || []).length > 0 }));
+        .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, estacion: p.estacion || 'Cocina', icono: p.icono || '', gruposIds: p.gruposIds || [], conOpciones: (p.gruposIds || []).length > 0 }));
       // Solo los grupos que algun producto visible usa, para no exponer el menu completo.
       const usados = new Set(productos.flatMap((p) => p.gruposIds));
       const grupos = Object.values(e.menu.gruposModificadores)
