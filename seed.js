@@ -65,11 +65,16 @@ function buildTenantDoc(nombre = 'Jefe Burgers') {
 }
 
 // ============================================================================
-//  Plantilla NEVERÍA — Hawaiian Paradise
-//  Dos estaciones de producción: Barra (raspados, nieves, frappés, café) y
-//  Crepería (crepas dulces y saladas).
+//  Plantilla NEVERÍA — Hawaiian Paradise (Cocoyoc)
+//  Catálogo tomado de sus pizarrones: raspados, smoothies, aguas, crepas
+//  y botanas. Dos estaciones de producción: Barra y Crepería.
+//
 //  Nota: TODO lo que se prepara lleva destino 'cocina' para que entre al KDS;
 //  la separación real de pantallas la hace el campo `estacion`.
+//
+//  Sobre los tamaños: el precio base de cada raspado es el CH ($25) y los
+//  tamaños M, G y Bubble suben por modificador. Así un solo producto cubre
+//  las cuatro columnas del pizarrón sin duplicar el menú.
 // ============================================================================
 function buildHawaiianDoc(nombre = 'Hawaiian Paradise') {
   const e = M.estadoInicial({ nombre });
@@ -77,148 +82,233 @@ function buildHawaiianDoc(nombre = 'Hawaiian Paradise') {
   const CREPE = 'Crepería';
 
   // Sucursal
-  const suc = { id: M.uid('suc'), nombre: 'Lomas de Cocoyoc', codigo: 'COCOYOC', activa: true };
+  const suc = { id: M.uid('suc'), nombre: 'Cocoyoc', codigo: 'COCOYOC', activa: true };
   e.sucursales[suc.id] = suc;
 
-  // Insumos
+  // ---- Insumos -------------------------------------------------------------
   const ins = {
-    hielo:    M.crearInsumo({ nombre: 'Hielo', unidad: 'kg', stock: 200, costoUnitario: 3.5, stockMin: 60 }),
+    hielo:    M.crearInsumo({ nombre: 'Hielo', unidad: 'kg', stock: 250, costoUnitario: 3.5, stockMin: 70 }),
+    jNatural: M.crearInsumo({ nombre: 'Jarabe natural', unidad: 'lt', stock: 30, costoUnitario: 42, stockMin: 8 }),
     jLeche:   M.crearInsumo({ nombre: 'Jarabe base leche', unidad: 'lt', stock: 30, costoUnitario: 48, stockMin: 8 }),
-    jNatural: M.crearInsumo({ nombre: 'Jarabe fruta natural', unidad: 'lt', stock: 30, costoUnitario: 42, stockMin: 8 }),
     jConc:    M.crearInsumo({ nombre: 'Jarabe concentrado', unidad: 'lt', stock: 20, costoUnitario: 26, stockMin: 6 }),
+    chamoy:   M.crearInsumo({ nombre: 'Chamoy', unidad: 'porc', stock: 300, costoUnitario: 1.6, stockMin: 80 }),
+    chile:    M.crearInsumo({ nombre: 'Chile en polvo', unidad: 'porc', stock: 300, costoUnitario: 0.9, stockMin: 80 }),
     lechera:  M.crearInsumo({ nombre: 'Lechera', unidad: 'porc', stock: 300, costoUnitario: 2.8, stockMin: 80 }),
-    chamoy:   M.crearInsumo({ nombre: 'Chamoy', unidad: 'porc', stock: 250, costoUnitario: 1.6, stockMin: 60 }),
-    vaso16:   M.crearInsumo({ nombre: 'Vaso 16 oz', unidad: 'pza', stock: 500, costoUnitario: 2.4, stockMin: 150 }),
-    vaso24:   M.crearInsumo({ nombre: 'Vaso 24 oz', unidad: 'pza', stock: 250, costoUnitario: 3.2, stockMin: 80 }),
-    nieve:    M.crearInsumo({ nombre: 'Nieve de garrafa', unidad: 'lt', stock: 45, costoUnitario: 62, stockMin: 12 }),
-    masa:     M.crearInsumo({ nombre: 'Masa para crepa', unidad: 'pza', stock: 180, costoUnitario: 5.5, stockMin: 50 }),
-    queso:    M.crearInsumo({ nombre: 'Queso mozzarella', unidad: 'g', stock: 8000, costoUnitario: 0.16, stockMin: 2000 }),
-    jamon:    M.crearInsumo({ nombre: 'Jamón', unidad: 'reb', stock: 300, costoUnitario: 3.2, stockMin: 80 }),
-    fresa:    M.crearInsumo({ nombre: 'Fresa natural', unidad: 'g', stock: 6000, costoUnitario: 0.09, stockMin: 1500 }),
-    crema:    M.crearInsumo({ nombre: 'Crema batida', unidad: 'porc', stock: 220, costoUnitario: 3.1, stockMin: 60 }),
-    leche:    M.crearInsumo({ nombre: 'Leche', unidad: 'lt', stock: 60, costoUnitario: 26, stockMin: 15 }),
+    vaso:     M.crearInsumo({ nombre: 'Vaso y popote', unidad: 'pza', stock: 800, costoUnitario: 2.8, stockMin: 200 }),
+    tapioca:  M.crearInsumo({ nombre: 'Perlas de tapioca', unidad: 'porc', stock: 150, costoUnitario: 7.5, stockMin: 40 }),
+    leche:    M.crearInsumo({ nombre: 'Leche', unidad: 'lt', stock: 70, costoUnitario: 26, stockMin: 18 }),
+    baseSmo:  M.crearInsumo({ nombre: 'Base para smoothie', unidad: 'porc', stock: 200, costoUnitario: 9, stockMin: 50 }),
+    fruta:    M.crearInsumo({ nombre: 'Fruta natural', unidad: 'g', stock: 9000, costoUnitario: 0.09, stockMin: 2000 }),
     cafe:     M.crearInsumo({ nombre: 'Café molido', unidad: 'g', stock: 4000, costoUnitario: 0.42, stockMin: 800 }),
+    masa:     M.crearInsumo({ nombre: 'Masa para crepa', unidad: 'pza', stock: 200, costoUnitario: 5.5, stockMin: 60 }),
+    queso:    M.crearInsumo({ nombre: 'Queso', unidad: 'g', stock: 9000, costoUnitario: 0.16, stockMin: 2200 }),
+    jamon:    M.crearInsumo({ nombre: 'Jamón', unidad: 'reb', stock: 320, costoUnitario: 3.2, stockMin: 90 }),
+    pepperoni:M.crearInsumo({ nombre: 'Pepperoni', unidad: 'reb', stock: 400, costoUnitario: 1.5, stockMin: 100 }),
+    dulce:    M.crearInsumo({ nombre: 'Mermelada / cajeta / nutella', unidad: 'porc', stock: 260, costoUnitario: 4.2, stockMin: 70 }),
+    totopo:   M.crearInsumo({ nombre: 'Frituras para botana', unidad: 'porc', stock: 180, costoUnitario: 9.5, stockMin: 50 }),
+    yogurt:   M.crearInsumo({ nombre: 'Yogurt natural', unidad: 'porc', stock: 90, costoUnitario: 12, stockMin: 25 }),
   };
   Object.values(ins).forEach((i) => (e.insumos[i.id] = i));
 
-  // Grupos de modificadores
-  const gTam = M.crearGrupo({
+  // ---- Grupos de modificadores --------------------------------------------
+  // Raspados: CH 25 · M 50 · G 60 · Bubble 75
+  const gTamRaspado = M.crearGrupo({
     nombre: 'Tamaño', obligatorio: true,
-    opciones: [M.crearOpcion({ nombre: '16 oz', porDefecto: true }), M.crearOpcion({ nombre: '24 oz', precioDelta: 25 })],
-  });
-  const gTop = M.crearGrupo({
-    nombre: 'Toppings', tipo: 'multiple', max: 6,
     opciones: [
-      M.crearOpcion({ nombre: 'Lechera', porDefecto: true }),
-      M.crearOpcion({ nombre: 'Chamoy' }),
-      M.crearOpcion({ nombre: 'Chile en polvo' }),
-      M.crearOpcion({ nombre: 'Canela' }),
-      M.crearOpcion({ nombre: 'Crema batida', precioDelta: 12 }),
-      M.crearOpcion({ nombre: 'Chispas de chocolate', precioDelta: 12 }),
-      M.crearOpcion({ nombre: 'Galleta Oreo', precioDelta: 12 }),
-      M.crearOpcion({ nombre: 'Chocolate líquido', precioDelta: 12 }),
-      M.crearOpcion({ nombre: 'Cajeta', precioDelta: 12 }),
-      M.crearOpcion({ nombre: 'Gomitas', precioDelta: 15 }),
-      M.crearOpcion({ nombre: 'Fruta picada', precioDelta: 15 }),
+      M.crearOpcion({ nombre: 'Chico', porDefecto: true }),
+      M.crearOpcion({ nombre: 'Mediano', precioDelta: 25 }),
+      M.crearOpcion({ nombre: 'Grande', precioDelta: 35 }),
+      M.crearOpcion({ nombre: 'Hawaiian Bubble (con boba)', precioDelta: 50 }),
     ],
   });
-  const gPres = M.crearGrupo({
-    nombre: 'Presentación', obligatorio: true,
-    opciones: [M.crearOpcion({ nombre: 'En vaso', porDefecto: true }), M.crearOpcion({ nombre: 'En cono', precioDelta: 5 })],
-  });
-  const gSabor = M.crearGrupo({
-    nombre: 'Sabor de nieve', obligatorio: true,
+  const gCombina = M.crearGrupo({
+    nombre: 'Combina dos sabores', tipo: 'multiple', max: 1,
     opciones: [
-      M.crearOpcion({ nombre: 'Vainilla', porDefecto: true }), M.crearOpcion({ nombre: 'Chocolate' }),
       M.crearOpcion({ nombre: 'Fresa' }), M.crearOpcion({ nombre: 'Limón' }),
-      M.crearOpcion({ nombre: 'Mamey' }), M.crearOpcion({ nombre: 'Nuez' }),
+      M.crearOpcion({ nombre: 'Mango' }), M.crearOpcion({ nombre: 'Tamarindo' }),
+      M.crearOpcion({ nombre: 'Guayaba' }), M.crearOpcion({ nombre: 'Vainilla' }),
+      M.crearOpcion({ nombre: 'Leche quemada' }), M.crearOpcion({ nombre: 'Piña colada' }),
+      M.crearOpcion({ nombre: 'Rompope' }), M.crearOpcion({ nombre: 'Nuez' }),
+      M.crearOpcion({ nombre: 'Chocolate' }), M.crearOpcion({ nombre: 'Coco' }),
+    ],
+  });
+  const gExtrasRaspado = M.crearGrupo({
+    nombre: 'Agrégale', tipo: 'multiple', max: 4,
+    opciones: [
+      M.crearOpcion({ nombre: 'Lechera' }), M.crearOpcion({ nombre: 'Chamoy' }),
+      M.crearOpcion({ nombre: 'Chile en polvo' }), M.crearOpcion({ nombre: 'Fruta picada', precioDelta: 15 }),
+      M.crearOpcion({ nombre: 'Perlas de tapioca', precioDelta: 15 }),
+    ],
+  });
+  // Smoothies: normal o con boba (+15)
+  const gBoba = M.crearGrupo({
+    nombre: '¿Lo quieres boba?', obligatorio: true,
+    opciones: [
+      M.crearOpcion({ nombre: 'Normal', porDefecto: true }),
+      M.crearOpcion({ nombre: 'Hawaiian Bubble (con boba)', precioDelta: 15 }),
+    ],
+  });
+  // Aguas frescas: CH 30 · G 50
+  const gTamAgua = M.crearGrupo({
+    nombre: 'Tamaño', obligatorio: true,
+    opciones: [
+      M.crearOpcion({ nombre: 'Chico', porDefecto: true }),
+      M.crearOpcion({ nombre: 'Grande', precioDelta: 20 }),
+    ],
+  });
+  // Crepas: ingrediente extra $15, color sin costo
+  const gExtraCrepa = M.crearGrupo({
+    nombre: 'Ingrediente extra', tipo: 'multiple', max: 3,
+    opciones: [
+      M.crearOpcion({ nombre: 'Queso Philadelphia', precioDelta: 15 }),
+      M.crearOpcion({ nombre: 'Nuez', precioDelta: 15 }),
+      M.crearOpcion({ nombre: 'Plátano', precioDelta: 15 }),
+    ],
+  });
+  const gColor = M.crearGrupo({
+    nombre: 'Crepa de colores · sin costo extra', obligatorio: true,
+    opciones: [
+      M.crearOpcion({ nombre: 'Natural', porDefecto: true }),
+      M.crearOpcion({ nombre: 'Rosa' }), M.crearOpcion({ nombre: 'Azul' }),
+      M.crearOpcion({ nombre: 'Verde' }), M.crearOpcion({ nombre: 'Morada' }),
     ],
   });
   const gRelleno = M.crearGrupo({
-    nombre: 'Agrega a tu crepa', tipo: 'multiple', max: 4,
-    opciones: [
-      M.crearOpcion({ nombre: 'Plátano', precioDelta: 12 }),
-      M.crearOpcion({ nombre: 'Fresa', precioDelta: 15 }),
-      M.crearOpcion({ nombre: 'Nuez', precioDelta: 18 }),
-      M.crearOpcion({ nombre: 'Bola de nieve', precioDelta: 30 }),
-    ],
+    nombre: 'Elige el relleno', obligatorio: true,
+    opciones: [M.crearOpcion({ nombre: 'Cajeta', porDefecto: true }), M.crearOpcion({ nombre: 'Nutella' })],
   });
-  [gTam, gTop, gPres, gSabor, gRelleno].forEach((g) => (e.menu.gruposModificadores[g.id] = g));
+  [gTamRaspado, gCombina, gExtrasRaspado, gBoba, gTamAgua, gExtraCrepa, gColor, gRelleno]
+    .forEach((g) => (e.menu.gruposModificadores[g.id] = g));
 
-  // Categorías
-  const cLeche  = M.crearCategoria({ nombre: 'Raspados de leche', orden: 1 });
-  const cNat    = M.crearCategoria({ nombre: 'Naturales y aciditos', orden: 2 });
-  const cNieve  = M.crearCategoria({ nombre: 'Nieves y frappés', orden: 3 });
-  const cDulce  = M.crearCategoria({ nombre: 'Crepas dulces', orden: 4 });
-  const cSalada = M.crearCategoria({ nombre: 'Crepas saladas', orden: 5 });
-  const cPostre = M.crearCategoria({ nombre: 'Postres fríos', orden: 6 });
-  const cCal    = M.crearCategoria({ nombre: 'Bebidas calientes', orden: 7 });
-  [cLeche, cNat, cNieve, cDulce, cSalada, cPostre, cCal].forEach((c) => (e.menu.categorias[c.id] = c));
+  // ---- Categorías ----------------------------------------------------------
+  const cNat  = M.crearCategoria({ nombre: 'Raspados naturales', orden: 1 });
+  const cLec  = M.crearCategoria({ nombre: 'Raspados de leche', orden: 2 });
+  const cLig  = M.crearCategoria({ nombre: 'Light', orden: 3 });
+  const cExp  = M.crearCategoria({ nombre: 'Explosivos', orden: 4 });
+  const cCon  = M.crearCategoria({ nombre: 'Concentrados', orden: 5 });
+  const cEsp  = M.crearCategoria({ nombre: 'Especiales', orden: 6 });
+  const cSmo  = M.crearCategoria({ nombre: 'Smoothies', orden: 7 });
+  const cAgu  = M.crearCategoria({ nombre: 'Aguas frescas', orden: 8 });
+  const cCreD = M.crearCategoria({ nombre: 'Crepas dulces', orden: 9 });
+  const cCreS = M.crearCategoria({ nombre: 'Crepas saladas', orden: 10 });
+  const cCreE = M.crearCategoria({ nombre: 'Especialidades', orden: 11 });
+  const cMas  = M.crearCategoria({ nombre: 'Algo más', orden: 12 });
+  [cNat, cLec, cLig, cExp, cCon, cEsp, cSmo, cAgu, cCreD, cCreS, cCreE, cMas]
+    .forEach((c) => (e.menu.categorias[c.id] = c));
 
-  // Recetas base reutilizables
-  const rRaspado = (jarabe) => [
-    { insumoId: ins.hielo.id, cantidad: 0.35 },
-    { insumoId: jarabe, cantidad: 0.08 },
-    { insumoId: ins.vaso16.id, cantidad: 1 },
-    { insumoId: ins.lechera.id, cantidad: 1 },
+  // ---- Recetas base --------------------------------------------------------
+  const rRaspado = (jarabe, extra = []) => [
+    { insumoId: ins.hielo.id, cantidad: 0.3 },
+    { insumoId: jarabe, cantidad: 0.07 },
+    { insumoId: ins.vaso.id, cantidad: 1 },
+    ...extra,
   ];
+  const picante = [{ insumoId: ins.chamoy.id, cantidad: 1 }, { insumoId: ins.chile.id, cantidad: 1 }];
   const rCrepa = (extra = []) => [{ insumoId: ins.masa.id, cantidad: 1 }, ...extra];
 
+  // Los raspados comparten grupos: tamaño, combinar sabor y agregados.
+  const gRasp = [gTamRaspado.id, gCombina.id, gExtrasRaspado.id];
+
   const prods = [
-    // ---- Raspados de leche (Barra) ----
-    M.crearProducto({ categoriaId: cLeche.id, nombre: 'Raspado de Rompope', descripcion: 'Con canela y lechera, sin alcohol', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jLeche.id) }),
-    M.crearProducto({ categoriaId: cLeche.id, nombre: 'Raspado Piña Colada', descripcion: 'Piña y coco natural con lechera', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jLeche.id) }),
-    M.crearProducto({ categoriaId: cLeche.id, nombre: 'Raspado Fresa Colada', descripcion: 'Fresa y coco con lechera', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jLeche.id) }),
-    M.crearProducto({ categoriaId: cLeche.id, nombre: 'Raspado Leche Quemada', descripcion: 'El más pedido de la casa', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jLeche.id) }),
-    M.crearProducto({ categoriaId: cLeche.id, nombre: 'Raspado de Coco', descripcion: 'Coco natural con canela y lechera', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jLeche.id) }),
-    M.crearProducto({ categoriaId: cLeche.id, nombre: 'Raspado de Mazapán', descripcion: 'Con trocitos de mazapán encima', precioBase: 78, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jLeche.id) }),
+    // ---- Naturales · CH 25 ----
+    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Fresa', precioBase: 25, estacion: BARRA, icono: '🍓', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Limón', precioBase: 25, estacion: BARRA, icono: '🍋', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Mango', precioBase: 25, estacion: BARRA, icono: '🥭', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Tamarindo', precioBase: 25, estacion: BARRA, icono: '🟤', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Guayaba', precioBase: 25, estacion: BARRA, icono: '🍈', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Tequila', precioBase: 25, estacion: BARRA, icono: '🌵', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
 
-    // ---- Naturales y aciditos (Barra) ----
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Fresa', descripcion: 'Jarabe de fresa 100% natural', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jNatural.id) }),
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Mango', descripcion: 'Mango natural de temporada', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jNatural.id) }),
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Limón', descripcion: 'Bien ácido, como debe ser', precioBase: 74, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jNatural.id) }),
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Mango Acidito', descripcion: 'Con chamoy y chile de la casa', precioBase: 82, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: [...rRaspado(ins.jNatural.id), { insumoId: ins.chamoy.id, cantidad: 1 }] }),
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Tamarindo Acidito', descripcion: 'Con chamoy y chile de la casa', precioBase: 82, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: [...rRaspado(ins.jNatural.id), { insumoId: ins.chamoy.id, cantidad: 1 }] }),
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado Explosivo', descripcion: 'Gomitas, pulparindo y chamoy', precioBase: 95, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: [...rRaspado(ins.jNatural.id), { insumoId: ins.chamoy.id, cantidad: 2 }] }),
-    M.crearProducto({ categoriaId: cNat.id, nombre: 'Raspado de Uva', descripcion: 'Jarabe concentrado', precioBase: 68, estacion: BARRA, gruposIds: [gTam.id, gTop.id], receta: rRaspado(ins.jConc.id) }),
+    // ---- De leche ----
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Vainilla', precioBase: 25, estacion: BARRA, icono: '🍦', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Leche Quemada', descripcion: 'El más pedido', precioBase: 25, estacion: BARRA, icono: '🍮', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado Piña Colada', descripcion: 'Con canela y lechera', precioBase: 25, estacion: BARRA, icono: '🍍', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado Fresa Colada', descripcion: 'Con canela y lechera', precioBase: 25, estacion: BARRA, icono: '🍓', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Rompope', descripcion: 'Con canela y lechera, sin alcohol', precioBase: 25, estacion: BARRA, icono: '🥛', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Mango con leche', precioBase: 25, estacion: BARRA, icono: '🥭', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Nuez', precioBase: 25, estacion: BARRA, icono: '🌰', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Chocolate', precioBase: 25, estacion: BARRA, icono: '🍫', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cLec.id, nombre: 'Raspado de Coco', precioBase: 25, estacion: BARRA, icono: '🥥', gruposIds: gRasp, receta: rRaspado(ins.jLeche.id, [{ insumoId: ins.lechera.id, cantidad: 1 }]) }),
 
-    // ---- Nieves y frappés (Barra) ----
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Nieve de garrafa · 1 bola', descripcion: 'Pregunta los sabores del día', precioBase: 45, estacion: BARRA, gruposIds: [gSabor.id, gPres.id], receta: [{ insumoId: ins.nieve.id, cantidad: 0.12 }] }),
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Nieve de garrafa · 2 bolas', descripcion: 'Combina dos sabores', precioBase: 70, estacion: BARRA, gruposIds: [gSabor.id, gPres.id], receta: [{ insumoId: ins.nieve.id, cantidad: 0.24 }] }),
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Nieve para llevar · ½ litro', descripcion: 'En envase sellado', precioBase: 130, estacion: BARRA, gruposIds: [gSabor.id], receta: [{ insumoId: ins.nieve.id, cantidad: 0.5 }] }),
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Nieve para llevar · 1 litro', descripcion: 'En envase sellado', precioBase: 240, estacion: BARRA, gruposIds: [gSabor.id], receta: [{ insumoId: ins.nieve.id, cantidad: 1 }] }),
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Frappé de Oreo', descripcion: 'Crema batida y galleta encima', precioBase: 85, estacion: BARRA, gruposIds: [gTam.id], receta: [{ insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.crema.id, cantidad: 1 }, { insumoId: ins.vaso16.id, cantidad: 1 }] }),
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Frappé Moka', descripcion: 'Café, chocolate y crema batida', precioBase: 85, estacion: BARRA, gruposIds: [gTam.id], receta: [{ insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.cafe.id, cantidad: 14 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.crema.id, cantidad: 1 }, { insumoId: ins.vaso16.id, cantidad: 1 }] }),
-    M.crearProducto({ categoriaId: cNieve.id, nombre: 'Frappé de Mazapán', descripcion: 'Con chispas de chocolate', precioBase: 85, estacion: BARRA, gruposIds: [gTam.id], receta: [{ insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.crema.id, cantidad: 1 }, { insumoId: ins.vaso16.id, cantidad: 1 }] }),
+    // ---- Light ----
+    M.crearProducto({ categoriaId: cLig.id, nombre: 'Chamoicano Light', descripcion: 'Chamoy, limón y chile', precioBase: 25, estacion: BARRA, icono: '🌶️', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
+    M.crearProducto({ categoriaId: cLig.id, nombre: 'T.N.T. Light', descripcion: 'Tamarindo, limón y chile', precioBase: 25, estacion: BARRA, icono: '🧨', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
+    M.crearProducto({ categoriaId: cLig.id, nombre: 'Fresa Light', precioBase: 25, estacion: BARRA, icono: '🍓', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cLig.id, nombre: 'Mango Light', precioBase: 25, estacion: BARRA, icono: '🥭', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
+    M.crearProducto({ categoriaId: cLig.id, nombre: 'Tamarindo Light', precioBase: 25, estacion: BARRA, icono: '🟤', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id) }),
 
-    // ---- Crepas dulces (Crepería) ----
-    M.crearProducto({ categoriaId: cDulce.id, nombre: 'Crepa de Lechera o Cajeta', descripcion: 'La clásica de siempre', precioBase: 56, estacion: CREPE, gruposIds: [gRelleno.id], receta: rCrepa([{ insumoId: ins.lechera.id, cantidad: 2 }]) }),
-    M.crearProducto({ categoriaId: cDulce.id, nombre: 'Crepa de Mermelada y Queso', descripcion: 'Mermelada a elegir con queso crema', precioBase: 72, estacion: CREPE, gruposIds: [gRelleno.id], receta: rCrepa() }),
-    M.crearProducto({ categoriaId: cDulce.id, nombre: 'Crepa de Nutella', descripcion: 'Con plátano si lo pides', precioBase: 80, estacion: CREPE, gruposIds: [gRelleno.id], receta: rCrepa() }),
-    M.crearProducto({ categoriaId: cDulce.id, nombre: 'Crepa de Oreo', descripcion: 'Chocolate líquido y galleta molida', precioBase: 85, estacion: CREPE, gruposIds: [gRelleno.id], receta: rCrepa() }),
+    // ---- Explosivos ----
+    M.crearProducto({ categoriaId: cExp.id, nombre: 'Chamoicano', descripcion: 'Chamoy, limón y chile', precioBase: 25, estacion: BARRA, icono: '💥', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
+    M.crearProducto({ categoriaId: cExp.id, nombre: 'T.N.T.', descripcion: 'Tamarindo, limón y chile', precioBase: 25, estacion: BARRA, icono: '🧨', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
+    M.crearProducto({ categoriaId: cExp.id, nombre: 'Bomba', descripcion: 'Limón y chile', precioBase: 25, estacion: BARRA, icono: '💣', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
+    M.crearProducto({ categoriaId: cExp.id, nombre: 'Picamango', descripcion: 'Mango, limón y chile', precioBase: 25, estacion: BARRA, icono: '🥭', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
+    M.crearProducto({ categoriaId: cExp.id, nombre: 'Picafresa', descripcion: 'Fresa, limón y chile', precioBase: 25, estacion: BARRA, icono: '🍓', gruposIds: gRasp, receta: rRaspado(ins.jNatural.id, picante) }),
 
-    // ---- Crepas saladas (Crepería) ----
-    M.crearProducto({ categoriaId: cSalada.id, nombre: 'Crepa Clásica', descripcion: 'Queso y jamón', precioBase: 69, estacion: CREPE, receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 60 }, { insumoId: ins.jamon.id, cantidad: 2 }]) }),
-    M.crearProducto({ categoriaId: cSalada.id, nombre: 'Crepizza', descripcion: 'Mozzarella, pepperoni y salsa de tomate', precioBase: 84, estacion: CREPE, receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 80 }]) }),
-    M.crearProducto({ categoriaId: cSalada.id, nombre: 'Vegetariana', descripcion: 'Queso y champiñones', precioBase: 84, estacion: CREPE, receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 70 }]) }),
-    M.crearProducto({ categoriaId: cSalada.id, nombre: 'Hawaiiana', descripcion: 'Mozzarella, jamón y piña', precioBase: 94, estacion: CREPE, receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 80 }, { insumoId: ins.jamon.id, cantidad: 2 }]) }),
-    M.crearProducto({ categoriaId: cSalada.id, nombre: 'Bandido', descripcion: 'Mozzarella, jamón, pepperoni y tocino', precioBase: 94, estacion: CREPE, receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 80 }, { insumoId: ins.jamon.id, cantidad: 2 }]) }),
-    M.crearProducto({ categoriaId: cSalada.id, nombre: 'Tres Quesos', descripcion: 'Mozzarella, manchego y philadelphia', precioBase: 99, estacion: CREPE, receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 110 }]) }),
+    // ---- Concentrados ----
+    M.crearProducto({ categoriaId: cCon.id, nombre: 'Raspado de Uva', precioBase: 25, estacion: BARRA, icono: '🍇', gruposIds: gRasp, receta: rRaspado(ins.jConc.id) }),
+    M.crearProducto({ categoriaId: cCon.id, nombre: 'Raspado de Grosella', precioBase: 25, estacion: BARRA, icono: '🔴', gruposIds: gRasp, receta: rRaspado(ins.jConc.id) }),
+    M.crearProducto({ categoriaId: cCon.id, nombre: 'Raspado de Chicle Azul', precioBase: 25, estacion: BARRA, icono: '🔵', gruposIds: gRasp, receta: rRaspado(ins.jConc.id) }),
+    M.crearProducto({ categoriaId: cCon.id, nombre: 'Raspado de Durazno', precioBase: 25, estacion: BARRA, icono: '🍑', gruposIds: gRasp, receta: rRaspado(ins.jConc.id) }),
 
-    // ---- Postres fríos (Barra) ----
-    M.crearProducto({ categoriaId: cPostre.id, nombre: 'Fresas con Crema', descripcion: 'Fresa natural con crema y galleta', precioBase: 75, estacion: BARRA, receta: [{ insumoId: ins.fresa.id, cantidad: 150 }, { insumoId: ins.crema.id, cantidad: 2 }, { insumoId: ins.vaso16.id, cantidad: 1 }] }),
-    M.crearProducto({ categoriaId: cPostre.id, nombre: 'Banana Split', descripcion: 'Tres nieves, plátano, crema y cereza', precioBase: 99, estacion: BARRA, receta: [{ insumoId: ins.nieve.id, cantidad: 0.36 }, { insumoId: ins.crema.id, cantidad: 2 }] }),
-    M.crearProducto({ categoriaId: cPostre.id, nombre: 'Waffle con nieve', descripcion: 'Waffle recién hecho con una bola de nieve', precioBase: 95, estacion: CREPE, gruposIds: [gSabor.id], receta: [{ insumoId: ins.nieve.id, cantidad: 0.12 }] }),
-    M.crearProducto({ categoriaId: cPostre.id, nombre: 'Coctel de fruta', descripcion: 'Fruta de temporada picada', precioBase: 80, estacion: BARRA, receta: [{ insumoId: ins.fresa.id, cantidad: 100 }, { insumoId: ins.vaso16.id, cantidad: 1 }] }),
+    // ---- Especiales · precio único 75 ----
+    M.crearProducto({ categoriaId: cEsp.id, nombre: 'Súper Explosivo', descripcion: 'El grande de la casa, bien cargado', precioBase: 75, estacion: BARRA, icono: '🌋', gruposIds: [gExtrasRaspado.id], receta: rRaspado(ins.jNatural.id, [...picante, { insumoId: ins.fruta.id, cantidad: 120 }]) }),
+    M.crearProducto({ categoriaId: cEsp.id, nombre: 'Mangada', descripcion: 'Mango, chamoy y chile', precioBase: 75, estacion: BARRA, icono: '🥭', gruposIds: [gExtrasRaspado.id], receta: rRaspado(ins.jNatural.id, [...picante, { insumoId: ins.fruta.id, cantidad: 120 }]) }),
+    M.crearProducto({ categoriaId: cEsp.id, nombre: 'Fresada', descripcion: 'Fresa, chamoy y chile', precioBase: 75, estacion: BARRA, icono: '🍓', gruposIds: [gExtrasRaspado.id], receta: rRaspado(ins.jNatural.id, [...picante, { insumoId: ins.fruta.id, cantidad: 120 }]) }),
 
-    // ---- Bebidas calientes (Barra) ----
-    M.crearProducto({ categoriaId: cCal.id, nombre: 'Chocolate caliente', descripcion: 'Leche espumosa con minibombones', precioBase: 59, estacion: BARRA, receta: [{ insumoId: ins.leche.id, cantidad: 0.3 }] }),
-    M.crearProducto({ categoriaId: cCal.id, nombre: 'Espresso americano', descripcion: 'Café de altura, 12 oz', precioBase: 49, estacion: BARRA, receta: [{ insumoId: ins.cafe.id, cantidad: 16 }] }),
-    M.crearProducto({ categoriaId: cCal.id, nombre: 'Capuchino', descripcion: 'Con canela o chocolate encima', precioBase: 55, estacion: BARRA, receta: [{ insumoId: ins.cafe.id, cantidad: 16 }, { insumoId: ins.leche.id, cantidad: 0.2 }] }),
+    // ---- Smoothies · 60 (boba +15) ----
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Smoothie de Mango', precioBase: 60, estacion: BARRA, icono: '🥭', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.fruta.id, cantidad: 120 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Smoothie de Fresa', precioBase: 60, estacion: BARRA, icono: '🍓', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.fruta.id, cantidad: 120 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Smoothie de Mazapán', precioBase: 60, estacion: BARRA, icono: '🥜', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Chocolate Malt', precioBase: 60, estacion: BARRA, icono: '🍫', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Caramel Latté', precioBase: 60, estacion: BARRA, icono: '☕', gruposIds: [gBoba.id], receta: [{ insumoId: ins.cafe.id, cantidad: 14 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Mokaccino', precioBase: 60, estacion: BARRA, icono: '☕', gruposIds: [gBoba.id], receta: [{ insumoId: ins.cafe.id, cantidad: 14 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Capuccino', precioBase: 60, estacion: BARRA, icono: '☕', gruposIds: [gBoba.id], receta: [{ insumoId: ins.cafe.id, cantidad: 16 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    // Smoothies premium · 75 (boba +15)
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Smoothie de Taro', precioBase: 75, estacion: BARRA, icono: '🟣', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Chicle Rosa', precioBase: 75, estacion: BARRA, icono: '🩷', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Matcha', precioBase: 75, estacion: BARRA, icono: '🍵', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Chai Vainilla', precioBase: 75, estacion: BARRA, icono: '🍵', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Chai Verde', precioBase: 75, estacion: BARRA, icono: '🍵', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Cookies and Cream', precioBase: 75, estacion: BARRA, icono: '🍪', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cSmo.id, nombre: 'Algodón de Azúcar', precioBase: 75, estacion: BARRA, icono: '🍬', gruposIds: [gBoba.id], receta: [{ insumoId: ins.baseSmo.id, cantidad: 1 }, { insumoId: ins.leche.id, cantidad: 0.25 }, { insumoId: ins.hielo.id, cantidad: 0.2 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+
+    // ---- Aguas frescas · CH 30 · G 50 ----
+    M.crearProducto({ categoriaId: cAgu.id, nombre: 'Agua de Tamarindo', precioBase: 30, estacion: BARRA, icono: '🟤', gruposIds: [gTamAgua.id], receta: [{ insumoId: ins.jNatural.id, cantidad: 0.05 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cAgu.id, nombre: 'Agua de Guayaba', precioBase: 30, estacion: BARRA, icono: '🍈', gruposIds: [gTamAgua.id], receta: [{ insumoId: ins.jNatural.id, cantidad: 0.05 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cAgu.id, nombre: 'Agua de Fresa', precioBase: 30, estacion: BARRA, icono: '🍓', gruposIds: [gTamAgua.id], receta: [{ insumoId: ins.jNatural.id, cantidad: 0.05 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cAgu.id, nombre: 'Agua de Mango', precioBase: 30, estacion: BARRA, icono: '🥭', gruposIds: [gTamAgua.id], receta: [{ insumoId: ins.jNatural.id, cantidad: 0.05 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cAgu.id, nombre: 'Agua de Limón', precioBase: 30, estacion: BARRA, icono: '🍋', gruposIds: [gTamAgua.id], receta: [{ insumoId: ins.jNatural.id, cantidad: 0.05 }, { insumoId: ins.vaso.id, cantidad: 1 }] }),
+
+    // ---- Crepas dulces · 50 ----
+    M.crearProducto({ categoriaId: cCreD.id, nombre: 'Crepa de Cajeta', precioBase: 50, estacion: CREPE, icono: '🥞', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.dulce.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cCreD.id, nombre: 'Crepa de Nutella', precioBase: 50, estacion: CREPE, icono: '🍫', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.dulce.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cCreD.id, nombre: 'Crepa de Chabacano', precioBase: 50, estacion: CREPE, icono: '🍑', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.dulce.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cCreD.id, nombre: 'Crepa de Fresa', precioBase: 50, estacion: CREPE, icono: '🍓', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.dulce.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cCreD.id, nombre: 'Crepa de Zarzamora', precioBase: 50, estacion: CREPE, icono: '🫐', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.dulce.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cCreD.id, nombre: 'Crepa de Durazno', precioBase: 50, estacion: CREPE, icono: '🍑', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.dulce.id, cantidad: 1 }]) }),
+
+    // ---- Crepas saladas ----
+    M.crearProducto({ categoriaId: cCreS.id, nombre: 'Crepa Pepperoni y Queso', precioBase: 55, estacion: CREPE, icono: '🍕', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 70 }, { insumoId: ins.pepperoni.id, cantidad: 8 }]) }),
+    M.crearProducto({ categoriaId: cCreS.id, nombre: 'Crepa Jamón y Queso', precioBase: 55, estacion: CREPE, icono: '🧀', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 70 }, { insumoId: ins.jamon.id, cantidad: 2 }]) }),
+    M.crearProducto({ categoriaId: cCreS.id, nombre: 'Crepa Jamón, Queso y Huevo', precioBase: 65, estacion: CREPE, icono: '🍳', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 70 }, { insumoId: ins.jamon.id, cantidad: 2 }]) }),
+    M.crearProducto({ categoriaId: cCreS.id, nombre: 'Crepa de Rajas con Queso', precioBase: 55, estacion: CREPE, icono: '🌶️', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 70 }]) }),
+    M.crearProducto({ categoriaId: cCreS.id, nombre: 'Crepa de Champiñón con Queso', precioBase: 55, estacion: CREPE, icono: '🍄', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 70 }]) }),
+
+    // ---- Especialidades · 70 ----
+    M.crearProducto({ categoriaId: cCreE.id, nombre: 'Hawaiiana', descripcion: 'Queso, jamón y piña', precioBase: 70, estacion: CREPE, icono: '🍍', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 80 }, { insumoId: ins.jamon.id, cantidad: 2 }]) }),
+    M.crearProducto({ categoriaId: cCreE.id, nombre: 'Bandido', descripcion: 'Pepperoni, jamón, queso y tocino', precioBase: 70, estacion: CREPE, icono: '🥓', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.queso.id, cantidad: 80 }, { insumoId: ins.jamon.id, cantidad: 2 }, { insumoId: ins.pepperoni.id, cantidad: 8 }]) }),
+    M.crearProducto({ categoriaId: cCreE.id, nombre: 'Frepizza', descripcion: 'Fresa natural, lechera y canela', precioBase: 70, estacion: CREPE, icono: '🍓', gruposIds: [gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.fruta.id, cantidad: 100 }, { insumoId: ins.lechera.id, cantidad: 1 }]) }),
+    M.crearProducto({ categoriaId: cCreE.id, nombre: 'Plátano', descripcion: 'Plátano, nuez y cajeta o nutella', precioBase: 70, estacion: CREPE, icono: '🍌', gruposIds: [gRelleno.id, gColor.id, gExtraCrepa.id], receta: rCrepa([{ insumoId: ins.fruta.id, cantidad: 100 }, { insumoId: ins.dulce.id, cantidad: 1 }]) }),
+
+    // ---- Algo más ----
+    M.crearProducto({ categoriaId: cMas.id, nombre: 'Nachos con Queso', precioBase: 65, estacion: CREPE, icono: '🧀', receta: [{ insumoId: ins.totopo.id, cantidad: 1 }, { insumoId: ins.queso.id, cantidad: 60 }] }),
+    M.crearProducto({ categoriaId: cMas.id, nombre: 'Papas Lokas', precioBase: 65, estacion: CREPE, icono: '🍟', receta: [{ insumoId: ins.totopo.id, cantidad: 1 }, { insumoId: ins.queso.id, cantidad: 50 }] }),
+    M.crearProducto({ categoriaId: cMas.id, nombre: 'Dorilokos', precioBase: 65, estacion: CREPE, icono: '🌽', receta: [{ insumoId: ins.totopo.id, cantidad: 1 }, { insumoId: ins.chamoy.id, cantidad: 2 }, { insumoId: ins.chile.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cMas.id, nombre: 'Botanita', precioBase: 35, estacion: CREPE, icono: '🥨', receta: [{ insumoId: ins.totopo.id, cantidad: 1 }] }),
+    M.crearProducto({ categoriaId: cMas.id, nombre: 'Yogurt con Fruta', precioBase: 70, estacion: BARRA, icono: '🍨', receta: [{ insumoId: ins.yogurt.id, cantidad: 1 }, { insumoId: ins.fruta.id, cantidad: 150 }] }),
   ];
   prods.forEach((p) => (e.menu.productos[p.id] = p));
 
-  // Paleta del menu QR para este tenant (la usa qr.html; sin esto toma la de fabrica)
+  // Paleta del menú QR para este tenant (la usa qr.html; sin esto toma la de fábrica)
   e.config.tema = { bg: '#FFF6EC', card: '#FFFFFF', ink: '#12303A', acento: '#00BCD4', acento2: '#FF3D77', linea: '#EADCC9', muted: '#6C8189' };
 
   // Canales de venta
