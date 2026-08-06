@@ -10,7 +10,7 @@ const bcrypt = require('bcryptjs');
 const db = require('./db');
 const M = require('./model');
 const { firmarToken, auth, ctx, readState, withState, runPublic } = require('./context');
-const { buildTenantDoc } = require('./seed');
+const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
 
 const app = express();
 app.use(cors());
@@ -48,18 +48,18 @@ app.post('/api/admin/provision', wrap(async (req, res) => {
   const setup = process.env.SETUP_TOKEN;
   if (!setup) throw bad('SETUP_TOKEN no configurado', 500);
   if (req.headers['x-setup-token'] !== setup) throw bad('No autorizado', 401);
-  const { nombre = 'Jefe Burgers', adminUser, adminPass } = req.body || {};
+  const { nombre = 'Jefe Burgers', adminUser, adminPass, plantilla = 'restaurante' } = req.body || {};
   if (!adminUser || !adminPass) throw bad('Falta adminUser/adminPass');
   const sys = await db.loadSys();
   if (sys.usuarios[adminUser]) throw bad('Ese usuario ya existe', 409);
   const row = sys.nextRow || 1;
-  const doc = buildTenantDoc(nombre);
+  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
   await db.insertState(row, doc);
   sys.tenants[row] = { nombre };
   sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
   sys.nextRow = row + 1;
   await db.saveSys(sys);
-  res.json({ ok: true, row, nombre, sucursales: Object.values(doc.sucursales).map((s) => ({ id: s.id, nombre: s.nombre, codigo: s.codigo })) });
+  res.json({ ok: true, row, nombre, plantilla, sucursales: Object.values(doc.sucursales).map((s) => ({ id: s.id, nombre: s.nombre, codigo: s.codigo })) });
 }));
 
 // Crear el SUPER ADMIN (protegido por SETUP_TOKEN). No pertenece a ningún restaurante.
@@ -113,18 +113,19 @@ app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
   const adminUser = (b.adminUser || b.adminUsuario || '').trim();
   let adminPass = b.adminPass || b.adminPassword || '';
   const adminNombre = (b.adminNombre || 'Administrador').trim();
+  const plantilla = b.plantilla === 'neveria' ? 'neveria' : 'restaurante'; // catalogo inicial del tenant
   if (!nombre || !adminUser) throw bad('Falta nombre del restaurante o usuario admin');
   if (!adminPass) adminPass = Math.random().toString(36).slice(2, 8) + Math.floor(10 + Math.random() * 89);
   const sys = await db.loadSys();
   if (sys.usuarios[adminUser]) throw bad('Ese usuario admin ya existe', 409);
   const row = sys.nextRow || 1;
-  const doc = buildTenantDoc(nombre);
+  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
   await db.insertState(row, doc);
   sys.tenants[row] = { nombre, activo: true, creado: new Date().toISOString() };
   sys.usuarios[adminUser] = { row, rol: 'admin', nombre: adminNombre, passHash: bcrypt.hashSync(adminPass, 10) };
   sys.nextRow = row + 1;
   await db.saveSys(sys);
-  res.json({ ok: true, row, nombre, adminUsuario: adminUser, adminPassword: adminPass });
+  res.json({ ok: true, row, nombre, plantilla, adminUsuario: adminUser, adminPassword: adminPass });
 }));
 // Suspender / reactivar un restaurante
 app.patch('/api/super/tenants/:row', soloSuper, wrap(async (req, res) => {
@@ -673,11 +674,13 @@ app.get('/api/ventas/recientes', wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/cocina', wrap(async (req, res) => {
   const e = await readState();
-  const { sucursalId } = req.query;
+  const { sucursalId, estacion } = req.query;
+  // `estacion` elige la pantalla (Barra, Creperia, Cocina...). Sin el parametro, devuelve todas.
+  const esDeEstacion = (l) => !estacion || (l.estacion || 'Cocina') === estacion;
   const arr = Object.values(e.pedidos)
-    .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado'))
+    .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado' && esDeEstacion(l)))
     .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
-    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado').map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
+    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
   res.json(arr);
 }));
 app.post('/api/cocina/:folio/listo', wrap(async (req, res) => {
@@ -1102,37 +1105,23 @@ app.get('/qr/:row/:suc/menu', (req, res) => {
       const categorias = Object.values(e.menu.categorias).map((c) => ({ id: c.id, nombre: c.nombre, orden: c.orden || 0 })).sort((a, b) => a.orden - b.orden);
       const productos = Object.values(e.menu.productos)
         .filter((p) => p.activo && p.disponible !== false)
-        .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, conOpciones: (p.gruposIds || []).length > 0 }));
-      res.json({ tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null }, sucursal: { id: suc.id, nombre: suc.nombre }, categorias, productos });
-    } catch (err) { res.status(500).json({ error: 'Error al cargar el menú' }); }
+        .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, estacion: p.estacion || 'Cocina', gruposIds: p.gruposIds || [], conOpciones: (p.gruposIds || []).length > 0 }));
+      // Solo los grupos que algun producto visible usa, para no exponer el menu completo.
+      const usados = new Set(productos.flatMap((p) => p.gruposIds));
+      const grupos = Object.values(e.menu.gruposModificadores)
+        .filter((g) => usados.has(g.id))
+        .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio, max: g.max || null,
+          opciones: (g.opciones || []).filter((o) => o.activo !== false).map((o) => ({ id: o.id, nombre: o.nombre, precioDelta: o.precioDelta || 0, porDefecto: !!o.porDefecto })) }));
+      res.json({ tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, tema: (e.config && e.config.tema) || null }, sucursal: { id: suc.id, nombre: suc.nombre }, categorias, productos, grupos });
+    } catch (err) { res.status(500).json({ error: 'Error al cargar el menu' }); }
   });
 });
-app.post('/qr/:row/:suc/pedido', (req, res) => {
-  const { items = [], cliente = {} } = req.body || {};
-  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Tu pedido está vacío' });
-  if (items.length > 40) return res.status(400).json({ error: 'Demasiados productos' });
-  runPublic(req.params.row, async () => {
-    try {
-      const out = await withState((e) => {
-        const suc = e.sucursales[req.params.suc];
-        if (!suc) throw bad('Sucursal no encontrada', 404);
-        const p = M.crearPedido(e, { sucursalId: suc.id, codigo: suc.codigo, tipoServicio: 'mostrador', usuario: 'qr', canalId: 'local' });
-        p.origen = 'qr';
-        p.cliente = { nombre: String(cliente.nombre || 'Cliente QR').slice(0, 40), mesa: String(cliente.mesa || '').slice(0, 12) || null };
-        for (const it of items) {
-          const prod = e.menu.productos[it.productoId];
-          if (!prod || prod.activo === false || prod.disponible === false) continue;
-          const cantidad = Math.min(20, Math.max(1, parseInt(it.cantidad, 10) || 1));
-          p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos: [], notas: String(it.notas || '').slice(0, 120) }));
-        }
-        if (!p.lineas.length) throw bad('Ningún producto válido en el pedido');
-        M.recalcularPedido(p);
-        return { folio: p.folio, total: p.total, mesa: p.cliente.mesa };
-      });
-      res.json(out);
-    } catch (err) { res.status(err.status || 500).json({ error: err.message || 'No se pudo enviar el pedido' }); }
-  });
-});
+
+// El POST /qr/:row/:suc/pedido, el webhook de Mercado Pago, el estado en vivo
+// y la conciliacion los aporta pagos_qr.js. Sustituye al flujo anterior de
+// "pide por QR y pasa a caja": ahora el pago es el filtro y, al confirmarse,
+// el pedido entra solo a las pantallas de produccion.
+require('./pagos_qr')(app, { db, M, readState, withState, runPublic, ctx });
 
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
