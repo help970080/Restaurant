@@ -74,6 +74,56 @@ app.post('/api/super/provision', wrap(async (req, res) => {
   res.json({ ok: true, username });
 }));
 
+// ---------------------------------------------------------------------------
+//  RECARGAR EL MENÚ DE UN TENANT YA CREADO  (protegido por SETUP_TOKEN)
+//  El catálogo de seed.js solo se aplica al provisionar. Este endpoint vuelve
+//  a plantarlo sobre un tenant existente sin tocar su row, sus usuarios, sus
+//  sucursales, sus mesas, su caja ni su historial de pedidos.
+//
+//  Es seguro para los pedidos viejos porque cada línea guarda su propio
+//  snapshot de nombre, precio, estación y modificadores: no consultan el menú.
+//  Aun así conviene correrlo sin pedidos abiertos, para que el descuento de
+//  inventario de esos pedidos encuentre sus recetas.
+// ---------------------------------------------------------------------------
+app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
+  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
+  const { row, plantilla = 'neveria', confirmar, conservarInsumos = false } = req.body || {};
+  if (row == null) throw bad('Falta row');
+  if (confirmar !== 'RECARGAR') throw bad("Falta confirmar:'RECARGAR' (reemplaza el menú completo)");
+
+  const est = await db.loadState(Number(row));
+  if (!est) throw bad('Ese restaurante no existe', 404);
+
+  const abiertos = Object.values(est.pedidos || {}).filter((p) => p.estado === 'abierto').length;
+  const doc = plantilla === 'neveria' ? buildHawaiianDoc(est.meta.nombre) : buildTenantDoc(est.meta.nombre);
+
+  const antes = {
+    categorias: Object.keys(est.menu.categorias).length,
+    productos: Object.keys(est.menu.productos).length,
+    insumos: Object.keys(est.insumos).length,
+  };
+
+  // Solo se reemplaza el catálogo. Todo lo demás del tenant queda intacto.
+  est.menu = doc.menu;
+  if (!conservarInsumos) est.insumos = doc.insumos;
+  if (doc.config && doc.config.tema) est.config.tema = doc.config.tema;
+  est.meta.menuRecargado = new Date().toISOString();
+
+  await db.saveState(Number(row), est);
+
+  res.json({
+    ok: true, row: Number(row), nombre: est.meta.nombre, plantilla,
+    antes,
+    ahora: {
+      categorias: Object.keys(est.menu.categorias).length,
+      productos: Object.keys(est.menu.productos).length,
+      insumos: Object.keys(est.insumos).length,
+    },
+    conservado: { sucursales: Object.keys(est.sucursales).length, mesas: Object.keys(est.mesas).length, pedidos: Object.keys(est.pedidos).length },
+    pedidosAbiertos: abiertos,
+  });
+}));
+
 // A partir de aquí, todo requiere JWT y corre dentro del contexto del tenant
 app.use('/api', auth);
 
