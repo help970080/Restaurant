@@ -305,6 +305,22 @@
 .rc-acts .btn{padding:6px 10px;font-size:12px}
 @media(max-width:1100px){.rep-board{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){.rep-board{grid-template-columns:1fr}}
+
+/* ---- Editor de precios y modificadores en Menú ---- */
+.pr-ed{width:92px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:right;font-weight:700;background:#fff}
+.pr-ed:focus{border-color:var(--accent);outline:none}
+.ge-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.ge-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff}
+.ge-head{display:flex;align-items:center;gap:8px;justify-content:space-between;margin-bottom:8px}
+.ge-nom{flex:1;font-weight:700;border:none;border-bottom:1px dashed var(--line);padding:3px 0;background:none;font-size:14px}
+.ge-nom:focus{outline:none;border-bottom-color:var(--accent)}
+.ge-op{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.ge-onom{flex:1;min-width:0;padding:5px 8px;border:1px solid var(--line);border-radius:7px;font-size:13px}
+.ge-od{width:76px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;text-align:right;font-size:13px}
+.ge-fin{width:72px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--green)}
+.ge-x{border:none;background:none;color:var(--muted);font-size:17px;line-height:1;cursor:pointer;padding:0 2px;width:18px}
+.ge-x:hover{color:var(--red)}
+.ge-op.nueva{border-top:1px dashed var(--line);padding-top:8px;margin-top:8px}
 </style>
 </head>
 <body>
@@ -363,19 +379,33 @@ function artSoda(){return `<svg class="art" viewBox="0 0 160 120" preserveAspect
 function artFries(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="fbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdf4e2"/><stop offset="1" stop-color="#f6e0bc"/></linearGradient><linearGradient id="frb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e1503c"/><stop offset="1" stop-color="#bf3526"/></linearGradient><linearGradient id="fr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8d370"/><stop offset="1" stop-color="#e0a23c"/></linearGradient></defs><rect width="160" height="120" fill="url(#fbg)"/><ellipse cx="80" cy="104" rx="34" ry="6" fill="#7a4a10" opacity=".12"/><g fill="url(#fr)"><rect x="58" y="40" width="7" height="50" rx="3"/><rect x="68" y="30" width="7" height="60" rx="3"/><rect x="78" y="36" width="7" height="54" rx="3"/><rect x="88" y="26" width="7" height="64" rx="3"/><rect x="98" y="42" width="7" height="48" rx="3"/></g><path d="M50 64h60l-6 36a6 6 0 0 1-6 5H62a6 6 0 0 1-6-5z" fill="url(#frb)"/><path d="M50 64h60l-1 11H51z" fill="#a82e21"/></svg>`;}
 function artAgua(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="abg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdeef4"/><stop offset="1" stop-color="#f6d8e4"/></linearGradient><linearGradient id="aliq" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f48fb0"/><stop offset="1" stop-color="#e85f8c"/></linearGradient></defs><rect width="160" height="120" fill="url(#abg)"/><ellipse cx="80" cy="104" rx="28" ry="6" fill="#7a1030" opacity=".12"/><rect x="92" y="20" width="5" height="40" rx="2.5" fill="#fff" opacity=".8" transform="rotate(10 94 40)"/><path d="M58 34h44l-5 60a6 6 0 0 1-6 5H69a6 6 0 0 1-6-5z" fill="#ffffff" opacity=".55"/><path d="M60 48h40l-4 46a5 5 0 0 1-5 4H69a5 5 0 0 1-5-4z" fill="url(#aliq)"/><rect x="66" y="40" width="11" height="11" rx="3" fill="#fff" opacity=".55"/><rect x="84" y="44" width="9" height="9" rx="2.5" fill="#fff" opacity=".5"/><circle cx="100" cy="34" r="9" fill="#8fce4f"/><circle cx="100" cy="34" r="6" fill="#c7e89a"/></svg>`;}
 function artPlato(){return `<svg class="art" viewBox="0 0 160 120" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="pl" cx="50%" cy="42%" r="60%"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ece7db"/></radialGradient></defs><rect width="160" height="120" fill="#f1efe8"/><ellipse cx="80" cy="64" rx="40" ry="38" fill="#000" opacity=".06"/><circle cx="80" cy="60" r="38" fill="url(#pl)" stroke="#e0d9c8"/><circle cx="80" cy="60" r="24" fill="none" stroke="#e6dfce" stroke-width="2"/><rect x="40" y="44" width="3" height="32" rx="1.5" fill="#c9c1ad"/><rect x="117" y="44" width="3" height="32" rx="1.5" fill="#c9c1ad"/></svg>`;}
+function artPizza(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveAspectRatio=\"xMidYMid slice\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"pzbg\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#fdf4e2\"/><stop offset=\"1\" stop-color=\"#f6e0bc\"/></linearGradient><linearGradient id=\"pzcr\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#f2c179\"/><stop offset=\"1\" stop-color=\"#d5913b\"/></linearGradient><radialGradient id=\"pzqs\" cx=\"42%\" cy=\"34%\" r=\"70%\"><stop offset=\"0\" stop-color=\"#fcdd93\"/><stop offset=\"1\" stop-color=\"#eeb44c\"/></radialGradient></defs><rect width=\"160\" height=\"120\" fill=\"url(#pzbg)\"/><ellipse cx=\"80\" cy=\"67\" rx=\"45\" ry=\"42\" fill=\"#000\" opacity=\".07\"/><circle cx=\"80\" cy=\"62\" r=\"44\" fill=\"url(#pzcr)\"/><g fill=\"#e8b573\" opacity=\".8\"><circle cx=\"80\" cy=\"22\" r=\"3\"/><circle cx=\"108\" cy=\"33\" r=\"2.6\"/><circle cx=\"120\" cy=\"62\" r=\"3\"/><circle cx=\"108\" cy=\"91\" r=\"2.6\"/><circle cx=\"80\" cy=\"102\" r=\"3\"/><circle cx=\"52\" cy=\"91\" r=\"2.6\"/><circle cx=\"40\" cy=\"62\" r=\"3\"/><circle cx=\"52\" cy=\"33\" r=\"2.6\"/></g><circle cx=\"80\" cy=\"62\" r=\"36\" fill=\"#dd5423\"/><circle cx=\"80\" cy=\"62\" r=\"33\" fill=\"url(#pzqs)\"/><g stroke=\"#e3a63f\" stroke-width=\"1.2\" opacity=\".5\"><path d=\"M80 29v66M47 62h66M56 38l48 48M104 38l-48 48\"/></g><g fill=\"#c0342a\"><circle cx=\"66\" cy=\"47\" r=\"6.2\"/><circle cx=\"95\" cy=\"52\" r=\"5.6\"/><circle cx=\"59\" cy=\"72\" r=\"5.6\"/><circle cx=\"85\" cy=\"77\" r=\"6.2\"/><circle cx=\"100\" cy=\"71\" r=\"4.6\"/><circle cx=\"76\" cy=\"62\" r=\"4.2\"/></g><g fill=\"#e06a58\" opacity=\".5\"><circle cx=\"65.6\" cy=\"45.2\" r=\"2.5\"/><circle cx=\"94.6\" cy=\"50.3\" r=\"2.2\"/><circle cx=\"58.6\" cy=\"70.3\" r=\"2.2\"/><circle cx=\"84.6\" cy=\"75.2\" r=\"2.5\"/></g><g fill=\"#3f7d3a\" opacity=\".9\"><ellipse cx=\"71\" cy=\"87\" rx=\"4.6\" ry=\"2.6\" transform=\"rotate(-18 71 87)\"/><ellipse cx=\"104\" cy=\"61\" rx=\"4.3\" ry=\"2.4\" transform=\"rotate(28 104 61)\"/><ellipse cx=\"55\" cy=\"57\" rx=\"4.1\" ry=\"2.3\" transform=\"rotate(-40 55 57)\"/><ellipse cx=\"88\" cy=\"38\" rx=\"3.8\" ry=\"2.2\" transform=\"rotate(12 88 38)\"/></g><path d=\"M80 62 L110 43 A35 35 0 0 1 112 76 Z\" fill=\"#fff\" opacity=\".12\"/></svg>`;}
+function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveAspectRatio=\"xMidYMid slice\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"psbg\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#fdf6ea\"/><stop offset=\"1\" stop-color=\"#f2e6d2\"/></linearGradient><radialGradient id=\"pspl\" cx=\"50%\" cy=\"40%\" r=\"62%\"><stop offset=\"0\" stop-color=\"#ffffff\"/><stop offset=\"1\" stop-color=\"#e9e3d5\"/></radialGradient><radialGradient id=\"psn\" cx=\"42%\" cy=\"35%\" r=\"65%\"><stop offset=\"0\" stop-color=\"#fbe6a8\"/><stop offset=\"1\" stop-color=\"#eec96a\"/></radialGradient></defs><rect width=\"160\" height=\"120\" fill=\"url(#psbg)\"/><ellipse cx=\"80\" cy=\"68\" rx=\"44\" ry=\"40\" fill=\"#000\" opacity=\".06\"/><circle cx=\"80\" cy=\"63\" r=\"42\" fill=\"url(#pspl)\" stroke=\"#e0d9c8\"/><circle cx=\"80\" cy=\"63\" r=\"31\" fill=\"url(#psn)\"/><g stroke=\"#d9ab48\" stroke-width=\"1.5\" fill=\"none\" opacity=\".75\" stroke-linecap=\"round\"><path d=\"M56 63a24 24 0 0 1 48 0\"/><path d=\"M60 70a20 20 0 0 0 40 0\"/><path d=\"M62 55a18 18 0 0 1 36 4\"/><path d=\"M66 76a14 14 0 0 0 28-2\"/><path d=\"M58 60c8-6 20-8 30-3\"/></g><g fill=\"#c0342a\"><ellipse cx=\"72\" cy=\"56\" rx=\"7\" ry=\"6\"/><ellipse cx=\"92\" cy=\"66\" rx=\"6\" ry=\"5.2\"/><ellipse cx=\"76\" cy=\"74\" rx=\"5.4\" ry=\"4.6\"/></g><g fill=\"#e06a58\" opacity=\".45\"><ellipse cx=\"70.5\" cy=\"54\" rx=\"2.6\" ry=\"2\"/><ellipse cx=\"90.6\" cy=\"64.3\" rx=\"2.2\" ry=\"1.8\"/></g><g fill=\"#3f7d3a\" opacity=\".9\"><ellipse cx=\"86\" cy=\"50\" rx=\"4.4\" ry=\"2.5\" transform=\"rotate(-22 86 50)\"/><ellipse cx=\"62\" cy=\"70\" rx=\"4\" ry=\"2.3\" transform=\"rotate(20 62 70)\"/></g><rect x=\"38\" y=\"47\" width=\"3\" height=\"32\" rx=\"1.5\" fill=\"#c9c1ad\"/><rect x=\"119\" y=\"47\" width=\"3\" height=\"32\" rx=\"1.5\" fill=\"#c9c1ad\"/></svg>`;}
 function prodArt(prod,catName){
   if(prod.foto)return `<img class="art" src="${prod.foto}" alt="${prod.nombre}" onerror="this.outerHTML=prodArtFallback('${(catName||'').replace(/'/g,'')}','${prod.nombre.replace(/'/g,'')}')">`;
   return prodArtFallback(catName,prod.nombre);
 }
+// ¿El negocio es pizzería? Se deduce del nombre del restaurante o de sus
+// categorías, para no ponerle pizzas a la nevería ni a la hamburguesería.
+function esPizzeria(){
+  if(app.tenant&&/pizz/i.test(app.tenant.nombre||''))return true;
+  return Object.values((app.menu&&app.menu.categorias)||{}).some(c=>/pizz/i.test(c.nombre||''));
+}
 function prodArtFallback(catName,nombre){
   const n=(nombre||'').toLowerCase(),c=(catName||'').toLowerCase();
+  const pizzeria=esPizzeria();
+  // El nombre del producto manda sobre la categoría
   if(/agua|limonada|jamaica|horchata/.test(n))return artAgua();
-  if(/refresco|bebida|soda|coca/.test(n)||c.includes('bebida')&&!/agua/.test(n))return artSoda();
+  if(/refresco|soda|coca|bebida/.test(n))return artSoda();
+  // Pizza antes que hamburguesa: en una pizzería "BBQ Pollo" es una pizza.
+  if(/pizza|peperoni|pepperoni|mega jefe|barra/.test(n)||/pizza/.test(c))return artPizza();
+  if(/spaghetti|espagueti|pasta|lasa[gn̈ñ]/.test(n)||c.includes('pasta'))return artPasta();
   if(/papa|fries|aro|nugget/.test(n))return artFries();
-  if(/hamburg|burger|bbq|doble|combo|sandwich|pollo/.test(n)||c.includes('hamburg'))return artBurger();
+  if(!pizzeria&&(/hamburg|burger|bbq|doble|combo|sandwich|pollo/.test(n)||c.includes('hamburg')))return artBurger();
   if(c.includes('acompa'))return artFries();
   if(c.includes('bebida'))return artSoda();
-  return artPlato();
+  // En una pizzería, lo que quede sin clasificar casi siempre es una pizza.
+  return pizzeria?artPizza():artPlato();
 }
 function mesaArt(estado){
   const col={libre:['#e7f3ea','#2f8f4e'],ocupada:['#fbeed8','#e0841a'],cuenta:['#e7eef6','#3b6ea5']}[estado]||['#f1efe8','#8c857a'];
@@ -1214,11 +1244,73 @@ async function vMenu(){
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
     <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
     <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${money(p.precioBase)}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
-    </tbody></table></div>`;}).join('')}`;
+    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num"><input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima"></td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
+    </tbody></table></div>`;}).join('')}
+  ${editorGrupos()}`;
   $('#addProd').onclick=modalNuevoProducto;
+  document.querySelectorAll('[data-precio]').forEach(inp=>inp.onchange=async()=>{
+    const v=+inp.value;
+    if(!(v>0)){toast('Precio inválido');inp.value=app.menu.productos[inp.dataset.precio].precioBase;return;}
+    try{
+      const p=await API.patch('/api/menu/productos/'+inp.dataset.precio,{precioBase:M2(v)});
+      app.menu.productos[p.id]=p;inp.value=p.precioBase;
+      toast(p.nombre+': '+money(p.precioBase),{tipo:'ok'});
+    }catch(e){toast(e.message);inp.value=app.menu.productos[inp.dataset.precio].precioBase;}
+  });
+  bindEditorGrupos();
   document.querySelectorAll('[data-86]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/menu/productos/'+b.dataset['86'],{disponible:b.dataset.disp==='1'});app.menu=await API.get('/api/menu');toast(b.dataset.disp==='1'?'Producto reactivado':'Producto marcado como agotado');vMenu();}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-estprod]').forEach(inp=>inp.onchange=async()=>{const est=inp.value.trim()||'Cocina';try{await API.patch('/api/menu/productos/'+inp.dataset.estprod,{estacion:est});const pr=app.menu.productos[inp.dataset.estprod];if(pr)pr.estacion=est;toast('Estación: '+est);}catch(e){toast(e.message);}});
+}
+const M2=n=>Math.round((+n||0)*100)/100;
+// Los tamaños (Mediana/Grande/Familiar) y la orilla viven en los grupos de
+// modificadores, no en el producto: el precio final es base + ajuste.
+function editorGrupos(){
+  const gs=Object.values(app.menu.gruposModificadores||{});
+  if(!gs.length)return '';
+  return `<div class="panel" style="margin-top:4px"><h3>Tamaños y modificadores <span class="small">el precio final es el precio base del producto + este ajuste</span></h3>
+    <div class="ge-grid">${gs.map(g=>{
+      const usos=Object.values(app.menu.productos).filter(p=>(p.gruposIds||[]).includes(g.id)).length;
+      const ejemplo=Object.values(app.menu.productos).find(p=>(p.gruposIds||[]).includes(g.id));
+      return `<div class="ge-card" data-grped="${g.id}">
+        <div class="ge-head"><input class="ge-nom" value="${g.nombre}"><span class="small">${usos} producto(s)${g.obligatorio?' · obligatorio':''}</span></div>
+        <div class="ge-ops">${g.opciones.map(o=>`<div class="ge-op">
+          <input class="ge-onom" data-op="${o.id}" value="${o.nombre}">
+          <input class="ge-od mono" data-op="${o.id}" type="number" step="1" value="${o.precioDelta}">
+          ${ejemplo?`<span class="ge-fin" data-base="${ejemplo.precioBase}">${money(ejemplo.precioBase+o.precioDelta)}</span>`:'<span class="ge-fin">—</span>'}
+          <button class="ge-x" data-quitar="${o.id}" title="Quitar opción">×</button></div>`).join('')}</div>
+        <div class="ge-op nueva"><input class="ge-nnom" placeholder="Agregar opción"><input class="ge-nd mono" type="number" step="1" placeholder="0"><span class="ge-fin">&nbsp;</span><span class="ge-x" style="visibility:hidden">×</span></div>
+        ${ejemplo?`<div class="small" style="color:var(--muted);margin-top:4px">Precio final calculado sobre <b>${ejemplo.nombre}</b> (${money(ejemplo.precioBase)})</div>`:''}
+        <button class="btn accent" data-grpsave="${g.id}" style="margin-top:10px;width:100%;font-size:13px">Guardar cambios</button>
+      </div>`;}).join('')}</div></div>`;
+}
+function bindEditorGrupos(){
+  // Recalcular el precio final mostrado mientras se teclea
+  document.querySelectorAll('.ge-od').forEach(inp=>inp.oninput=()=>{
+    const fin=inp.parentElement.querySelector('.ge-fin');
+    const base=fin&&fin.dataset.base!=null?+fin.dataset.base:null;
+    if(fin&&base!=null)fin.textContent=money(base+(+inp.value||0));
+  });
+  document.querySelectorAll('[data-quitar]').forEach(b=>b.onclick=()=>{
+    const card=b.closest('.ge-card');
+    if(card.querySelectorAll('.ge-ops .ge-op').length<=1){toast('El grupo necesita al menos una opción');return;}
+    b.closest('.ge-op').remove();
+  });
+  document.querySelectorAll('[data-grpsave]').forEach(b=>b.onclick=async()=>{
+    const card=b.closest('.ge-card');
+    const opciones=[...card.querySelectorAll('.ge-ops .ge-op')].map(row=>({
+      id:row.querySelector('.ge-onom').dataset.op,
+      nombre:row.querySelector('.ge-onom').value.trim(),
+      precioDelta:M2(row.querySelector('.ge-od').value),
+    })).filter(o=>o.nombre);
+    const nn=card.querySelector('.ge-nnom').value.trim();
+    if(nn)opciones.push({nombre:nn,precioDelta:M2(card.querySelector('.ge-nd').value)});
+    if(!opciones.length){toast('El grupo necesita al menos una opción');return;}
+    try{
+      await API.patch('/api/menu/grupos/'+b.dataset.grpsave,{nombre:card.querySelector('.ge-nom').value.trim(),opciones});
+      toast('Modificadores actualizados',{tipo:'ok'});
+      vMenu();
+    }catch(e){toast(e.message);}
+  });
 }
 function modalNuevoProducto(){
   modal.innerHTML=`<h3>Nuevo producto</h3><div class="sub">Se agrega al menú de inmediato</div>
