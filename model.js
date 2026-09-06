@@ -128,6 +128,8 @@ function crearPedido(e, { sucursalId, codigo, tipoServicio = 'mostrador', mesaId
     tiemposCocina: { recibido: null, listo: null },
     // Reparto propio (solo tipoServicio 'domicilio'). null en mostrador/mesa.
     reparto: tipoServicio === 'domicilio' ? nuevoReparto() : null,
+    // Liga publica de seguimiento para el cliente. Token aleatorio, no el folio.
+    seguimiento: tipoServicio === 'domicilio' ? { token: tokenSeguimiento(), creado: new Date().toISOString(), avisado: null } : null,
   };
   e.pedidos[folio] = ped;
   return ped;
@@ -147,6 +149,7 @@ function mandarComanda(ped) {
 //  El repartidor cobra en la puerta; el efectivo NO entra al turno hasta que
 //  liquida al volver (reparto.liquidado). Por eso entregar y liquidar son dos
 //  pasos distintos: mientras uno esta en falso, el dinero esta con la moto.
+const tokenSeguimiento = () => crypto.randomBytes(9).toString('hex');
 const nuevoReparto = () => ({
   estado: 'por_asignar',
   repartidorId: null, repartidorNombre: null,
@@ -260,6 +263,71 @@ function crearLiquidacion({ repartidorId, repartidorNombre, sucursalId, turnoId,
   };
 }
 
+// Ubicacion viva de cada repartidor. Se sobrescribe: no se guarda recorrido.
+function guardarUbicacion(e, empleadoId, { lat, lng, precision = null }) {
+  if (!e.repartoUbicaciones) e.repartoUbicaciones = {};
+  const la = +lat, ln = +lng;
+  if (!isFinite(la) || !isFinite(ln) || la < -90 || la > 90 || ln < -180 || ln > 180) {
+    const x = new Error('Coordenadas inválidas'); x.status = 400; throw x;
+  }
+  e.repartoUbicaciones[empleadoId] = { lat: la, lng: ln, precision: precision == null ? null : +precision, ts: new Date().toISOString() };
+  return e.repartoUbicaciones[empleadoId];
+}
+// Una posicion vieja miente mas de lo que informa: se descarta a los 4 minutos.
+function ubicacionViva(e, empleadoId, maxMin = 4) {
+  const u = (e.repartoUbicaciones || {})[empleadoId];
+  if (!u) return null;
+  return (Date.now() - new Date(u.ts).getTime()) / 60000 <= maxMin ? u : null;
+}
+
+// Minutos promedio salida->entrega de la sucursal, para dar un ETA con datos
+// propios en vez de una promesa inventada. null si aun no hay historial.
+function promedioEnRuta(e, sucursalId, minMuestras = 3) {
+  const ms = [];
+  for (const p of Object.values(e.pedidos)) {
+    if (p.tipoServicio !== 'domicilio' || !p.reparto) continue;
+    if (sucursalId && p.sucursalId !== sucursalId) continue;
+    const t = tiemposReparto(p).enRuta;
+    if (t != null && t > 0 && t < 180) ms.push(t);
+  }
+  if (ms.length < minMuestras) return null;
+  ms.sort((a, b) => a - b);
+  return Math.round(ms[Math.floor(ms.length / 2)]); // mediana: aguanta el pedido raro
+}
+
+// Paso del cliente: 0 recibido · 1 en preparacion · 2 listo · 3 en camino · 4 entregado
+function pasoCliente(p) {
+  const r = p.reparto || {};
+  if (r.estado === 'entregado') return 4;
+  if (r.estado === 'en_ruta') return 3;
+  if (p._kdsListo) return 2;
+  if (p.tiemposCocina && p.tiemposCocina.recibido) return 1;
+  return 0;
+}
+
+// Lo unico que ve el cliente. Sin telefono ni direccion propios, sin totales de
+// otros pedidos y sin nada del resto de la operacion.
+function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = null } = {}) {
+  const r = p.reparto || {};
+  const suc = e.sucursales[p.sucursalId] || {};
+  return {
+    folio: p.folio,
+    negocio: (e.meta && e.meta.nombre) || '',
+    sucursal: suc.nombre || '',
+    cliente: (p.cliente && p.cliente.nombre) || '',
+    paso: pasoCliente(p),
+    cancelado: p.estado === 'cancelado',
+    creado: p.creado,
+    salida: r.salida || null,
+    entregado: r.entregado || null,
+    etaMin,
+    repartidor: repartidor ? { nombre: repartidor.nombre, telefono: repartidor.telefono || null } : null,
+    moto: ubicacion ? { lat: ubicacion.lat, lng: ubicacion.lng, ts: ubicacion.ts } : null,
+    items: (p.lineas || []).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: (l.modificadores || []).map((m) => m.opcionNombre) })),
+    total: p.total,
+  };
+}
+
 // ---- Pago -------------------------------------------------------------------
 function registrarPago(p, { pagos = [], recibido = 0, propina = null } = {}) {
   const ef = pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
@@ -348,6 +416,7 @@ module.exports = {
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
+  tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
 };
