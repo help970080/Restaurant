@@ -328,6 +328,17 @@
 .gps-t{font-weight:700;font-size:14px}
 .gps-s{font-size:12px;color:var(--muted);margin-top:2px}
 .gps-card .btn{white-space:nowrap;font-size:13px;padding:8px 14px}
+
+/* ---- Avance de entrega y calificaciones ---- */
+.rc-avance{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-top:6px;padding:5px 8px;background:#f4f8fb;border-radius:8px;font-size:12px}
+.rc-avance.tarde{background:#fdf1ee}
+.rc-km{font-family:var(--mono);font-weight:700;color:var(--blue);font-size:13px}
+.rc-avance.tarde .rc-km{color:var(--red)}
+.rc-al{color:var(--muted)}
+.rc-eta{margin-left:auto;font-weight:700;color:var(--green)}
+.rc-cal{margin-top:6px;font-size:13px;color:var(--accent);letter-spacing:1px}
+.rc-com{color:var(--muted);font-size:11px;font-style:italic;letter-spacing:0}
+.leaflet-container{border-radius:12px}
 </style>
 </head>
 <body>
@@ -726,9 +737,15 @@ async function cargarResumenReparto(){
       <div class="kpi"><div class="lab">Minutos en ruta</div><div class="val">${r.minutosPromedioEnRuta!=null?r.minutosPromedioEnRuta:'—'}</div><div class="sub">promedio</div></div>
       <div class="kpi"><div class="lab">Sin liquidar</div><div class="val" style="color:${r.efectivoSinLiquidar>0?'var(--accent-ink)':'var(--green)'}">${money(r.efectivoSinLiquidar)}</div><div class="sub">${r.foliosSinLiquidar.length} pedido(s)</div></div>
     </div>
-    ${r.repartidores.length?`<table><thead><tr><th>Repartidor</th><th class="num">Entregas</th><th class="num">Venta</th><th class="num">Ticket prom.</th><th class="num">Min. prom.</th><th class="num">Fallidos</th></tr></thead><tbody>
-      ${r.repartidores.map(x=>`<tr><td style="font-weight:600">${x.nombre}</td><td class="num">${x.entregas}</td><td class="num">${money(x.venta)}</td><td class="num">${money(x.ticketPromedio)}</td><td class="num">${x.minutosPromedio!=null?x.minutosPromedio:'—'}</td><td class="num" style="color:${x.fallidos?'var(--red)':'inherit'}">${x.fallidos}</td></tr>`).join('')}
-      </tbody></table>`:'<div class="empty">Sin entregas hoy.</div>'}`;
+    ${r.repartidores.length?`<table><thead><tr><th>Repartidor</th><th class="num">Entregas</th><th class="num">Venta</th><th class="num">Ticket prom.</th><th class="num">Min. prom.</th><th>Calificación</th><th class="num">Fallidos</th></tr></thead><tbody>
+      ${r.repartidores.map(x=>`<tr><td style="font-weight:600">${x.nombre}</td><td class="num">${x.entregas}</td><td class="num">${money(x.venta)}</td><td class="num">${money(x.ticketPromedio)}</td><td class="num">${x.minutosPromedio!=null?x.minutosPromedio:'—'}</td>
+        <td>${x.calificacion?`<span style="color:var(--accent);letter-spacing:1px">${estrellasTxt(x.calificacion)}</span> <span class="small">${x.calificacion} (${x.califs})</span>`:'<span class="small" style="color:var(--muted)">sin calificar</span>'}</td>
+        <td class="num" style="color:${x.fallidos?'var(--red)':'inherit'}">${x.fallidos}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Sin entregas hoy.</div>'}
+    ${(r.comentarios&&r.comentarios.length)?`<div style="margin-top:14px"><h3 style="font-size:14px">Lo que dicen los clientes</h3>
+      ${r.comentarios.map(c=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div style="font-size:13px"><span style="color:var(--accent);letter-spacing:1px">${estrellasTxt(c.estrellas)}</span> <b>${c.repartidor||''}</b> <span class="small" style="color:var(--muted)">· ${c.folio} · ${new Date(c.fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}</span></div>
+        <div style="font-size:13px;color:var(--muted);font-style:italic">“${c.comentario}”</div></div>`).join('')}</div>`:''}`;
 }
 async function cargarUltimasVentas(){
   let ventas=[];try{ventas=await API.get('/api/ventas/recientes?limit=15&sucursalId='+app.sucursalId);}catch{}
@@ -757,6 +774,7 @@ function vPOS(){
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}</button>`).join('')}</div>`:''}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?tarjetaEntrega(ped):''}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<button class="btn accent" id="btnSeg" style="width:100%;margin-bottom:10px;font-size:13px"${ped&&ped.folio?'':' disabled'}>📲 Enviar seguimiento por WhatsApp</button>`:''}
       <div class="lines" id="lines"></div>
       <div class="totals">
         <div class="trow"><span>Subtotal</span><span class="mono" id="tSub">$0.00</span></div>
@@ -772,6 +790,7 @@ function vPOS(){
   document.querySelectorAll('.prod').forEach(b=>b.onclick=()=>onProducto(app.menu.productos[b.dataset.prod]));
   if($('#salirMesa'))$('#salirMesa').onclick=()=>{app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat};vPOS();};
   if($('#btnEditEntrega'))$('#btnEditEntrega').onclick=editarEntrega;
+  if($('#btnSeg'))$('#btnSeg').onclick=()=>mandarSeguimiento(app.pos.folio);
   if($('#btnNuevo'))$('#btnNuevo').onclick=()=>{app.pos.folio=null;app.pos.pedido=null;if(app.pos.tipoServicio==='mesa'){app.pos.tipoServicio='mostrador';app.pos.mesaId=null;}vPOS();};
   if($('#btnPromo'))$('#btnPromo').onclick=aplicarPromocion;
   if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
@@ -849,11 +868,36 @@ function modalEntrega(actual,onOk){
     <div class="field"><label>Número</label><input id="enNum" value="${a.numero||''}"></div></div>
     <div class="field"><label>Colonia</label><input id="enCol" value="${a.colonia||''}"></div>
     <div class="field"><label>Referencias (opcional)</label><input id="enRef" value="${a.referencias||''}" placeholder="Portón azul, frente a la tienda…"></div>
+    <div class="sub" id="enAviso" style="min-height:20px"></div>
     ${dir&&!a.calle?`<div class="sub" style="color:var(--red)">Dirección anterior: ${dir} — sepárala en calle, número y colonia.</div>`:''}
     <div class="modal-foot"><button class="btn-ghost" id="enCancel">Cancelar</button><button class="btn-primary" id="enOk">Guardar</button></div>`;
   ov.classList.add('show');
   $('#enCancel').onclick=closeModal;
-  setTimeout(()=>{const i=$('#enNom');if(i)i.focus();},50);
+  setTimeout(()=>{const i=$('#enTel');if(i)i.focus();},50);
+  // Directorio: con el teléfono se llena solo el resto. Ahorra la mitad de la
+  // llamada y evita que la misma casa quede escrita de tres formas distintas.
+  let buscando=null;
+  $('#enTel').addEventListener('input',()=>{
+    const dig=$('#enTel').value.replace(/\D/g,'');
+    const av=$('#enAviso');
+    if(dig.length<10){if(av)av.innerHTML='';return;}
+    clearTimeout(buscando);
+    buscando=setTimeout(async()=>{
+      let c=null;try{c=await API.get('/api/clientes?telefono='+dig);}catch{}
+      if(!c){if(av)av.innerHTML='<span style="color:var(--muted)">Cliente nuevo</span>';return;}
+      if(av)av.innerHTML=`<b style="color:var(--green)">${c.nombre}</b> · ${c.pedidos||0} pedido(s) · ${c.direccion||''}
+        <button class="btn" id="enUsar" style="padding:4px 10px;font-size:12px;min-height:auto;margin-left:6px">Usar estos datos</button>`;
+      const btn=$('#enUsar');
+      if(btn)btn.onclick=()=>{
+        $('#enNom').value=c.nombre||'';$('#enCalle').value=c.calle||'';
+        $('#enNum').value=c.numero||'';$('#enCol').value=c.colonia||'';
+        $('#enRef').value=c.referencias||'';
+        toast('Datos del cliente cargados');
+      };
+      // Si el formulario está vacío, se llena solo: es el caso normal
+      if(!$('#enNom').value.trim()&&btn)btn.click();
+    },350);
+  });
   $('#enOk').onclick=()=>{
     const ent={nombre:$('#enNom').value.trim(),telefono:$('#enTel').value.replace(/[^\d+]/g,''),
       calle:$('#enCalle').value.trim(),numero:$('#enNum').value.trim(),colonia:$('#enCol').value.trim(),
@@ -879,6 +923,7 @@ function renderLines(){
   if($('#tDescRow')){const d=ped&&ped.descuento;if(d){const amt=d.tipo==='porcentaje'?sub*d.valor/100:d.valor;$('#tDescRow').style.display='flex';$('#tDescLbl').textContent='Descuento'+(d.motivo?' · '+d.motivo:'');$('#tDesc').textContent='−'+money(amt);}else $('#tDescRow').style.display='none';}
   $('#tTotal').textContent=money(tot);
   const bc=$('#btnCobrar');if(bc&&app.pos.tipoServicio!=='mesa')bc.disabled=!(app.turno&&ped&&ped.lineas.length>0);
+  const bs=$('#btnSeg');if(bs)bs.disabled=!(ped&&ped.folio);
 }
 function modalModificadores(prod){
   const grupos=prod.gruposIds.map(id=>app.menu.gruposModificadores[id]);
@@ -1101,12 +1146,16 @@ function pintarReparto(){
       ${reps.length?`<div class="rep-motos">${reps.map(r=>`
         <div class="rep-moto">
           <div class="rm-top"><b>${r.nombre}</b>${r.telefono?`<a class="ent-tel" href="tel:${r.telefono}">${r.telefono}</a>`:''}</div>
-          <div class="rm-sub">${r.enRuta} en ruta · ${r.porLiquidar} por liquidar</div>
+          <div class="rm-sub">${r.enRuta} en ruta · ${r.porLiquidar} por liquidar${r.estrellas?` · <span title="${r.calificaciones} calificación(es)" style="color:var(--accent)">${estrellasTxt(r.estrellas)} ${r.estrellas}</span>`:''}${r.ubicacion?'':' · sin GPS'}</div>
           <div class="rm-cash ${r.efectivoPendiente>0?'hay':''}">${money(r.efectivoPendiente)}</div>
           ${caja&&r.porLiquidar>0?`<button class="btn accent" data-liq="${r.id}" data-nom="${r.nombre}">Liquidar</button>`:''}
         </div>`).join('')}</div>`
         :'<div class="empty">No hay empleados con puesto “Repartidor”. Dalos de alta en Personal.</div>'}
     </div>
+    ${tab.enRuta.length?`<div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px">Dónde andan las motos
+      <span class="small">${tab.promedioMin!=null?'promedio de entrega: '+tab.promedioMin+' min':'aún sin promedio'}</span></h3>
+      <div id="repMapa" style="height:320px;border-radius:12px;border:1px solid var(--line);background:#e9e5db"></div>
+      <div class="small" style="color:var(--muted);margin-top:6px">🛵 repartidor · 🏠 domicilio (se ubica solo cuando le entregas una vez)</div></div>`:''}
     <div class="rep-board">
       ${col('Por asignar',tab.porAsignar,'por_asignar')}
       ${col('Asignados',tab.asignados,'asignado')}
@@ -1114,6 +1163,7 @@ function pintarReparto(){
       ${col('Entregados sin liquidar',tab.porLiquidar,'entregado')}
     </div>`;
   pintarBannerGPS();
+  if(tab.enRuta.length)dibujarMapaOperacion(tab.enRuta);
   document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
   document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>{
     const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===b.dataset.liq);
@@ -1127,16 +1177,26 @@ function pintarReparto(){
     try{ticketFinal(await API.get('/api/pedidos/'+b.dataset.ticketrep));}catch(e){toast(e.message);}
   });
 }
+function estrellasTxt(n){return n?'★'.repeat(Math.round(n))+'☆'.repeat(5-Math.round(n)):'';}
 function tarjetaPedidoRep(p,tipo,caja){
   const c=p.cliente||{};const r=p.reparto||{};
   const espera=tipo==='en_ruta'?minsDesde(r.salida):minsDesde(p.creado);
-  const tarde=espera!=null&&espera>=(tipo==='en_ruta'?35:20);
+  // "Va tarde" se mide contra el propio promedio del negocio, no contra un número inventado
+  const limite=tipo==='en_ruta'?Math.max(25,Math.round((p.promedioMin||22)*1.5)):20;
+  const tarde=espera!=null&&espera>=limite;
+  const avance=tipo==='en_ruta'?`<div class="rc-avance${tarde?' tarde':''}">
+      ${p.distanciaKm!=null?`<span class="rc-km">${p.distanciaKm<1?Math.round(p.distanciaKm*1000)+' m':p.distanciaKm.toFixed(1)+' km'}</span><span class="rc-al">del domicilio</span>`
+        :(p.moto?'<span class="rc-al">Sin domicilio ubicado — se aprende en esta entrega</span>':'<span class="rc-al">La moto no comparte ubicación</span>')}
+      ${p.etaMin!=null?`<span class="rc-eta">${p.etaMin>0?'~'+p.etaMin+' min':'debería estar llegando'}</span>`:''}
+    </div>`:'';
+  const califica=r.calificacion?`<div class="rc-cal" title="${(r.calificacion.comentario||'').replace(/"/g,'')}">${estrellasTxt(r.calificacion.estrellas)}${r.calificacion.comentario?' <span class="rc-com">“'+r.calificacion.comentario.slice(0,60)+'”</span>':''}</div>`:'';
   return `<div class="rep-card ${tarde?'tarde':''}">
     <div class="rc-top"><span class="rc-folio">${p.folio}</span><span class="rc-tot">${money(p.total)}</span></div>
     <div class="rc-cli"><b>${c.nombre||'—'}</b>${c.telefono?` · <a class="ent-tel" href="tel:${c.telefono}">${c.telefono}</a>`:''}</div>
     <div class="rc-dir">${c.direccion||[c.calle,c.numero,c.colonia].filter(Boolean).join(' ')||'Sin dirección'}</div>
     ${c.referencias?`<div class="rc-ref">${c.referencias}</div>`:''}
-    <div class="rc-meta">${p.items} art.${espera!=null?` · ${espera} min`:''}${r.repartidorNombre?` · ${r.repartidorNombre}`:''}${r.intentos?` · ${r.intentos} intento(s)`:''}${p.cocinaListo?' · <span class="rc-ok">cocina lista</span>':''}</div>
+    <div class="rc-meta">${p.items} art.${espera!=null?` · ${espera} min${tarde?' <b style="color:var(--red)">va tarde</b>':''}`:''}${r.repartidorNombre?` · ${r.repartidorNombre}`:''}${r.intentos?` · ${r.intentos} intento(s)`:''}${p.cocinaListo?' · <span class="rc-ok">cocina lista</span>':''}</div>
+    ${avance}${califica}
     <div class="rc-acts">
       ${tipo==='por_asignar'&&caja?`<button class="btn accent" data-asignar="${p.folio}">Asignar moto</button>`:''}
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
@@ -1150,6 +1210,51 @@ function tarjetaPedidoRep(p,tipo,caja){
 // Reparto esa copia queda vieja y bloquea la siguiente venta. Hay que soltarla.
 function soltarDelPOS(folio){
   if(app.pos.folio===folio)app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat,canalId:'local',entrega:null};
+}
+// Leaflet se carga solo cuando hace falta el mapa, no en cada arranque.
+let leafletP=null;
+function cargarLeaflet(){
+  if(window.L)return Promise.resolve(window.L);
+  if(leafletP)return leafletP;
+  leafletP=new Promise((ok,err)=>{
+    const css=document.createElement('link');
+    css.rel='stylesheet';css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const sc=document.createElement('script');
+    sc.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    sc.onload=()=>ok(window.L);sc.onerror=()=>err(new Error('No se pudo cargar el mapa'));
+    document.head.appendChild(sc);
+  });
+  return leafletP;
+}
+let mapaOp=null;
+async function dibujarMapaOperacion(enRuta){
+  const el=$('#repMapa');if(!el)return;
+  let L;
+  try{L=await cargarLeaflet();}catch{el.innerHTML='<div class="empty">Sin conexión al mapa. Los minutos y la distancia siguen abajo.</div>';return;}
+  if(!$('#repMapa'))return; // la vista cambió mientras cargaba
+  if(mapaOp){mapaOp.remove();mapaOp=null;}
+  const pts=[];
+  mapaOp=L.map(el,{zoomControl:false}).setView([19.4326,-99.1332],13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(mapaOp);
+  L.control.zoom({position:'bottomright'}).addTo(mapaOp);
+  const ico=(txt,size)=>L.divIcon({className:'',html:`<div style="font-size:${size}px;line-height:1;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))">${txt}</div>`,iconSize:[size,size],iconAnchor:[size/2,size/2]});
+  for(const p of enRuta){
+    const r=p.reparto||{};
+    if(p.moto){
+      L.marker([p.moto.lat,p.moto.lng],{icon:ico('🛵',26)}).addTo(mapaOp)
+        .bindPopup(`<b>${r.repartidorNombre||'Repartidor'}</b><br>${p.folio}${p.distanciaKm!=null?`<br>a ${p.distanciaKm<1?Math.round(p.distanciaKm*1000)+' m':p.distanciaKm.toFixed(1)+' km'} del domicilio`:''}`);
+      pts.push([p.moto.lat,p.moto.lng]);
+    }
+    if(p.destino){
+      L.marker([p.destino.lat,p.destino.lng],{icon:ico('🏠',20)}).addTo(mapaOp)
+        .bindPopup(`<b>${(p.cliente&&p.cliente.nombre)||''}</b><br>${(p.cliente&&p.cliente.direccion)||''}`);
+      pts.push([p.destino.lat,p.destino.lng]);
+    }
+  }
+  if(pts.length>1)mapaOp.fitBounds(L.latLngBounds(pts).pad(0.3));
+  else if(pts.length===1)mapaOp.setView(pts[0],15);
+  else el.innerHTML='<div class="empty">Ninguna moto está compartiendo su ubicación todavía.</div>';
 }
 async function accionReparto(folio,accion,msg){
   try{await API.post(`/api/reparto/${folio}/${accion}`);toast(msg,{tipo:'ok'});vReparto();}
