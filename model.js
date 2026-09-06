@@ -26,6 +26,7 @@ function estadoInicial(meta = {}) {
     mesas: {},
     caja: { turnos: {} },
     conteos: [],
+    liquidaciones: [],
     secuencias: { pedido: {} },
   };
 }
@@ -33,11 +34,9 @@ function estadoInicial(meta = {}) {
 // ---- Canales de venta / delivery (México) -----------------------------------
 function canalesDefault() {
   return {
-    local:    { id: 'local',    nombre: 'Mostrador / Propio', comisionPct: 0,  activo: true, esApp: false },
-    didi:     { id: 'didi',     nombre: 'DiDi Food',          comisionPct: 30, activo: true, esApp: true },
-    rappi:    { id: 'rappi',    nombre: 'Rappi',              comisionPct: 30, activo: true, esApp: true },
-    uber:     { id: 'uber',     nombre: 'Uber Eats',          comisionPct: 30, activo: true, esApp: true },
+    local:    { id: 'local',    nombre: 'Mostrador',          comisionPct: 0, activo: true, esApp: false },
     whatsapp: { id: 'whatsapp', nombre: 'WhatsApp / Teléfono', comisionPct: 0, activo: true, esApp: false },
+    qr:       { id: 'qr',       nombre: 'Menú QR',            comisionPct: 0, activo: true, esApp: false },
   };
 }
 const crearCanal = ({ nombre, comisionPct = 0, esApp = true }) => ({ id: uid('canal'), nombre, comisionPct: r2(comisionPct), activo: true, esApp });
@@ -127,6 +126,8 @@ function crearPedido(e, { sucursalId, codigo, tipoServicio = 'mostrador', mesaId
     pago: null, turnoId, creadoPor: usuario,
     creado: new Date().toISOString(), actualizado: new Date().toISOString(),
     tiemposCocina: { recibido: null, listo: null },
+    // Reparto propio (solo tipoServicio 'domicilio'). null en mostrador/mesa.
+    reparto: tipoServicio === 'domicilio' ? nuevoReparto() : null,
   };
   e.pedidos[folio] = ped;
   return ped;
@@ -139,6 +140,124 @@ function mandarComanda(ped) {
   if (envio && !ped.tiemposCocina.recibido) ped.tiemposCocina.recibido = new Date().toISOString();
   ped.actualizado = new Date().toISOString();
   return envio;
+}
+
+// ---- REPARTO PROPIO (motos de la casa) --------------------------------------
+//  Ciclo: por_asignar -> asignado -> en_ruta -> entregado
+//  El repartidor cobra en la puerta; el efectivo NO entra al turno hasta que
+//  liquida al volver (reparto.liquidado). Por eso entregar y liquidar son dos
+//  pasos distintos: mientras uno esta en falso, el dinero esta con la moto.
+const nuevoReparto = () => ({
+  estado: 'por_asignar',
+  repartidorId: null, repartidorNombre: null,
+  asignado: null, salida: null, entregado: null,
+  liquidado: false, liquidacionId: null,
+  intentos: 0, ultimoFallo: null,
+});
+
+// Normaliza y valida la direccion de entrega. Lanza si faltan datos minimos.
+function normalizarEntrega(cliente) {
+  const c = cliente || {};
+  const t = (v) => String(v == null ? '' : v).trim();
+  const out = {
+    nombre: t(c.nombre), telefono: t(c.telefono).replace(/[^\d+]/g, ''),
+    calle: t(c.calle), numero: t(c.numero), colonia: t(c.colonia),
+    referencias: t(c.referencias), notas: t(c.notas),
+  };
+  const faltan = [];
+  if (!out.nombre) faltan.push('nombre');
+  if (out.telefono.replace(/\D/g, '').length < 10) faltan.push('telefono (10 digitos)');
+  if (!out.calle) faltan.push('calle');
+  if (!out.numero) faltan.push('numero');
+  if (!out.colonia) faltan.push('colonia');
+  if (faltan.length) { const e = new Error('Faltan datos de entrega: ' + faltan.join(', ')); e.status = 400; throw e; }
+  out.direccion = `${out.calle} ${out.numero}, ${out.colonia}`;
+  return out;
+}
+
+const esRepartidor = (emp) => !!emp && emp.activo !== false && /repartidor|motoriz|moto\b/i.test(String(emp.puesto || ''));
+function repartidoresDe(e, sucursalId) {
+  return Object.values(e.empleados || {})
+    .filter((x) => esRepartidor(x) && (!sucursalId || !x.sucursalId || x.sucursalId === sucursalId));
+}
+const esDomicilio = (p) => p.tipoServicio === 'domicilio';
+// Pedido que ya salio y aun no se entrega
+const enRuta = (p) => esDomicilio(p) && p.reparto && p.reparto.estado === 'en_ruta';
+// Entregado y cobrado, pero el efectivo todavia no llega a caja
+const porLiquidar = (p) => esDomicilio(p) && p.reparto && p.reparto.estado === 'entregado' && !p.reparto.liquidado && p.estado === 'cobrado';
+// Efectivo (venta + propina en efectivo) que trae el repartidor encima
+function efectivoDePedido(p) {
+  if (!p.pago) return 0;
+  const v = p.pago.pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
+  const pr = p.propina && p.propina.metodo === 'efectivo' ? p.propina.monto : 0;
+  return r2(v + pr);
+}
+
+function asignarReparto(e, p, empleadoId) {
+  const emp = (e.empleados || {})[empleadoId];
+  if (!esRepartidor(emp)) { const x = new Error('El empleado no esta activo o no tiene puesto de repartidor'); x.status = 400; throw x; }
+  const r = p.reparto || (p.reparto = nuevoReparto());
+  if (r.estado === 'entregado') { const x = new Error('El pedido ya fue entregado'); x.status = 409; throw x; }
+  r.repartidorId = emp.id; r.repartidorNombre = emp.nombre;
+  r.estado = 'asignado'; r.asignado = new Date().toISOString();
+  p.actualizado = r.asignado;
+  return p;
+}
+
+function marcarSalida(e, p) {
+  const r = p.reparto;
+  if (!r || !r.repartidorId) { const x = new Error('El pedido no tiene repartidor asignado'); x.status = 409; throw x; }
+  if (r.estado === 'entregado') { const x = new Error('El pedido ya fue entregado'); x.status = 409; throw x; }
+  if (!p.lineas.length) { const x = new Error('El pedido no tiene productos'); x.status = 400; throw x; }
+  r.estado = 'en_ruta'; r.salida = new Date().toISOString();
+  p.actualizado = r.salida;
+  return p;
+}
+
+// Entrega + cobro en la puerta. Cierra el pedido pero deja el efectivo pendiente.
+function marcarEntregado(p) {
+  const r = p.reparto;
+  if (!r) { const x = new Error('El pedido no es de reparto'); x.status = 400; throw x; }
+  r.estado = 'entregado'; r.entregado = new Date().toISOString();
+  p.actualizado = r.entregado;
+  return p;
+}
+
+// Intento fallido: regresa el pedido a la cola para reasignar.
+function marcarFallido(p, motivo = '') {
+  const r = p.reparto;
+  if (!r) { const x = new Error('El pedido no es de reparto'); x.status = 400; throw x; }
+  if (r.estado === 'entregado') { const x = new Error('El pedido ya fue entregado'); x.status = 409; throw x; }
+  r.intentos = (r.intentos || 0) + 1;
+  r.ultimoFallo = { motivo: motivo || '(sin motivo)', fecha: new Date().toISOString(), repartidorId: r.repartidorId };
+  r.estado = 'por_asignar'; r.repartidorId = null; r.repartidorNombre = null; r.asignado = null; r.salida = null;
+  p.actualizado = new Date().toISOString();
+  return p;
+}
+
+// Minutos de cocina->puerta y de salida->entrega
+function tiemposReparto(p) {
+  const r = p.reparto || {};
+  const min = (a, b) => (a && b ? r2((new Date(b) - new Date(a)) / 60000) : null);
+  return {
+    preparacion: min(p.creado, p.tiemposCocina && p.tiemposCocina.listo),
+    enRuta: min(r.salida, r.entregado),
+    total: min(p.creado, r.entregado),
+  };
+}
+
+// Liquidacion: el repartidor entrega el efectivo y esos pedidos entran al turno.
+function crearLiquidacion({ repartidorId, repartidorNombre, sucursalId, turnoId, folios, efectivoEsperado, conteoEfectivo, usuario }) {
+  const esperado = r2(efectivoEsperado);
+  const contado = conteoEfectivo == null ? esperado : r2(conteoEfectivo);
+  const dif = r2(contado - esperado);
+  return {
+    id: uid('liq'), repartidorId, repartidorNombre, sucursalId, turnoId,
+    folios: folios.slice(), pedidos: folios.length,
+    efectivoEsperado: esperado, conteoEfectivo: contado, diferencia: dif,
+    resultado: dif === 0 ? 'cuadrado' : (dif < 0 ? 'faltante' : 'sobrante'),
+    usuario, fecha: new Date().toISOString(),
+  };
 }
 
 // ---- Pago -------------------------------------------------------------------
@@ -227,6 +346,8 @@ module.exports = {
   uid, r2, estadoInicial,
   crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
+  nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
+  efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
 };
