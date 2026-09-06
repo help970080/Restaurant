@@ -500,6 +500,46 @@ app.post('/api/menu/grupos', soloAdmin, wrap(async (req, res) => {
   });
   res.json(g);
 }));
+// Editar un grupo de modificadores (tamaños, orilla…). El precio final de una
+// linea es precioBase del producto + el precioDelta de la opcion elegida, asi
+// que aqui es donde se ajusta lo que cuesta una Mediana, Grande o Familiar.
+app.patch('/api/menu/grupos/:id', soloAdmin, wrap(async (req, res) => {
+  const { nombre, tipo, obligatorio, max, opciones } = req.body || {};
+  const g = await withState((e) => {
+    const grp = e.menu.gruposModificadores[req.params.id];
+    if (!grp) throw bad('Grupo inexistente', 404);
+    if (nombre != null && String(nombre).trim()) grp.nombre = String(nombre).trim();
+    if (tipo != null) grp.tipo = tipo === 'multiple' ? 'multiple' : 'unico';
+    if (obligatorio != null) grp.obligatorio = !!obligatorio;
+    if (max !== undefined) grp.max = max == null || max === '' ? null : Math.max(1, parseInt(max, 10) || 1);
+    if (Array.isArray(opciones)) {
+      const out = [];
+      for (const o of opciones) {
+        const prev = o && o.id ? grp.opciones.find((x) => x.id === o.id) : null;
+        if (prev) {
+          if (o.nombre != null && String(o.nombre).trim()) prev.nombre = String(o.nombre).trim();
+          if (o.precioDelta != null) prev.precioDelta = M.r2(+o.precioDelta || 0);
+          if (o.porDefecto != null) prev.porDefecto = !!o.porDefecto;
+          if (o.activo != null) prev.activo = !!o.activo;
+          out.push(prev);
+        } else if (o && String(o.nombre || '').trim()) {
+          out.push(M.crearOpcion({
+            nombre: String(o.nombre).trim(),
+            precioDelta: M.r2(+o.precioDelta || 0),
+            porDefecto: !!o.porDefecto,
+          }));
+        }
+      }
+      if (!out.length) throw bad('El grupo necesita al menos una opción');
+      // Las lineas ya cobradas guardan su propia copia del modificador, asi que
+      // quitar una opcion aqui no altera tickets ni reportes historicos.
+      grp.opciones = out;
+    }
+    return grp;
+  });
+  res.json(g);
+}));
+
 app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
   const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '', estacion = 'Cocina' } = req.body || {};
   if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
