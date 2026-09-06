@@ -269,6 +269,42 @@
     .panel{padding:14px}
   }
   @media(max-width:420px){.pgrid{grid-template-columns:1fr}.kpis{grid-template-columns:1fr}}
+
+/* ---- Reparto propio ---- */
+.ent-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;position:relative}
+.ent-card.vacia{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:13px}
+.ent-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px}
+.ent-tel{color:var(--blue);text-decoration:none;font-family:var(--mono);font-size:12px}
+.ent-dir{font-size:13px;color:var(--ink);margin-top:2px}
+.ent-ref{font-size:12px;color:var(--muted);margin-top:2px;font-style:italic}
+.ent-edit{margin-top:8px;background:none;border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted)}
+.ent-card.vacia .ent-edit{margin-top:0;border-color:var(--accent);color:var(--accent)}
+.rep-motos{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.rep-moto{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}
+.rm-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.rm-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.rm-cash{font-family:var(--mono);font-size:18px;font-weight:700;margin-top:6px;color:var(--muted)}
+.rm-cash.hay{color:var(--accent)}
+.rep-moto .btn{margin-top:8px;width:100%}
+.rep-board{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;align-items:start}
+.rep-col{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;min-height:90px}
+.rep-col-h{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:8px}
+.rep-n{background:var(--paper);border-radius:20px;padding:1px 8px;font-size:12px}
+.rep-card{border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:10px;padding:9px 10px;margin-bottom:8px;background:#fff}
+.rep-card.tarde{border-left-color:var(--red);background:#fff8f6}
+.rc-top{display:flex;justify-content:space-between;align-items:baseline}
+.rc-folio{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.rc-tot{font-family:var(--mono);font-weight:700}
+.rc-cli{font-size:13px;margin-top:3px}
+.rc-dir{font-size:12px;color:var(--ink);margin-top:2px;line-height:1.35}
+.rc-ref{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px}
+.rc-meta{font-size:11px;color:var(--muted);margin-top:5px}
+.rc-ok{color:var(--green);font-weight:700}
+.rc-cash{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent)}
+.rc-acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.rc-acts .btn{padding:6px 10px;font-size:12px}
+@media(max-width:1100px){.rep-board{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){.rep-board{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -350,7 +386,7 @@ function mesaArt(estado){
 //  Estado de la app
 // ===========================================================================
 const app={tenant:null,rol:null,sucursales:[],sucursalId:null,turno:null,menu:null,vista:'resumen',
-  pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null,canalId:'local'}};
+  pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null,canalId:'local',entrega:null}};
 let kdsTimer=null;
 
 const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
@@ -365,17 +401,21 @@ const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
   rh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   asistencia:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   reservas:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
-  caja:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M3 8l2-4h14l2 4M8 14h.01M16 14h.01M11 14h2"/></svg>'};
-const NAV_LABELS={resumen:'Resumen',pos:'Punto de venta',cocina:'Cocina',menu:'Menú',inventario:'Inventario',mesas:'Mesas',asistencia:'Asistencia',reportes:'Reportes',promociones:'Promociones',rh:'Personal',ajustes:'Ajustes',reservas:'Reservas',caja:'Caja'};
+  caja:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M3 8l2-4h14l2 4M8 14h.01M16 14h.01M11 14h2"/></svg>',
+  reparto:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5.5" cy="17" r="3"/><circle cx="18.5" cy="17" r="3"/><path d="M8.5 17h7M6.5 14l2.5-5h4l2 3h3.5M13 9V6.5h3"/></svg>'};
+const NAV_LABELS={resumen:'Resumen',pos:'Punto de venta',cocina:'Cocina',menu:'Menú',inventario:'Inventario',mesas:'Mesas',asistencia:'Asistencia',reportes:'Reportes',promociones:'Promociones',rh:'Personal',ajustes:'Ajustes',reservas:'Reservas',caja:'Caja',reparto:'Reparto'};
 const NAV_ROLES={
-  admin:['resumen','caja','pos','cocina','menu','inventario','mesas','reservas','asistencia','reportes','promociones','rh','ajustes'],
-  gerente:['resumen','caja','pos','cocina','menu','inventario','mesas','reservas','asistencia','reportes','promociones','rh','ajustes'],
-  cajero:['caja','pos','cocina','mesas','reservas','asistencia'],
+  admin:['resumen','caja','pos','reparto','cocina','menu','inventario','mesas','reservas','asistencia','reportes','promociones','rh','ajustes'],
+  gerente:['resumen','caja','pos','reparto','cocina','menu','inventario','mesas','reservas','asistencia','reportes','promociones','rh','ajustes'],
+  cajero:['caja','pos','reparto','cocina','mesas','reservas','asistencia'],
   mesero:['pos','mesas','cocina','asistencia'],
   cocinero:['cocina','asistencia'],
-  repartidor:['cocina','asistencia']
+  repartidor:['reparto','cocina','asistencia']
 };
 function esAdmin(){return app.rol==='admin'||app.rol==='gerente';}
+// Un domicilio ya asignado sale de las listas de caja: se cobra en la vista Reparto.
+function enReparto(p){return p&&p.tipoServicio==='domicilio'&&p.reparto&&p.reparto.estado!=='por_asignar';}
+function minsDesde(iso){if(!iso)return null;return Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));}
 function puedeCobrar(){return ['admin','gerente','cajero'].includes(app.rol);}
 function rolViews(){return NAV_ROLES[app.rol]||['pos','asistencia'];}
 function puedeVer(v){return rolViews().includes(v);}
@@ -455,8 +495,7 @@ function renderComandaOffline(){
   const prods=Object.values(app.menu.productos).filter(p=>p.activo&&p.disponible!==false&&p.categoriaId===o.cat);
   const total=o.lineas.reduce((s,l)=>s+l.precioBase*l.cantidad,0);
   $('#view').innerHTML=`<div class="panel" style="border-color:var(--accent)"><h3>Comanda offline <span class="small">se guarda en este equipo y se envía a cocina al reconectar</span></h3>
-    <div class="svc" style="margin-bottom:10px">${['mostrador','domicilio'].map(s=>`<button data-osvc="${s}" class="${o.tipo===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>
-    <div class="small" style="color:var(--muted);margin-bottom:8px">Offline solo captura productos a precio base (sin modificadores). Anota el detalle en la nota.</div>
+    <div class="small" style="color:var(--muted);margin-bottom:8px">Offline solo captura productos a precio base (sin modificadores) y como mostrador: un domicilio necesita dirección validada. Anota el detalle en la nota.</div>
     <div class="cats">${cats.map(c=>`<button class="cat ${c.id===o.cat?'active':''}" data-ocat="${c.id}">${c.nombre}</button>`).join('')}</div>
     <div class="pgrid" style="margin-top:10px">${prods.map(p=>`<button class="prod" data-oadd="${p.id}"><div class="meta"><div class="nm">${p.nombre}</div><div class="row"><span class="pr">${money(p.precioBase)}</span></div></div></button>`).join('')||'<div class="empty">Sin productos.</div>'}</div>
   </div>
@@ -465,7 +504,6 @@ function renderComandaOffline(){
     <div class="field" style="margin-top:10px"><label>Nombre / mesa / nota</label><input id="offNota" value="${(o.cliente.nombre||'').replace(/"/g,'&quot;')}" placeholder="Ej. Mesa 4 / Juan / 2 grandes"></div>
     <button class="btn accent" id="offGuardar" ${o.lineas.length?'':'disabled'} style="width:100%">Guardar pedido offline</button>
   </div>`;
-  document.querySelectorAll('[data-osvc]').forEach(b=>b.onclick=()=>{o.tipo=b.dataset.osvc;renderComandaOffline();});
   document.querySelectorAll('[data-ocat]').forEach(b=>b.onclick=()=>{o.cat=b.dataset.ocat;renderComandaOffline();});
   document.querySelectorAll('[data-oadd]').forEach(b=>b.onclick=()=>{const p=app.menu.productos[b.dataset.oadd];const ex=o.lineas.find(l=>l.productoId===p.id);if(ex)ex.cantidad++;else o.lineas.push({productoId:p.id,nombre:p.nombre,precioBase:p.precioBase,cantidad:1});renderComandaOffline();});
   document.querySelectorAll('[data-odec]').forEach(b=>b.onclick=()=>{const i=+b.dataset.odec;o.lineas[i].cantidad--;if(o.lineas[i].cantidad<=0)o.lineas.splice(i,1);renderComandaOffline();});
@@ -487,8 +525,11 @@ async function sincronizarOffline(silencioso){
   const quedan=[];let okN=0,errN=0;
   for(const o of cola){
     try{
-      const ped=await API.post('/api/pedidos',{sucursalId:o.sucursalId,tipoServicio:o.tipoServicio,canalId:o.canalId||'local'});
-      if(o.cliente&&(o.cliente.nombre||o.cliente.direccion))await API.patch('/api/pedidos/'+ped.folio,{cliente:o.cliente});
+      // Un domicilio guardado offline no trae direccion validada: entra como
+      // mostrador y caja lo pasa a Reparto capturando los datos de entrega.
+      const tipo=o.tipoServicio==='domicilio'?'mostrador':o.tipoServicio;
+      const ped=await API.post('/api/pedidos',{sucursalId:o.sucursalId,tipoServicio:tipo,canalId:o.canalId||'local'});
+      if(o.cliente&&o.cliente.nombre)await API.patch('/api/pedidos/'+ped.folio,{cliente:o.cliente});
       for(const l of o.lineas)await API.post('/api/pedidos/'+ped.folio+'/lineas',{productoId:l.productoId,cantidad:l.cantidad,notas:l.notas||''});
       await API.post('/api/pedidos/'+ped.folio+'/comanda');
       okN++;
@@ -545,7 +586,7 @@ async function renderNav(){
 function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
-  const fn={resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia,reservas:vReservas,caja:vCaja}[v];
+  const fn={resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia,reservas:vReservas,caja:vCaja,reparto:vReparto}[v];
   Promise.resolve().then(fn).catch(err=>{
     $('#view').innerHTML=`<div class="panel" style="text-align:center;padding:30px"><h3>No se pudo cargar</h3>
       <div style="color:var(--muted);margin:8px 0 16px">${(err&&err.message)||'Error de conexión'}. El servidor pudo haberse reiniciado; espera unos segundos y reintenta.</div>
@@ -612,8 +653,8 @@ function vPOS(){
       <div class="pgrid">${prodsDe(app.pos.cat).map(p=>{const ago=p.disponible===false;return `<button class="prod${ago?' agotado':''}" data-prod="${p.id}"${ago?' disabled':''}>${prodArt(p,cat.nombre)}${ago?'<span class="ago-badge">Agotado</span>':''}<div class="meta"><div class="nm">${p.nombre}</div>${p.descripcion?`<div class="pdesc">${p.descripcion}</div>`:''}<div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`;}).join('')}</div></div>
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
-      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}${c.comisionPct?` · ${c.comisionPct}%`:''}</button>`).join('')}</div>`:''}
-      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="cli"><input id="cliNombre" placeholder="Cliente" value="${ped&&ped.cliente?ped.cliente.nombre||'':''}"><input id="cliDir" placeholder="Dirección" value="${ped&&ped.cliente?ped.cliente.direccion||'':''}"><input id="cliEnvio" type="number" placeholder="Costo de envío" value="${ped?ped.costoEnvio||'':''}"></div>`:''}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}</button>`).join('')}</div>`:''}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?tarjetaEntrega(ped):''}
       <div class="lines" id="lines"></div>
       <div class="totals">
         <div class="trow"><span>Subtotal</span><span class="mono" id="tSub">$0.00</span></div>
@@ -628,7 +669,7 @@ function vPOS(){
   document.querySelectorAll('[data-canal]').forEach(b=>b.onclick=()=>onCanal(b.dataset.canal));
   document.querySelectorAll('.prod').forEach(b=>b.onclick=()=>onProducto(app.menu.productos[b.dataset.prod]));
   if($('#salirMesa'))$('#salirMesa').onclick=()=>{app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat};vPOS();};
-  if($('#cliEnvio'))$('#cliEnvio').addEventListener('change',saveCliente);
+  if($('#btnEditEntrega'))$('#btnEditEntrega').onclick=editarEntrega;
   if($('#btnNuevo'))$('#btnNuevo').onclick=()=>{app.pos.folio=null;app.pos.pedido=null;if(app.pos.tipoServicio==='mesa'){app.pos.tipoServicio='mostrador';app.pos.mesaId=null;}vPOS();};
   if($('#btnPromo'))$('#btnPromo').onclick=aplicarPromocion;
   if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
@@ -640,7 +681,14 @@ function mesaNombre(id){return 'Mesa '+(app._mesaNum&&app._mesaNum[id]||'');}
 function onSvc(s){
   if(s==='mesa'){toast('Elige una mesa en la pestaña Mesas');go('mesas');return;}
   if(app.pos.pedido&&app.pos.pedido.lineas.length){toast('Cobra o vacía el pedido actual antes de cambiar');return;}
-  app.pos.tipoServicio=s;app.pos.folio=null;app.pos.pedido=null;vPOS();
+  if(s==='domicilio'){
+    // El pedido a domicilio no se abre sin direccion: la moto necesita a donde ir.
+    modalEntrega(app.pos.entrega,ent=>{
+      app.pos.entrega=ent;app.pos.tipoServicio='domicilio';app.pos.folio=null;app.pos.pedido=null;closeModal();vPOS();
+    });
+    return;
+  }
+  app.pos.tipoServicio=s;app.pos.folio=null;app.pos.pedido=null;app.pos.entrega=null;vPOS();
 }
 async function onCanal(id){
   app.pos.canalId=id;
@@ -652,6 +700,10 @@ async function asegurarPedido(){
   const body={sucursalId:app.sucursalId,tipoServicio:app.pos.tipoServicio};
   if(app.pos.tipoServicio==='mesa')body.mesaId=app.pos.mesaId;
   else body.canalId=app.pos.canalId||'local';
+  if(app.pos.tipoServicio==='domicilio'){
+    if(!app.pos.entrega)throw new Error('Captura los datos de entrega antes de agregar productos');
+    body.cliente=app.pos.entrega;
+  }
   const p=await API.post('/api/pedidos',body);app.pos.folio=p.folio;app.pos.pedido=p;return p;
 }
 async function onProducto(prod){
@@ -663,9 +715,55 @@ async function onProducto(prod){
     renderLines();
   }catch(e){toast(e.message);}
 }
-async function saveCliente(){
-  if(!app.pos.pedido)return;
-  try{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{costoEnvio:+($('#cliEnvio').value||0),cliente:{nombre:$('#cliNombre').value,direccion:$('#cliDir').value}});renderLines();}catch(e){toast(e.message);}
+function tarjetaEntrega(ped){
+  const e=(ped&&ped.cliente)||app.pos.entrega||null;
+  if(!e)return `<div class="ent-card vacia"><span>Sin datos de entrega</span><button class="ent-edit" id="btnEditEntrega">Capturar</button></div>`;
+  return `<div class="ent-card">
+    <div class="ent-row"><b>${e.nombre||''}</b><a class="ent-tel" href="tel:${e.telefono||''}">${e.telefono||''}</a></div>
+    <div class="ent-dir">${e.direccion||[e.calle,e.numero,e.colonia].filter(Boolean).join(' ')}</div>
+    ${e.referencias?`<div class="ent-ref">${e.referencias}</div>`:''}
+    <button class="ent-edit" id="btnEditEntrega">Editar</button></div>`;
+}
+async function editarEntrega(){
+  const base=(app.pos.pedido&&app.pos.pedido.cliente)||app.pos.entrega||null;
+  modalEntrega(base,async ent=>{
+    app.pos.entrega=ent;
+    if(app.pos.pedido){
+      try{app.pos.pedido=await API.patch(`/api/pedidos/${app.pos.folio}`,{cliente:ent});}
+      catch(err){toast(err.message);return;}
+    }
+    closeModal();vPOS();
+  });
+}
+// Captura de entrega. Valida igual que el backend para no rebotar en el servidor.
+function modalEntrega(actual,onOk){
+  const a=actual||{};
+  const dir=a.direccion||'';
+  modal.innerHTML=`<h3>Datos de entrega</h3><div class="sub">Sin esto la moto no sale</div>
+    <div class="cols2"><div class="field"><label>Cliente</label><input id="enNom" value="${a.nombre||''}" placeholder="Nombre de quien recibe"></div>
+    <div class="field"><label>Teléfono</label><input id="enTel" type="tel" value="${a.telefono||''}" placeholder="10 dígitos"></div></div>
+    <div class="cols2"><div class="field"><label>Calle</label><input id="enCalle" value="${a.calle||''}"></div>
+    <div class="field"><label>Número</label><input id="enNum" value="${a.numero||''}"></div></div>
+    <div class="field"><label>Colonia</label><input id="enCol" value="${a.colonia||''}"></div>
+    <div class="field"><label>Referencias (opcional)</label><input id="enRef" value="${a.referencias||''}" placeholder="Portón azul, frente a la tienda…"></div>
+    ${dir&&!a.calle?`<div class="sub" style="color:var(--red)">Dirección anterior: ${dir} — sepárala en calle, número y colonia.</div>`:''}
+    <div class="modal-foot"><button class="btn-ghost" id="enCancel">Cancelar</button><button class="btn-primary" id="enOk">Guardar</button></div>`;
+  ov.classList.add('show');
+  $('#enCancel').onclick=closeModal;
+  setTimeout(()=>{const i=$('#enNom');if(i)i.focus();},50);
+  $('#enOk').onclick=()=>{
+    const ent={nombre:$('#enNom').value.trim(),telefono:$('#enTel').value.replace(/[^\d+]/g,''),
+      calle:$('#enCalle').value.trim(),numero:$('#enNum').value.trim(),colonia:$('#enCol').value.trim(),
+      referencias:$('#enRef').value.trim()};
+    const faltan=[];
+    if(!ent.nombre)faltan.push('nombre');
+    if(ent.telefono.replace(/\D/g,'').length<10)faltan.push('teléfono de 10 dígitos');
+    if(!ent.calle)faltan.push('calle');
+    if(!ent.numero)faltan.push('número');
+    if(!ent.colonia)faltan.push('colonia');
+    if(faltan.length){toast('Falta '+faltan.join(', '));return;}
+    onOk(ent);
+  };
 }
 function renderLines(){
   const ped=app.pos.pedido;const cont=$('#lines');if(!cont)return;
@@ -713,7 +811,7 @@ async function cargarCuentasAbiertasPOS(){
   if(!puedeCobrar())return;
   const cont=$('#cuentasAbiertas');if(!cont)return;
   let abiertos=[];try{abiertos=await API.get('/api/pedidos?estado=abierto&sucursalId='+app.sucursalId);}catch{return;}
-  abiertos=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length); // las mesas se cobran en la pestaña Mesas
+  abiertos=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length&&!enReparto(p)); // mesas: pestaña Mesas · domicilios asignados: pestaña Reparto
   if(!abiertos.length){cont.innerHTML='';return;}
   cont.innerHTML=`<div class="cuentas-strip"><span class="cs-lbl">Cuentas por cobrar (${abiertos.length}):</span>${abiertos.map(p=>`<button class="cs-chip" data-cobrarped="${p.folio}">${p.tipoServicio==='domicilio'?'🛵 Domicilio':'🧾 Mostrador'}${p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:''} · ${money(p.total)}</button>`).join('')}</div>`;
   cont.querySelectorAll('[data-cobrarped]').forEach(b=>b.onclick=()=>cobrarPedidoAbierto(b.dataset.cobrarped));
@@ -721,7 +819,8 @@ async function cargarCuentasAbiertasPOS(){
 async function cobrarPedidoAbierto(folio){
   try{const p=await API.get('/api/pedidos/'+folio);
     if(!p.lineas.length){toast('El pedido no tiene productos');return;}
-    app.pos={folio:p.folio,pedido:p,tipoServicio:p.tipoServicio,mesaId:null,canalId:p.canalId,cat:app.pos.cat};
+    if(enReparto(p)){toast('Ese pedido ya va con el repartidor — cóbralo en Reparto');go('reparto');return;}
+    app.pos={folio:p.folio,pedido:p,tipoServicio:p.tipoServicio,mesaId:null,canalId:p.canalId,cat:app.pos.cat,entrega:p.cliente||null};
     vPOS();
   }catch(e){toast(e.message);}
 }
@@ -853,6 +952,187 @@ function ticketFinal(p){
   ov.classList.add('show');
   $('#okPrint').onclick=()=>imprimirTicket(p);
   $('#okDone').onclick=()=>{closeModal();if(app.vista==='caja')vCaja();else if(app.vista==='pos')vPOS();else if(app.vista==='mesas')vMesas();};
+}
+
+// ===========================================================================
+//  REPARTO — despacho de motos propias
+//  Ciclo: por asignar -> asignado -> en ruta -> entregado (cobra el motorista)
+//  -> liquidación en caja. El efectivo no entra al turno hasta que liquida.
+// ===========================================================================
+async function vReparto(){
+  const suc=app.sucursalId;
+  const [tab,reps]=await Promise.all([
+    API.get('/api/reparto?sucursalId='+encodeURIComponent(suc)),
+    API.get('/api/reparto/repartidores?sucursalId='+encodeURIComponent(suc))
+  ]);
+  app._rep={tab,reps};
+  pintarReparto();
+  if(kdsTimer){clearInterval(kdsTimer);}
+  kdsTimer=setInterval(async()=>{
+    if(app.vista!=='reparto'){clearInterval(kdsTimer);kdsTimer=null;return;}
+    if(ov.classList.contains('show'))return; // no refrescar con un modal abierto
+    try{
+      const [t,r]=await Promise.all([
+        API.get('/api/reparto?sucursalId='+encodeURIComponent(app.sucursalId)),
+        API.get('/api/reparto/repartidores?sucursalId='+encodeURIComponent(app.sucursalId))
+      ]);
+      app._rep={tab:t,reps:r};pintarReparto();
+    }catch{}
+  },20000);
+}
+function pintarReparto(){
+  const {tab,reps}=app._rep;const caja=puedeCobrar();
+  const efectivoCalle=reps.reduce((s,r)=>s+(r.efectivoPendiente||0),0);
+  const col=(titulo,arr,tipo)=>`<div class="rep-col">
+    <div class="rep-col-h"><span>${titulo}</span><span class="rep-n">${arr.length}</span></div>
+    ${arr.length?arr.map(p=>tarjetaPedidoRep(p,tipo,caja)).join(''):'<div class="empty">Nada aquí</div>'}</div>`;
+  $('#view').innerHTML=`
+    <div class="kpis">
+      <div class="kpi"><div class="lab">Por asignar</div><div class="val">${tab.porAsignar.length}</div></div>
+      <div class="kpi"><div class="lab">En ruta</div><div class="val">${tab.enRuta.length}</div></div>
+      <div class="kpi"><div class="lab">Sin liquidar</div><div class="val">${tab.porLiquidar.length}</div></div>
+      <div class="kpi"><div class="lab">Efectivo en la calle</div><div class="val">${money(efectivoCalle)}</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:16px"><h3>Repartidores</h3>
+      ${reps.length?`<div class="rep-motos">${reps.map(r=>`
+        <div class="rep-moto">
+          <div class="rm-top"><b>${r.nombre}</b>${r.telefono?`<a class="ent-tel" href="tel:${r.telefono}">${r.telefono}</a>`:''}</div>
+          <div class="rm-sub">${r.enRuta} en ruta · ${r.porLiquidar} por liquidar</div>
+          <div class="rm-cash ${r.efectivoPendiente>0?'hay':''}">${money(r.efectivoPendiente)}</div>
+          ${caja&&r.porLiquidar>0?`<button class="btn accent" data-liq="${r.id}" data-nom="${r.nombre}">Liquidar</button>`:''}
+        </div>`).join('')}</div>`
+        :'<div class="empty">No hay empleados con puesto “Repartidor”. Dalos de alta en Personal.</div>'}
+    </div>
+    <div class="rep-board">
+      ${col('Por asignar',tab.porAsignar,'por_asignar')}
+      ${col('Asignados',tab.asignados,'asignado')}
+      ${col('En ruta',tab.enRuta,'en_ruta')}
+      ${col('Entregados sin liquidar',tab.porLiquidar,'entregado')}
+    </div>`;
+  document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>modalLiquidar(b.dataset.liq,b.dataset.nom));
+  document.querySelectorAll('[data-asignar]').forEach(b=>b.onclick=()=>modalAsignar(b.dataset.asignar));
+  document.querySelectorAll('[data-salida]').forEach(b=>b.onclick=()=>accionReparto(b.dataset.salida,'salida','Salió a ruta'));
+  document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=()=>modalEntregar(b.dataset.entregar));
+  document.querySelectorAll('[data-fallo]').forEach(b=>b.onclick=()=>modalFallido(b.dataset.fallo));
+  document.querySelectorAll('[data-ticketrep]').forEach(b=>b.onclick=async()=>{
+    try{ticketFinal(await API.get('/api/pedidos/'+b.dataset.ticketrep));}catch(e){toast(e.message);}
+  });
+}
+function tarjetaPedidoRep(p,tipo,caja){
+  const c=p.cliente||{};const r=p.reparto||{};
+  const espera=tipo==='en_ruta'?minsDesde(r.salida):minsDesde(p.creado);
+  const tarde=espera!=null&&espera>=(tipo==='en_ruta'?35:20);
+  return `<div class="rep-card ${tarde?'tarde':''}">
+    <div class="rc-top"><span class="rc-folio">${p.folio}</span><span class="rc-tot">${money(p.total)}</span></div>
+    <div class="rc-cli"><b>${c.nombre||'—'}</b>${c.telefono?` · <a class="ent-tel" href="tel:${c.telefono}">${c.telefono}</a>`:''}</div>
+    <div class="rc-dir">${c.direccion||[c.calle,c.numero,c.colonia].filter(Boolean).join(' ')||'Sin dirección'}</div>
+    ${c.referencias?`<div class="rc-ref">${c.referencias}</div>`:''}
+    <div class="rc-meta">${p.items} art.${espera!=null?` · ${espera} min`:''}${r.repartidorNombre?` · ${r.repartidorNombre}`:''}${r.intentos?` · ${r.intentos} intento(s)`:''}${p.cocinaListo?' · <span class="rc-ok">cocina lista</span>':''}</div>
+    <div class="rc-acts">
+      ${tipo==='por_asignar'&&caja?`<button class="btn accent" data-asignar="${p.folio}">Asignar moto</button>`:''}
+      ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
+      ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
+      ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
+      ${tipo==='entregado'?`<span class="rc-cash">${money(p.efectivo)} en efectivo</span><button class="btn" data-ticketrep="${p.folio}">Ticket</button>`:''}
+    </div></div>`;
+}
+async function accionReparto(folio,accion,msg){
+  try{await API.post(`/api/reparto/${folio}/${accion}`);toast(msg,{tipo:'ok'});vReparto();}
+  catch(e){toast(e.message);}
+}
+function modalAsignar(folio){
+  const reps=(app._rep&&app._rep.reps)||[];
+  modal.innerHTML=`<h3>Asignar moto</h3><div class="sub">${folio}</div>
+    ${reps.length?reps.map(r=>`<button class="opt" data-r="${r.id}" style="width:100%;justify-content:space-between">
+      <span class="onm">${r.nombre}</span><span class="od">${r.enRuta} en ruta</span></button>`).join('')
+      :'<div class="empty">Sin repartidores dados de alta. Ve a Personal y crea un empleado con puesto “Repartidor”.</div>'}
+    <div class="modal-foot"><button class="btn-ghost" id="asClose">Cerrar</button></div>`;
+  ov.classList.add('show');
+  $('#asClose').onclick=closeModal;
+  modal.querySelectorAll('[data-r]').forEach(b=>b.onclick=async()=>{
+    try{await API.post(`/api/reparto/${folio}/asignar`,{repartidorId:b.dataset.r});closeModal();toast('Moto asignada',{tipo:'ok'});vReparto();}
+    catch(e){toast(e.message);}
+  });
+}
+function modalFallido(folio){
+  modal.innerHTML=`<h3>Entrega fallida</h3><div class="sub">${folio} — vuelve a la cola para reasignar</div>
+    <div class="field"><label>¿Qué pasó?</label><input id="flMot" placeholder="Nadie abrió, dirección equivocada…"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="flCancel">Cancelar</button><button class="btn-primary" id="flOk">Registrar</button></div>`;
+  ov.classList.add('show');
+  $('#flCancel').onclick=closeModal;
+  $('#flOk').onclick=async()=>{
+    try{await API.post(`/api/reparto/${folio}/fallido`,{motivo:$('#flMot').value.trim()});closeModal();toast('Regresó a la cola');vReparto();}
+    catch(e){toast(e.message);}
+  };
+}
+// Cobro en la puerta. El dinero queda a cargo del repartidor hasta que liquide.
+async function modalEntregar(folio){
+  let ped;try{ped=await API.get('/api/pedidos/'+folio);}catch(e){toast(e.message);return;}
+  const metodos=['efectivo','tarjeta','transferencia'];
+  const nm={efectivo:'Efectivo',tarjeta:'Tarjeta',transferencia:'Transferencia'};
+  const r2c=n=>Math.round(n*100)/100;
+  let metodo='efectivo',tipPct=0,tipMonto=0;
+  const propina=()=>tipPct!=null?r2c(ped.total*tipPct/100):r2c(tipMonto||0);
+  const totalCon=()=>r2c(ped.total+propina());
+  const render=()=>{
+    const tc=totalCon(),pr=propina();
+    modal.innerHTML=`<h3 id="enTit">Entregar ${money(tc)}</h3>
+      <div class="sub" id="enSub">${ped.folio} · ${(ped.cliente&&ped.cliente.nombre)||''}${pr>0?' · propina '+money(pr):''}</div>
+      <div class="paytabs">${metodos.map(m=>`<button data-m="${m}" class="${m===metodo?'active':''}">${nm[m]}</button>`).join('')}</div>
+      <div class="field"><label>Propina (va completa al personal · no es venta)</label>
+        <div class="tip-row">${[0,10,15,20].map(p=>`<button class="tip-btn ${tipPct===p?'active':''}" data-tip="${p}">${p===0?'Sin':p+'%'}</button>`).join('')}<input id="enTip" type="number" class="mono" placeholder="$ otra" value="${tipPct==null?tipMonto:''}"></div></div>
+      ${metodo==='efectivo'?`<div class="field"><label>Efectivo recibido</label><input id="enRecib" type="number" class="mono" placeholder="${tc}"></div><div class="cambio" id="enCambio"></div>`:`<div class="bignum">${money(tc)}</div>`}
+      <div class="sub" style="text-align:center">Este cobro lo trae el repartidor: entra a caja hasta que liquide.</div>
+      <div class="modal-foot"><button class="btn-ghost" id="enCanc">Cancelar</button><button class="btn-primary" id="enConf">Confirmar entrega</button></div>`;
+    const actCambio=()=>{const ri=$('#enRecib');if(!ri)return;const rv=+ri.value||0,t=totalCon(),c=rv-t;$('#enCambio').textContent=rv>0?(c>=0?'Cambio: '+money(c):'Faltan '+money(-c)):'';$('#enCambio').style.color=c<0?'var(--red)':'var(--green)';};
+    modal.querySelectorAll('.paytabs button').forEach(b=>b.onclick=()=>{metodo=b.dataset.m;render();});
+    modal.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>{tipPct=+b.dataset.tip;tipMonto=0;render();});
+    const ti=$('#enTip');if(ti)ti.oninput=()=>{tipPct=null;tipMonto=+ti.value||0;const t=totalCon();$('#enTit').textContent='Entregar '+money(t);const ri=$('#enRecib');if(ri)ri.placeholder=t;const bn=modal.querySelector('.bignum');if(bn)bn.textContent=money(t);actCambio();};
+    if(metodo==='efectivo'){const ri=$('#enRecib');ri.addEventListener('input',actCambio);setTimeout(()=>ri.focus(),50);}
+    $('#enCanc').onclick=closeModal;
+    $('#enConf').onclick=async()=>{
+      const pr=propina(),tc=totalCon();let recibido=0;
+      if(metodo==='efectivo'){recibido=+($('#enRecib').value)||tc;if(recibido<tc){toast('El efectivo no alcanza');return;}}
+      const pagos=[{metodo,monto:ped.total}];
+      const propinaObj=pr>0?{monto:pr,metodo}:null;
+      try{
+        const p=await API.post(`/api/reparto/${folio}/entregado`,{pagos,recibido,propina:propinaObj});
+        closeModal();ticketFinal(p);toast('Entregado · pendiente de liquidar',{tipo:'ok',ms:4000});vReparto();
+      }catch(e){toast(e.message);}
+    };
+  };
+  render();ov.classList.add('show');
+}
+// La moto regresa y entrega el efectivo: esas ventas entran al turno de caja.
+function modalLiquidar(repartidorId,nombre){
+  const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===repartidorId);
+  const esperado=r?r.efectivoPendiente:0;
+  modal.innerHTML=`<h3>Liquidar a ${nombre}</h3>
+    <div class="sub">${r?r.porLiquidar:0} entrega(s) · las ventas entran al turno actual</div>
+    <div class="field"><label>Efectivo esperado</label><div class="bignum">${money(esperado)}</div></div>
+    <div class="field"><label>Efectivo entregado (déjalo vacío si cuadra)</label><input id="liqCta" type="number" class="mono" placeholder="${esperado}"></div>
+    <div class="cambio" id="liqDif"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="liqCanc">Cancelar</button><button class="btn-primary" id="liqOk">Liquidar</button></div>`;
+  ov.classList.add('show');
+  const inp=$('#liqCta');
+  inp.oninput=()=>{
+    const v=inp.value===''?null:+inp.value;
+    if(v==null){$('#liqDif').textContent='';return;}
+    const d=Math.round((v-esperado)*100)/100;
+    $('#liqDif').textContent=d===0?'Cuadra':(d<0?'Faltante '+money(-d):'Sobrante '+money(d));
+    $('#liqDif').style.color=d===0?'var(--green)':(d<0?'var(--red)':'var(--blue)');
+  };
+  $('#liqCanc').onclick=closeModal;
+  $('#liqOk').onclick=async()=>{
+    const body={repartidorId,sucursalId:app.sucursalId};
+    if(inp.value!=='')body.conteoEfectivo=+inp.value;
+    try{
+      const liq=await API.post('/api/reparto/liquidar',body);
+      closeModal();
+      toast(liq.resultado==='cuadrado'?`Liquidado · ${money(liq.efectivoEsperado)}`:`Liquidado con ${liq.resultado} de ${money(Math.abs(liq.diferencia))}`,{tipo:liq.resultado==='cuadrado'?'ok':undefined,ms:4500});
+      await refreshTurno();renderTopbar();vReparto();
+    }catch(e){toast(e.message);}
+  };
 }
 
 // ===========================================================================
@@ -1226,7 +1506,7 @@ async function vCaja(){
   ]);
   app._mesas=mesas;app._ventas=recientes;
   const mesasAb=mesas.filter(m=>m.estado==='ocupada'||m.estado==='cuenta').map(m=>({folio:m.pedidoFolio,etq:m.nombre,est:m.estado==='cuenta'?'Pidió cuenta':'Mesa ocupada',pidio:m.estado==='cuenta',items:m.items,total:m.total,esMesa:true,mesaId:m.id}));
-  const otros=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length).map(p=>({folio:p.folio,etq:p.origen==='qr'?('🔲 QR'+(p.cliente&&p.cliente.mesa?' · Mesa '+p.cliente.mesa:(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:''))):(p.tipoServicio==='domicilio'?('Domicilio'+(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:'')):'Mostrador'),est:p.origen==='qr'?'Pedido del cliente':(p.tipoServicio==='domicilio'?'A domicilio':'En mostrador'),pidio:p.origen==='qr',items:p.lineas.length,total:p.total,esMesa:false}));
+  const otros=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length&&!enReparto(p)).map(p=>({folio:p.folio,etq:p.origen==='qr'?('🔲 QR'+(p.cliente&&p.cliente.mesa?' · Mesa '+p.cliente.mesa:(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:''))):(p.tipoServicio==='domicilio'?('Domicilio'+(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:'')):'Mostrador'),est:p.origen==='qr'?'Pedido del cliente':(p.tipoServicio==='domicilio'?'A domicilio':'En mostrador'),pidio:p.origen==='qr',items:p.lineas.length,total:p.total,esMesa:false}));
   const cuentas=[...mesasAb,...otros];
   const totalCobrar=cuentas.reduce((s,c)=>s+(c.total||0),0);
   const resvHoy=reservas.filter(r=>r.fecha===hoy&&(r.estado==='pendiente'||r.estado==='confirmada')).sort((a,b)=>(a.hora||'').localeCompare(b.hora||''));
