@@ -41,14 +41,35 @@ function readState() {
   return db.loadState(c.row);
 }
 
+// ---- Serializacion de escrituras por tenant --------------------------------
+//  withState es load -> mutar en RAM -> guardar el documento COMPLETO. Dos
+//  peticiones simultaneas del mismo restaurante cargan copias distintas y la
+//  segunda en guardar pisa a la primera: el pedido, el cobro o la liquidacion
+//  de la primera desaparece sin error. Con varias motos, el KDS y la caja
+//  escribiendo a la vez eso deja de ser hipotetico, asi que toda mutacion de
+//  un mismo row pasa por una cola. Lecturas no: no pisan nada.
+const colas = new Map();
+function enCola(row, fn) {
+  const previa = colas.get(row) || Promise.resolve();
+  const siguiente = previa.then(fn, fn); // un error no debe atorar la cola
+  const cola = siguiente.then(() => {}, () => {});
+  colas.set(row, cola);
+  cola.then(() => { if (colas.get(row) === cola) colas.delete(row); });
+  return siguiente;
+}
+
 // Mutación: carga, aplica fn(estado, ctx), guarda. Si fn lanza, NO guarda.
-async function withState(fn) {
+//  OJO: nunca llames withState dentro del callback de otro withState del mismo
+//  tenant — la cola es secuencial y se quedaria esperandose a si misma.
+function withState(fn) {
   const c = ctx();
-  const st = await db.loadState(c.row);
-  if (!st) throw new Error('Tenant sin estado');
-  const result = await fn(st, c);
-  await db.saveState(c.row, st);
-  return result;
+  return enCola(c.row, async () => {
+    const st = await db.loadState(c.row);
+    if (!st) throw new Error('Tenant sin estado');
+    const result = await fn(st, c);
+    await db.saveState(c.row, st);
+    return result;
+  });
 }
 
 module.exports = { als, firmarToken, auth, ctx, readState, withState, runPublic };
