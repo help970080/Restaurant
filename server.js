@@ -892,6 +892,8 @@ app.get('/api/reparto', wrap(async (req, res) => {
   const { sucursalId } = req.query;
   const yo = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
   if (esRolRepartidor(c) && !yo) throw bad('Tu usuario no está ligado a una ficha de Personal. Pide que te la creen con tu usuario.', 409);
+  const miFicha = yo || empleadoDeCtx(e, c);
+  const puedeGps = !!(miFicha && M.esRepartidor(miFicha));
   let dom = Object.values(e.pedidos)
     .filter((p) => M.esDomicilio(p) && p.estado !== 'cancelado' && (!sucursalId || p.sucursalId === sucursalId));
   if (yo) dom = dom.filter((p) => p.reparto && p.reparto.repartidorId === yo.id);
@@ -925,6 +927,8 @@ app.get('/api/reparto', wrap(async (req, res) => {
     promedioMin: prom,
     sucursal: sucCoord,
     soyRepartidor: !!yo,
+    // Solo quien tiene ficha de repartidor ve el interruptor de ubicación.
+    puedeGps,
     // La cola por asignar es decisión de caja; el repartidor no la ve.
     porAsignar: yo ? [] : abiertos.filter((p) => !p.reparto || p.reparto.estado === 'por_asignar').map(vista),
     asignados:  abiertos.filter((p) => p.reparto && p.reparto.estado === 'asignado').map(vista),
