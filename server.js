@@ -914,6 +914,7 @@ app.get('/api/reparto', wrap(async (req, res) => {
       tiempos: M.tiemposReparto(p),
       // Para que caja vea el avance sin abrir nada más
       moto, destino: r.destino || null, distanciaKm: dist, etaMin,
+      rastro: moto && moto.rastro ? moto.rastro : null,
       promedioMin: prom,
       seguimiento: p.seguimiento ? p.seguimiento.token : null,
     };
