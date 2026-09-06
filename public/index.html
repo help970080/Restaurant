@@ -321,6 +321,13 @@
 .ge-x{border:none;background:none;color:var(--muted);font-size:17px;line-height:1;cursor:pointer;padding:0 2px;width:18px}
 .ge-x:hover{color:var(--red)}
 .ge-op.nueva{border-top:1px dashed var(--line);padding-top:8px;margin-top:8px}
+
+/* ---- Banner de GPS del repartidor ---- */
+.gps-card{display:flex;align-items:center;gap:12px;justify-content:space-between;background:#fff;border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:12px;padding:11px 14px;margin-bottom:14px}
+.gps-card.on{border-left-color:var(--green);background:#f4fbf6}
+.gps-t{font-weight:700;font-size:14px}
+.gps-s{font-size:12px;color:var(--muted);margin-top:2px}
+.gps-card .btn{white-space:nowrap;font-size:13px;padding:8px 14px}
 </style>
 </head>
 <body>
@@ -418,6 +425,45 @@ function mesaArt(estado){
 const app={tenant:null,rol:null,sucursales:[],sucursalId:null,turno:null,menu:null,vista:'resumen',
   pos:{folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null,canalId:'local',entrega:null}};
 let kdsTimer=null;
+// --- GPS del repartidor -----------------------------------------------------
+// Se reporta cada 25s mientras traiga pedidos en ruta. Solo la última posición:
+// el servidor no guarda recorrido. El repartidor lo prende y lo apaga.
+let geoTimer=null;
+const gpsOn=()=>localStorage.getItem('cp_gps')==='1';
+function iniciarGPS(silencioso){
+  if(!navigator.geolocation){if(!silencioso)toast('Este teléfono no permite ubicación');return;}
+  localStorage.setItem('cp_gps','1');
+  if(geoTimer)clearInterval(geoTimer);
+  const mandar=()=>navigator.geolocation.getCurrentPosition(async pos=>{
+    try{
+      const r=await API.post('/api/reparto/ubicacion',{lat:pos.coords.latitude,lng:pos.coords.longitude,precision:pos.coords.accuracy});
+      app._gpsUlt=new Date().toISOString();app._gpsRuta=r.enRuta;
+      if(app.vista==='reparto')pintarBannerGPS();
+    }catch(e){app._gpsErr=e.message;if(app.vista==='reparto')pintarBannerGPS();}
+  },err=>{
+    app._gpsErr=err.code===1?'Permiso de ubicación denegado':'No se pudo leer la ubicación';
+    if(app.vista==='reparto')pintarBannerGPS();
+  },{enableHighAccuracy:true,timeout:15000,maximumAge:10000});
+  mandar();geoTimer=setInterval(mandar,25000);
+  if(!silencioso)toast('Compartiendo ubicación',{tipo:'ok'});
+}
+function detenerGPS(){
+  localStorage.removeItem('cp_gps');
+  if(geoTimer){clearInterval(geoTimer);geoTimer=null;}
+  app._gpsUlt=null;app._gpsErr=null;
+  if(app.vista==='reparto')pintarBannerGPS();
+}
+function pintarBannerGPS(){
+  const c=$('#gpsBanner');if(!c)return;
+  const on=gpsOn();
+  c.innerHTML=`<div class="gps-card ${on?'on':''}">
+    <div><div class="gps-t">${on?'Compartiendo tu ubicación':'Ubicación apagada'}</div>
+      <div class="gps-s">${on
+        ?(app._gpsErr?`<b style="color:var(--red)">${app._gpsErr}</b>`:(app._gpsUlt?`Última señal ${new Date(app._gpsUlt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}${app._gpsRuta?` · ${app._gpsRuta} pedido(s) en ruta`:''}`:'Buscando señal…'))
+        :'Préndela para que el cliente vea dónde va su pedido'}</div></div>
+    <button class="btn ${on?'':'accent'}" id="gpsTog">${on?'Apagar':'Prender'}</button></div>`;
+  $('#gpsTog').onclick=()=>{on?detenerGPS():iniciarGPS();pintarBannerGPS();};
+}
 
 const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
   pos:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
@@ -476,6 +522,7 @@ async function boot(){
     try{app.canales=await API.get('/api/canales');}catch{app.canales=[];}
     guardarCacheOffline();
     renderShell();go(vistaInicial());
+    if(gpsOn())iniciarGPS(true);
   }catch(e){
     if(!navigator.onLine && hidratarCacheOffline()){
       renderShell();renderConexion();toast('Sin conexión — modo offline',{ms:4500});abrirComandaOffline();
@@ -596,7 +643,7 @@ function renderShell(){
         <div class="turno-pill off" id="turnoPill">Turno cerrado</div>
         <button class="btn accent" id="btnTurno">Abrir turno</button>
       </div><div class="view" id="view"></div></div></div>`;
-  $('#logout').onclick=()=>{API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
+  $('#logout').onclick=()=>{detenerGPS();API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
   $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
   $('#btnTurno').onclick=()=>app.turno?modalCerrarTurno():modalAbrirTurno();
   const cerrarNav=()=>$('#app').querySelector('.shell').classList.remove('navopen');
@@ -1043,6 +1090,7 @@ function pintarReparto(){
     <div class="rep-col-h"><span>${titulo}</span><span class="rep-n">${arr.length}</span></div>
     ${arr.length?arr.map(p=>tarjetaPedidoRep(p,tipo,caja)).join(''):'<div class="empty">Nada aquí</div>'}</div>`;
   $('#view').innerHTML=`
+    <div id="gpsBanner"></div>
     <div class="kpis">
       <div class="kpi"><div class="lab">Por asignar</div><div class="val">${tab.porAsignar.length}</div></div>
       <div class="kpi"><div class="lab">En ruta</div><div class="val">${tab.enRuta.length}</div></div>
@@ -1065,6 +1113,8 @@ function pintarReparto(){
       ${col('En ruta',tab.enRuta,'en_ruta')}
       ${col('Entregados sin liquidar',tab.porLiquidar,'entregado')}
     </div>`;
+  pintarBannerGPS();
+  document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
   document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>{
     const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===b.dataset.liq);
     if(r)modalLiquidar(r,vReparto);
@@ -1092,6 +1142,7 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
+      ${tipo!=='entregado'?`<button class="btn" data-wa="${p.folio}" title="Mandar la liga de seguimiento por WhatsApp">Enviar liga</button>`:''}
       ${tipo==='entregado'?`<span class="rc-cash">${money(p.efectivo)} en efectivo</span><button class="btn" data-ticketrep="${p.folio}">Ticket</button>`:''}
     </div></div>`;
 }
@@ -1103,6 +1154,27 @@ function soltarDelPOS(folio){
 async function accionReparto(folio,accion,msg){
   try{await API.post(`/api/reparto/${folio}/${accion}`);toast(msg,{tipo:'ok'});vReparto();}
   catch(e){toast(e.message);}
+}
+// Manda al cliente la liga de seguimiento. El servidor ya la intenta enviar
+// solo si hay webhook de mensajería; esto es el respaldo manual y el reenvío.
+async function mandarSeguimiento(folio){
+  let s;
+  try{s=await API.get(`/api/pedidos/${folio}/seguimiento`);}catch(e){toast(e.message);return;}
+  if(!s.url||/^\/t\//.test(s.url)){
+    toast('Falta configurar PUBLIC_URL en el servidor');return;
+  }
+  const texto=`Hola ${s.nombre||''}, ${s.negocio||''} ya recibió tu pedido ${s.folio}. Sigue tu pedido en vivo aquí: ${s.url}`.replace(/\s+/g,' ').trim();
+  if(!s.telefono){
+    copiar(s.url);toast('Pedido sin teléfono — liga copiada');return;
+  }
+  // Los celulares mexicanos necesitan el 521 delante para que WhatsApp entregue.
+  const dig=String(s.telefono).replace(/\D/g,'');
+  const num=dig.length===10?'521'+dig:dig;
+  window.open(`https://wa.me/${num}?text=${encodeURIComponent(texto)}`,'_blank');
+}
+function copiar(t){
+  try{navigator.clipboard.writeText(t);}
+  catch(e){const i=document.createElement('textarea');i.value=t;document.body.appendChild(i);i.select();document.execCommand('copy');i.remove();}
 }
 function modalAsignar(folio){
   const reps=(app._rep&&app._rep.reps)||[];
