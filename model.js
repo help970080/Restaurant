@@ -27,6 +27,7 @@ function estadoInicial(meta = {}) {
     caja: { turnos: {} },
     conteos: [],
     liquidaciones: [],
+    clientes: {},
     secuencias: { pedido: {} },
   };
 }
@@ -156,6 +157,8 @@ const nuevoReparto = () => ({
   asignado: null, salida: null, entregado: null,
   liquidado: false, liquidacionId: null,
   intentos: 0, ultimoFallo: null,
+  calificacion: null,
+  destino: null,   // coords reales del domicilio, aprendidas al entregar
 });
 
 // Normaliza y valida la direccion de entrega. Lanza si faltan datos minimos.
@@ -322,10 +325,75 @@ function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = 
     entregado: r.entregado || null,
     etaMin,
     repartidor: repartidor ? { nombre: repartidor.nombre, telefono: repartidor.telefono || null } : null,
+    repartidorNombre: r.repartidorNombre || null,
+    calificacion: r.calificacion ? { estrellas: r.calificacion.estrellas } : null,
+    puedeCalificar: r.estado === 'entregado' && !r.calificacion,
     moto: ubicacion ? { lat: ubicacion.lat, lng: ubicacion.lng, ts: ubicacion.ts } : null,
     items: (p.lineas || []).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: (l.modificadores || []).map((m) => m.opcionNombre) })),
     total: p.total,
   };
+}
+
+// ---- Directorio de clientes -------------------------------------------------
+//  Se llena solo con cada pedido a domicilio. La llave es el telefono a 10
+//  digitos, que es como los identifica quien contesta el telefono.
+const llaveTel = (t) => String(t == null ? '' : t).replace(/\D/g, '').slice(-10);
+
+function upsertCliente(e, entrega, extra = {}) {
+  if (!e.clientes) e.clientes = {};
+  const k = llaveTel(entrega && entrega.telefono);
+  if (k.length !== 10) return null;
+  const prev = e.clientes[k] || { telefono: k, pedidos: 0, creado: new Date().toISOString(), lat: null, lng: null };
+  const c = Object.assign(prev, {
+    nombre: entrega.nombre || prev.nombre || '',
+    calle: entrega.calle || prev.calle || '',
+    numero: entrega.numero || prev.numero || '',
+    colonia: entrega.colonia || prev.colonia || '',
+    referencias: entrega.referencias != null && entrega.referencias !== '' ? entrega.referencias : (prev.referencias || ''),
+    actualizado: new Date().toISOString(),
+  });
+  c.direccion = `${c.calle} ${c.numero}, ${c.colonia}`.trim();
+  // Las coords solo se pisan cuando llega una nueva medida real
+  if (extra.lat != null && extra.lng != null) { c.lat = +extra.lat; c.lng = +extra.lng; c.ubicadoEn = new Date().toISOString(); }
+  if (extra.sumarPedido) { c.pedidos = (c.pedidos || 0) + 1; c.ultimoPedido = new Date().toISOString(); }
+  e.clientes[k] = c;
+  return c;
+}
+
+function buscarClientes(e, q, limite = 8) {
+  const t = String(q || '').trim().toLowerCase();
+  if (t.length < 3) return [];
+  const dig = t.replace(/\D/g, '');
+  return Object.values(e.clientes || {})
+    .filter((c) => (dig.length >= 3 && c.telefono.includes(dig))
+      || (c.nombre || '').toLowerCase().includes(t)
+      || (c.direccion || '').toLowerCase().includes(t))
+    .sort((a, b) => new Date(b.ultimoPedido || b.actualizado || 0) - new Date(a.ultimoPedido || a.actualizado || 0))
+    .slice(0, limite);
+}
+
+// Distancia en linea recta (km). No es la ruta, pero para "¿ya mero llega?"
+// alcanza y no cuesta una llamada a ningun servicio de mapas.
+function distanciaKm(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return null;
+  const R = 6371, rad = (x) => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return r2(2 * R * Math.asin(Math.sqrt(h)));
+}
+
+// ---- Calificacion del repartidor -------------------------------------------
+function calificarReparto(p, { estrellas, comentario = '' }) {
+  const n = Math.round(+estrellas);
+  if (!(n >= 1 && n <= 5)) { const x = new Error('La calificación va de 1 a 5'); x.status = 400; throw x; }
+  if (!p.reparto || p.reparto.estado !== 'entregado') { const x = new Error('El pedido aún no se entrega'); x.status = 409; throw x; }
+  p.reparto.calificacion = {
+    estrellas: n,
+    comentario: String(comentario || '').trim().slice(0, 300),
+    fecha: new Date().toISOString(),
+    repartidorId: p.reparto.repartidorId,
+  };
+  return p.reparto.calificacion;
 }
 
 // ---- Pago -------------------------------------------------------------------
@@ -417,6 +485,7 @@ module.exports = {
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
+  llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
 };
