@@ -847,13 +847,24 @@ app.post('/api/cocina/:folio/entregar', wrap(async (req, res) => {
 //  El efectivo NO entra al turno al entregar: entra cuando la moto liquida.
 // ---------------------------------------------------------------------------
 const repartoDe = (p) => (p.reparto || (p.reparto = M.nuevoReparto()));
+// El usuario con el que se entra al sistema y la ficha de Personal son dos
+// registros distintos; se ligan con empleado.username. Sin esa liga, un
+// repartidor puede entrar pero el sistema no sabe quién es.
+function empleadoDeCtx(e, c) {
+  if (!c || !c.username) return null;
+  return Object.values(e.empleados || {}).find((x) => x.username === c.username) || null;
+}
+const esRolRepartidor = (c) => c && c.rol === 'repartidor';
 
 // Catálogo de repartidores (empleados activos con puesto de repartidor) + su carga
 app.get('/api/reparto/repartidores', wrap(async (req, res) => {
   const e = await readState();
+  const c = ctx();
   const { sucursalId } = req.query;
   const peds = Object.values(e.pedidos);
-  const out = M.repartidoresDe(e, sucursalId).map((emp) => {
+  const yo = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
+  const lista = yo ? M.repartidoresDe(e, sucursalId).filter((x) => x.id === yo.id) : M.repartidoresDe(e, sucursalId);
+  const out = lista.map((emp) => {
     const suyos = peds.filter((p) => p.reparto && p.reparto.repartidorId === emp.id);
     const ruta = suyos.filter(M.enRuta);
     const pend = suyos.filter(M.porLiquidar);
@@ -862,6 +873,8 @@ app.get('/api/reparto/repartidores', wrap(async (req, res) => {
     return {
       id: emp.id, nombre: emp.nombre, puesto: emp.puesto, telefono: emp.telefono,
       sucursalId: emp.sucursalId,
+      // Sin usuario ligado no puede entrar al sistema ni compartir su GPS
+      username: emp.username || null,
       ubicacion: M.ubicacionViva(e, emp.id),
       estrellas: prom, calificaciones: califs.length,
       enRuta: ruta.length, foliosEnRuta: ruta.map((p) => p.folio),
@@ -875,9 +888,13 @@ app.get('/api/reparto/repartidores', wrap(async (req, res) => {
 // Tablero de despacho
 app.get('/api/reparto', wrap(async (req, res) => {
   const e = await readState();
+  const c = ctx();
   const { sucursalId } = req.query;
-  const dom = Object.values(e.pedidos)
+  const yo = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
+  if (esRolRepartidor(c) && !yo) throw bad('Tu usuario no está ligado a una ficha de Personal. Pide que te la creen con tu usuario.', 409);
+  let dom = Object.values(e.pedidos)
     .filter((p) => M.esDomicilio(p) && p.estado !== 'cancelado' && (!sucursalId || p.sucursalId === sucursalId));
+  if (yo) dom = dom.filter((p) => p.reparto && p.reparto.repartidorId === yo.id);
   const prom = M.promedioEnRuta(e, sucursalId);
   const vista = (p) => {
     const r = p.reparto || {};
@@ -906,7 +923,9 @@ app.get('/api/reparto', wrap(async (req, res) => {
   res.json({
     promedioMin: prom,
     sucursal: sucCoord,
-    porAsignar: abiertos.filter((p) => !p.reparto || p.reparto.estado === 'por_asignar').map(vista),
+    soyRepartidor: !!yo,
+    // La cola por asignar es decisión de caja; el repartidor no la ve.
+    porAsignar: yo ? [] : abiertos.filter((p) => !p.reparto || p.reparto.estado === 'por_asignar').map(vista),
     asignados:  abiertos.filter((p) => p.reparto && p.reparto.estado === 'asignado').map(vista),
     enRuta:     dom.filter(M.enRuta).map(vista),
     porLiquidar: dom.filter(M.porLiquidar).map(vista),
@@ -1012,7 +1031,7 @@ app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
 }));
 
 // Directorio de clientes: al teclear el teléfono, el POS llena lo demás.
-app.get('/api/clientes', wrap(async (req, res) => {
+app.get('/api/clientes', puedeCaja, wrap(async (req, res) => {
   const e = await readState();
   const { q = '', telefono = '' } = req.query;
   if (telefono) {
@@ -1081,7 +1100,7 @@ app.post('/api/reparto/liquidar', puedeCaja, wrap(async (req, res) => {
   res.json(out);
 }));
 
-app.get('/api/reparto/liquidaciones', wrap(async (req, res) => {
+app.get('/api/reparto/liquidaciones', puedeCaja, wrap(async (req, res) => {
   const e = await readState();
   const { sucursalId, repartidorId, limit = 50 } = req.query;
   let arr = (e.liquidaciones || []).slice();
