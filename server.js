@@ -17,6 +17,26 @@ app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// PUBLIC_URL es la misma que ya usa pagos_qr para Mercado Pago.
+const PUBLIC_BASE = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+const urlSeguimiento = (row, token) => `${PUBLIC_BASE}/t/${row}/${token}`;
+
+// Aviso automatico al cliente. Si SEGUIMIENTO_WEBHOOK_URL apunta a un servicio
+// de mensajeria (el bot de WhatsApp, un proveedor, lo que sea), se le manda el
+// link ahi. Sin la variable no truena: caja lo envia con el boton de la vista
+// Reparto. Nunca bloquea la respuesta del pedido.
+function avisarCliente({ telefono, nombre, negocio, folio, url }) {
+  const hook = process.env.SEGUIMIENTO_WEBHOOK_URL;
+  if (!hook || !telefono || !url) return;
+  const mensaje = `Hola ${nombre || ''}, ${negocio || 'tu pedido'} ya recibió tu orden ${folio}. Sigue tu pedido en vivo aquí: ${url}`.trim();
+  fetch(hook, {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' },
+      process.env.SEGUIMIENTO_WEBHOOK_TOKEN ? { Authorization: 'Bearer ' + process.env.SEGUIMIENTO_WEBHOOK_TOKEN } : {}),
+    body: JSON.stringify({ telefono, mensaje, url, folio }),
+  }).catch((err) => console.error('[seguimiento] no se pudo avisar:', err && err.message));
+}
+
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
   if (!err.status || err.status >= 500) console.error(err);
   res.status(err.status || 500).json({ error: err.message || 'Error interno' });
@@ -634,9 +654,11 @@ app.get('/api/caja/cortes', wrap(async (req, res) => {
 app.post('/api/pedidos', wrap(async (req, res) => {
   const { sucursalId, tipoServicio = 'mostrador', mesaId = null, cliente = null, canalId = 'local' } = req.body || {};
   if (!sucursalId) throw bad('Falta sucursalId');
+  let negocio = '';
   const ped = await withState((e, c) => {
     const suc = e.sucursales[sucursalId];
     if (!suc) throw bad('Sucursal inexistente');
+    negocio = (e.meta && e.meta.nombre) || '';
     if (tipoServicio === 'domicilio') {
       // El reparto es propio: sin direccion y telefono no sale la moto.
       const entrega = M.normalizarEntrega(cliente);
@@ -654,6 +676,14 @@ app.post('/api/pedidos', wrap(async (req, res) => {
     }
     return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username, canalId });
   });
+  if (M.esDomicilio(ped) && ped.seguimiento) {
+    avisarCliente({
+      telefono: (ped.cliente && ped.cliente.telefono) || null,
+      nombre: (ped.cliente && ped.cliente.nombre) || '',
+      negocio, folio: ped.folio,
+      url: urlSeguimiento(ctx().row, ped.seguimiento.token),
+    });
+  }
   res.json(ped);
 }));
 
@@ -922,6 +952,38 @@ app.post('/api/reparto/:folio/fallido', puedeCaja, wrap(async (req, res) => {
     return M.marcarFallido(ped, motivo);
   });
   res.json(p);
+}));
+
+// La moto reporta su posicion. Solo se guarda la ultima; no hay recorrido.
+app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
+  const { lat, lng, precision = null, empleadoId = null } = req.body || {};
+  const out = await withState((e, c) => {
+    // Un repartidor solo puede reportar la suya; caja/gerente puede reportar por otro.
+    let emp = null;
+    if (empleadoId && ['admin', 'gerente', 'cajero'].includes(c.rol)) emp = (e.empleados || {})[empleadoId];
+    else emp = Object.values(e.empleados || {}).find((x) => x.username && x.username === c.username);
+    if (!emp) throw bad('No se encontró tu ficha de empleado. Pide que te den de alta en Personal con tu usuario.', 404);
+    if (!M.esRepartidor(emp)) throw bad('Tu puesto no es de repartidor', 403);
+    const u = M.guardarUbicacion(e, emp.id, { lat, lng, precision });
+    const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.reparto.repartidorId === emp.id).length;
+    return { ok: true, ts: u.ts, enRuta };
+  });
+  res.json(out);
+}));
+
+// Liga de seguimiento para mandarle al cliente. Genera el token si el pedido es
+// anterior a esta versión.
+app.get('/api/pedidos/:folio/seguimiento', wrap(async (req, res) => {
+  const c = ctx();
+  const out = await withState((e) => {
+    const p = e.pedidos[req.params.folio];
+    if (!p) throw bad('Pedido inexistente', 404);
+    if (!M.esDomicilio(p)) throw bad('El pedido no es a domicilio');
+    if (!p.seguimiento || !p.seguimiento.token) p.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
+    return { folio: p.folio, token: p.seguimiento.token, telefono: (p.cliente && p.cliente.telefono) || null, nombre: (p.cliente && p.cliente.nombre) || '', negocio: (e.meta && e.meta.nombre) || '' };
+  });
+  out.url = urlSeguimiento(c.row, out.token);
+  res.json(out);
 }));
 
 // Liquidación: la moto entrega el efectivo y esas ventas entran al turno de caja.
@@ -1447,6 +1509,41 @@ app.get('/qr/:row/:suc/menu', (req, res) => {
 // "pide por QR y pasa a caja": ahora el pago es el filtro y, al confirmarse,
 // el pedido entra solo a las pantallas de produccion.
 require('./pagos_qr')(app, { db, M, readState, withState, runPublic, ctx });
+
+// ===========================================================================
+//  SEGUIMIENTO PÚBLICO DEL PEDIDO A DOMICILIO — /t/:row/:token
+//  Sin login. El token es aleatorio (el folio es secuencial y se adivinaría).
+//  Solo devuelve lo del propio pedido: nunca dirección ni teléfono del cliente.
+// ===========================================================================
+const SEGUIMIENTO_PAGE = path.join(__dirname, 'public', 'seguimiento.html');
+app.get('/t/:row/:token', (req, res) => res.sendFile(SEGUIMIENTO_PAGE));
+
+app.get('/t/:row/:token/estado', (req, res) => {
+  runPublic(Number(req.params.row), async () => {
+    try {
+      const e = await readState();
+      if (!e) return res.status(404).json({ error: 'No disponible' });
+      const tok = String(req.params.token || '');
+      const p = tok && Object.values(e.pedidos).find((x) => x.seguimiento && x.seguimiento.token === tok);
+      if (!p) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+      const r = p.reparto || {};
+      const emp = r.repartidorId ? (e.empleados || {})[r.repartidorId] : null;
+      // El repartidor y su ubicación solo se muestran cuando ya va en camino.
+      const enCamino = r.estado === 'en_ruta';
+      const ubi = enCamino && r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
+      let etaMin = null;
+      if (enCamino) {
+        const prom = M.promedioEnRuta(e, p.sucursalId);
+        if (prom != null && r.salida) etaMin = Math.max(0, prom - Math.round((Date.now() - new Date(r.salida).getTime()) / 60000));
+      }
+      res.json(M.vistaSeguimiento(e, p, { repartidor: enCamino ? emp : null, ubicacion: ubi, etaMin }));
+    } catch (err) {
+      console.error('[seguimiento]', err && err.message);
+      res.status(500).json({ error: 'Error al consultar el pedido' });
+    }
+  });
+});
 
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
