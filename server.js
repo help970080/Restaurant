@@ -427,11 +427,18 @@ app.get('/api/asistencia', soloAdmin, wrap(async (req, res) => {
 }));
 
 // ---------------------------------------------------------------------------
-//  CANALES DE VENTA / DELIVERY  (DiDi Food, Rappi, Uber Eats, propio…)
+//  CANALES DE VENTA (mostrador, WhatsApp/telefono, QR). Reparto 100% propio:
+//  no hay plataformas externas ni comisiones de terceros en este modelo.
 // ---------------------------------------------------------------------------
 async function ensureCanales() {
   return withState((e) => {
     if (!e.config.canales || !Object.keys(e.config.canales).length) e.config.canales = M.canalesDefault();
+    // Migracion: este restaurante reparte con motos propias. Se retiran los
+    // canales de plataformas externas, pero NO se tocan los pedidos historicos
+    // que ya los referencian (el reporte los resuelve por canalId).
+    for (const id of ['didi', 'rappi', 'uber']) delete e.config.canales[id];
+    for (const [id, ch] of Object.entries(e.config.canales)) if (ch && ch.esApp) delete e.config.canales[id];
+    for (const [id, ch] of Object.entries(M.canalesDefault())) if (!e.config.canales[id]) e.config.canales[id] = ch;
     return e.config.canales;
   });
 }
@@ -442,9 +449,10 @@ app.get('/api/canales', wrap(async (req, res) => {
 app.post('/api/canales', soloAdmin, wrap(async (req, res) => {
   const { nombre, comisionPct = 0 } = req.body || {};
   if (!nombre) throw bad('Falta nombre');
+  if (+comisionPct > 0) throw bad('Este restaurante opera con reparto propio: no se dan de alta canales con comisión');
   const ch = await withState((e) => {
     if (!e.config.canales) e.config.canales = M.canalesDefault();
-    const c = M.crearCanal({ nombre, comisionPct });
+    const c = M.crearCanal({ nombre, comisionPct: 0, esApp: false });
     e.config.canales[c.id] = c; return c;
   });
   res.json(ch);
@@ -455,7 +463,10 @@ app.patch('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
     const c = (e.config.canales || {})[req.params.id];
     if (!c) throw bad('Canal inexistente', 404);
     if (patch.nombre != null) c.nombre = patch.nombre;
-    if (patch.comisionPct != null) c.comisionPct = M.r2(+patch.comisionPct);
+    if (patch.comisionPct != null) {
+      if (+patch.comisionPct > 0) throw bad('Reparto propio: la comisión de canal debe ser 0');
+      c.comisionPct = 0;
+    }
     if (patch.activo != null) c.activo = !!patch.activo;
     return c;
   });
@@ -465,30 +476,6 @@ app.delete('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
   if (req.params.id === 'local') throw bad('No se puede eliminar el canal local');
   await withState((e) => { if (e.config.canales) delete e.config.canales[req.params.id]; });
   res.json({ ok: true });
-}));
-
-// Webhook para inyectar pedidos desde una plataforma (requiere convenio de socio).
-// Protegido con el token de integración del restaurante (config.integracionToken).
-app.post('/api/integraciones/:canal/webhook', soloAdmin, wrap(async (req, res) => {
-  // Nota: en producción este endpoint se expone con un token por-restaurante y lo llama
-  // la plataforma (Uber/Rappi/DiDi) tras firmar convenio. Aquí crea un pedido normalizado.
-  const { sucursalId, items = [], cliente = null, externoId = null } = req.body || {};
-  if (!sucursalId || !items.length) throw bad('Falta sucursalId o items');
-  const canalId = req.params.canal;
-  const ped = await withState((e, c) => {
-    const suc = e.sucursales[sucursalId];
-    if (!suc) throw bad('Sucursal inexistente');
-    const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio: 'domicilio', cliente, usuario: 'integracion', canalId });
-    p.externoId = externoId;
-    for (const it of items) {
-      const prod = e.menu.productos[it.productoId];
-      if (prod) p.lineas.push(M.crearLinea(prod, e, { cantidad: it.cantidad || 1, modsElegidos: it.modsElegidos || [], notas: it.notas || '' }));
-    }
-    M.recalcularPedido(p);
-    M.mandarComanda(p); // entra directo a cocina
-    return p;
-  });
-  res.json({ ok: true, folio: ped.folio });
 }));
 
 // ---------------------------------------------------------------------------
@@ -571,13 +558,24 @@ app.post('/api/caja/movimiento', puedeCaja, wrap(async (req, res) => {
   res.json(t);
 }));
 app.post('/api/caja/cerrar', puedeCaja, wrap(async (req, res) => {
-  const { turnoId, conteoEfectivo } = req.body || {};
+  const { turnoId, conteoEfectivo, forzar = false } = req.body || {};
   if (turnoId == null || conteoEfectivo == null) throw bad('Falta turnoId o conteoEfectivo');
   const t = await withState((e, c) => {
     const turno = e.caja.turnos[turnoId];
     if (!turno) throw bad('Turno inexistente', 404);
     if (turno.estado === 'cerrado') throw bad('El turno ya está cerrado', 409);
-    return M.cerrarTurno(turno, { usuario: c.username, conteoEfectivo });
+    // Reparto propio: si una moto no ha liquidado, ese efectivo no esta en el
+    // cajon y el corte saldria falseado. Se bloquea salvo cierre forzado.
+    const pend = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && p.sucursalId === turno.sucursalId);
+    if (pend.length && !forzar) {
+      const monto = M.r2(pend.reduce((s2, p) => s2 + M.efectivoDePedido(p), 0));
+      const quienes = [...new Set(pend.map((p) => p.reparto.repartidorNombre || '?'))].join(', ');
+      throw bad(`Hay ${pend.length} entrega(s) sin liquidar por $${monto} (${quienes}). Liquida en /api/reparto/liquidar o cierra con forzar:true`, 409);
+    }
+    const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.sucursalId === turno.sucursalId);
+    const out = M.cerrarTurno(turno, { usuario: c.username, conteoEfectivo });
+    out.avisosReparto = { sinLiquidar: pend.length, enRuta: enRuta.length, forzado: !!forzar };
+    return out;
   });
   res.json(t);
 }));
@@ -599,6 +597,12 @@ app.post('/api/pedidos', wrap(async (req, res) => {
   const ped = await withState((e, c) => {
     const suc = e.sucursales[sucursalId];
     if (!suc) throw bad('Sucursal inexistente');
+    if (tipoServicio === 'domicilio') {
+      // El reparto es propio: sin direccion y telefono no sale la moto.
+      const entrega = M.normalizarEntrega(cliente);
+      const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente: entrega, usuario: c.username, canalId });
+      return p;
+    }
     if (tipoServicio === 'mesa') {
       const mesa = e.mesas[mesaId];
       if (!mesa) throw bad('Mesa inexistente');
@@ -649,7 +653,7 @@ app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
     if (costoEnvio != null) p.costoEnvio = costoEnvio;
     if (propina != null) p.propina = propina;
     if (descuento !== undefined) p.descuento = descuento;
-    if (cliente !== undefined) p.cliente = cliente;
+    if (cliente !== undefined) p.cliente = p.tipoServicio === 'domicilio' ? M.normalizarEntrega(cliente) : cliente;
     if (canalId !== undefined) p.canalId = canalId;
     return M.recalcularPedido(p);
   });
@@ -676,6 +680,10 @@ app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
     if (!p) throw bad('Pedido inexistente', 404);
     if (p.estado === 'cobrado') throw bad('El pedido ya está cobrado', 409);
     if (!p.lineas.length) throw bad('El pedido no tiene productos');
+    // Domicilio: si ya se asigno moto, el cobro va por POST /api/reparto/:folio/entregado
+    // (el efectivo lo trae el repartidor y entra al turno hasta que liquida).
+    if (M.esDomicilio(p) && p.reparto && p.reparto.estado !== 'por_asignar')
+      throw bad('Pedido en reparto: cóbralo con /api/reparto/' + folio + '/entregado', 409);
     M.recalcularPedido(p);
     const sumPagos = M.r2(pagos.reduce((s, x) => s + x.monto, 0));
     if (sumPagos < p.total) throw bad(`El pago (${sumPagos}) no cubre el total (${p.total})`);
@@ -690,6 +698,9 @@ app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
       e.mesas[p.mesaId].estado = 'libre';
       e.mesas[p.mesaId].pedidoFolio = null;
     }
+    // Domicilio pagado por adelantado en caja: el dinero ya esta en el cajon,
+    // el repartidor no carga efectivo de este folio.
+    if (M.esDomicilio(p) && p.reparto) { p.reparto.liquidado = true; p.reparto.prepagado = true; }
     return p;
   });
   res.json(out);
@@ -746,6 +757,223 @@ app.post('/api/cocina/:folio/entregar', wrap(async (req, res) => {
     return { ok: true };
   });
   res.json(out);
+}));
+
+// ---------------------------------------------------------------------------
+//  REPARTO PROPIO (motos de la casa)
+//  Flujo: crear pedido domicilio -> comanda -> asignar moto -> salida ->
+//         entregado (el repartidor cobra en la puerta) -> liquidar en caja.
+//  El efectivo NO entra al turno al entregar: entra cuando la moto liquida.
+// ---------------------------------------------------------------------------
+const repartoDe = (p) => (p.reparto || (p.reparto = M.nuevoReparto()));
+
+// Catálogo de repartidores (empleados activos con puesto de repartidor) + su carga
+app.get('/api/reparto/repartidores', wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId } = req.query;
+  const peds = Object.values(e.pedidos);
+  const out = M.repartidoresDe(e, sucursalId).map((emp) => {
+    const suyos = peds.filter((p) => p.reparto && p.reparto.repartidorId === emp.id);
+    const ruta = suyos.filter(M.enRuta);
+    const pend = suyos.filter(M.porLiquidar);
+    return {
+      id: emp.id, nombre: emp.nombre, puesto: emp.puesto, telefono: emp.telefono,
+      sucursalId: emp.sucursalId,
+      enRuta: ruta.length, foliosEnRuta: ruta.map((p) => p.folio),
+      porLiquidar: pend.length,
+      efectivoPendiente: M.r2(pend.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
+    };
+  }).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  res.json(out);
+}));
+
+// Tablero de despacho
+app.get('/api/reparto', wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId } = req.query;
+  const dom = Object.values(e.pedidos)
+    .filter((p) => M.esDomicilio(p) && p.estado !== 'cancelado' && (!sucursalId || p.sucursalId === sucursalId));
+  const vista = (p) => ({
+    folio: p.folio, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
+    creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
+    items: p.lineas.reduce((t, l) => t + l.cantidad, 0),
+    cliente: p.cliente || null,
+    reparto: p.reparto || null,
+    efectivo: M.efectivoDePedido(p),
+    tiempos: M.tiemposReparto(p),
+  });
+  const abiertos = dom.filter((p) => p.estado === 'abierto');
+  res.json({
+    porAsignar: abiertos.filter((p) => !p.reparto || p.reparto.estado === 'por_asignar').map(vista),
+    asignados:  abiertos.filter((p) => p.reparto && p.reparto.estado === 'asignado').map(vista),
+    enRuta:     dom.filter(M.enRuta).map(vista),
+    porLiquidar: dom.filter(M.porLiquidar).map(vista),
+  });
+}));
+
+// Asignar moto. De paso dispara a cocina lo que siga pendiente.
+app.post('/api/reparto/:folio/asignar', puedeCaja, wrap(async (req, res) => {
+  const { repartidorId } = req.body || {};
+  if (!repartidorId) throw bad('Falta repartidorId');
+  const p = await withState((e) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
+    if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
+    repartoDe(ped);
+    M.asignarReparto(e, ped, repartidorId);
+    M.mandarComanda(ped);
+    return ped;
+  });
+  res.json(p);
+}));
+
+// La moto sale del local
+app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
+  const p = await withState((e) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
+    if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
+    M.recalcularPedido(ped);
+    return M.marcarSalida(e, ped);
+  });
+  res.json(p);
+}));
+
+// Entregado: el repartidor cobró en la puerta. Cierra el pedido, descuenta
+// inventario y deja el efectivo marcado como pendiente de liquidar.
+app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
+  const { pagos = [], recibido = 0, propina = null } = req.body || {};
+  if (!pagos.length) throw bad('Faltan pagos');
+  for (const x of pagos) {
+    if (!x || !x.metodo) throw bad('Cada pago necesita metodo');
+    if (!(+x.monto > 0)) throw bad('Monto de pago inválido');
+  }
+  const p = await withState((e, c) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
+    if (ped.estado === 'cobrado') throw bad('El pedido ya está cobrado', 409);
+    if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
+    if (!ped.lineas.length) throw bad('El pedido no tiene productos');
+    const r = repartoDe(ped);
+    if (!r.repartidorId) throw bad('El pedido no tiene repartidor asignado', 409);
+    M.recalcularPedido(ped);
+    const sumPagos = M.r2(pagos.reduce((t, x) => t + (+x.monto), 0));
+    if (sumPagos < ped.total) throw bad(`El pago (${sumPagos}) no cubre el total (${ped.total})`);
+    M.mandarComanda(ped);
+    M.registrarPago(ped, { pagos, recibido, propina });
+    M.descontarInventario(e, ped);
+    M.marcarEntregado(ped);
+    ped.entregadoPor = (c || {}).username || null;
+    return ped;
+  });
+  res.json(p);
+}));
+
+// Entrega fallida: vuelve a la cola de despacho
+app.post('/api/reparto/:folio/fallido', puedeCaja, wrap(async (req, res) => {
+  const { motivo = '' } = req.body || {};
+  const p = await withState((e) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
+    return M.marcarFallido(ped, motivo);
+  });
+  res.json(p);
+}));
+
+// Liquidación: la moto entrega el efectivo y esas ventas entran al turno de caja.
+app.post('/api/reparto/liquidar', puedeCaja, wrap(async (req, res) => {
+  const { repartidorId, sucursalId, conteoEfectivo = null } = req.body || {};
+  if (!repartidorId) throw bad('Falta repartidorId');
+  if (!sucursalId) throw bad('Falta sucursalId');
+  const out = await withState((e, c) => {
+    if (!e.liquidaciones) e.liquidaciones = [];
+    const emp = (e.empleados || {})[repartidorId];
+    if (!emp) throw bad('Repartidor inexistente', 404);
+    const turno = M.turnoAbierto(e, sucursalId);
+    if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
+    const peds = Object.values(e.pedidos)
+      .filter((p) => M.porLiquidar(p) && p.sucursalId === sucursalId && p.reparto.repartidorId === repartidorId)
+      .sort((a, b) => new Date(a.reparto.entregado) - new Date(b.reparto.entregado));
+    if (!peds.length) throw bad('Ese repartidor no tiene entregas pendientes de liquidar', 409);
+    const efectivoEsperado = M.r2(peds.reduce((t, p) => t + M.efectivoDePedido(p), 0));
+    const liq = M.crearLiquidacion({
+      repartidorId, repartidorNombre: emp.nombre, sucursalId, turnoId: turno.id,
+      folios: peds.map((p) => p.folio), efectivoEsperado, conteoEfectivo,
+      usuario: (c || {}).username || null,
+    });
+    for (const p of peds) {
+      p.turnoId = turno.id;
+      M.registrarVentaEnTurno(turno, p);
+      p.reparto.liquidado = true;
+      p.reparto.liquidacionId = liq.id;
+      p.actualizado = new Date().toISOString();
+    }
+    // Un faltante/sobrante de la moto se registra en caja para que el corte cuadre.
+    if (liq.diferencia !== 0) {
+      M.registrarMovimiento(turno, {
+        tipo: liq.diferencia < 0 ? 'salida' : 'entrada',
+        monto: Math.abs(liq.diferencia),
+        motivo: `${liq.diferencia < 0 ? 'Faltante' : 'Sobrante'} liquidación ${emp.nombre} (${liq.id})`,
+        usuario: (c || {}).username || null,
+      });
+    }
+    e.liquidaciones.unshift(liq);
+    if (e.liquidaciones.length > 2000) e.liquidaciones = e.liquidaciones.slice(0, 2000);
+    return liq;
+  });
+  res.json(out);
+}));
+
+app.get('/api/reparto/liquidaciones', wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId, repartidorId, limit = 50 } = req.query;
+  let arr = (e.liquidaciones || []).slice();
+  if (sucursalId) arr = arr.filter((l) => l.sucursalId === sucursalId);
+  if (repartidorId) arr = arr.filter((l) => l.repartidorId === repartidorId);
+  res.json(arr.slice(0, +limit));
+}));
+
+// Desempeño de reparto en un rango
+app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId, desde, hasta } = req.query;
+  const dentro = (iso) => {
+    if (!iso) return false;
+    const d = iso.slice(0, 10);
+    return (!desde || d >= desde) && (!hasta || d <= hasta);
+  };
+  const peds = Object.values(e.pedidos).filter((p) =>
+    M.esDomicilio(p) && p.reparto && p.reparto.estado === 'entregado' &&
+    (!sucursalId || p.sucursalId === sucursalId) && dentro(p.reparto.entregado));
+  const porRep = {};
+  let sumRuta = 0, nRuta = 0;
+  for (const p of peds) {
+    const r = p.reparto;
+    const k = r.repartidorId || 'sin_asignar';
+    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, venta: 0, minutos: 0, conTiempo: 0, fallidos: 0 };
+    porRep[k].entregas++;
+    porRep[k].venta = M.r2(porRep[k].venta + p.total);
+    porRep[k].fallidos += r.intentos || 0;
+    const t = M.tiemposReparto(p);
+    if (t.enRuta != null) { porRep[k].minutos = M.r2(porRep[k].minutos + t.enRuta); porRep[k].conTiempo++; sumRuta += t.enRuta; nRuta++; }
+  }
+  const repartidores = Object.values(porRep).map((x) => ({
+    ...x, minutosPromedio: x.conTiempo ? M.r2(x.minutos / x.conTiempo) : null,
+    ticketPromedio: x.entregas ? M.r2(x.venta / x.entregas) : 0,
+  })).sort((a, b) => b.entregas - a.entregas);
+  const pendientes = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && (!sucursalId || p.sucursalId === sucursalId));
+  res.json({
+    entregas: peds.length,
+    venta: M.r2(peds.reduce((t, p) => t + p.total, 0)),
+    minutosPromedioEnRuta: nRuta ? M.r2(sumRuta / nRuta) : null,
+    repartidores,
+    efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
+    foliosSinLiquidar: pendientes.map((p) => p.folio),
+  });
 }));
 
 // ---------------------------------------------------------------------------
@@ -932,6 +1160,7 @@ app.post('/api/pedidos/:folio/cancelar', puedeCaja, wrap(async (req, res) => {
     if (!p) throw bad('Pedido inexistente', 404);
     if (p.estado === 'cobrado') throw bad('No se puede cancelar un pedido ya cobrado', 409);
     if (p.estado === 'cancelado') return p;
+    if (M.enRuta(p)) throw bad('El pedido ya salió con el repartidor: márcalo fallido en /api/reparto/' + p.folio + '/fallido antes de cancelar', 409);
     p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (c || {}).username || null; p.motivoCancelacion = motivo;
     if (p.tipoServicio === 'mesa' && p.mesaId && e.mesas[p.mesaId]) { e.mesas[p.mesaId].estado = 'libre'; e.mesas[p.mesaId].pedidoFolio = null; }
     if (p.lineas.length) registrarCancelacion(e, p, p.tipoServicio === 'domicilio' ? 'Domicilio' : 'Mostrador', motivo, c);
@@ -1114,7 +1343,10 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     const comisionConIVA = M.r2(comision * 1.16); // 16% IVA sobre la comisión
     return { canalId: cid, nombre: ch.nombre, comisionPct: ch.comisionPct, ventas: d.ventas, pedidos: d.pedidos, comision: comisionConIVA, neto: M.r2(d.ventas - comisionConIVA) };
   }).sort((a, b) => b.ventas - a.ventas);
+  // Reparto propio: no hay comision de plataformas. comisionTotal queda en 0
+  // salvo pedidos historicos previos a la migracion, que se conservan tal cual.
   const comisionTotal = M.r2(canalesOut.reduce((s, c) => s + c.comision, 0));
+  const envios = M.r2(peds.reduce((s, p) => s + (p.costoEnvio || 0), 0));
   const nominaBase = M.r2(Object.values(e.empleados || {}).filter((x) => x.activo).reduce((s, x) => s + x.salarioBase, 0));
   const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
     nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
@@ -1127,6 +1359,9 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     descuentos, pedidos: peds.length,
     ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
     comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
+    // 'envios' se separa para que no infle el margen: no es venta de producto.
+    envios, ingresosProducto: M.r2(ingresos - envios),
+    foodCostPctProducto: (ingresos - envios) > 0 ? M.r2(cogs / (ingresos - envios) * 100) : 0,
     nominaBase,
     manoDeObraPct: ingresos ? M.r2(nominaBase / ingresos * 100) : 0,
     primeCost: M.r2(cogs + nominaBase),
