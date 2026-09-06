@@ -416,6 +416,12 @@ function esAdmin(){return app.rol==='admin'||app.rol==='gerente';}
 // Un domicilio ya asignado sale de las listas de caja: se cobra en la vista Reparto.
 function enReparto(p){return p&&p.tipoServicio==='domicilio'&&p.reparto&&p.reparto.estado!=='por_asignar';}
 function minsDesde(iso){if(!iso)return null;return Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));}
+// Quien cobro fisicamente el pedido: en domicilio es el motorista, no la caja.
+function quienCobro(p){
+  if(p.reparto&&p.reparto.repartidorNombre)return '🛵 '+p.reparto.repartidorNombre+(p.reparto.liquidado?'':' · sin liquidar');
+  if(p.origen==='qr')return '🔲 Mercado Pago';
+  return p.entregadoPor||p.creadoPor||'—';
+}
 function puedeCobrar(){return ['admin','gerente','cajero'].includes(app.rol);}
 function rolViews(){return NAV_ROLES[app.rol]||['pos','asistencia'];}
 function puedeVer(v){return rolViews().includes(v);}
@@ -624,17 +630,36 @@ async function vResumen(){
       <tr><td>Ventas transferencia</td><td class="num">${money(res.porPago.transferencia)}</td></tr>
       <tr><td><b>Esperado en cajón</b></td><td class="num"><b>${money(app.turno.fondoInicial+res.porPago.efectivo)}</b></td></tr></table>`:'<div class="empty">Turno cerrado.</div>'}</div>
     <div class="panel"><h3>Mezcla de pago</h3>${['efectivo','tarjeta','transferencia'].map(k=>{const t=res.porPago.efectivo+res.porPago.tarjeta+res.porPago.transferencia||1;return `<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porPago[k]/t*100}%;background:${k==='efectivo'?'var(--green)':k==='tarjeta'?'var(--blue)':'var(--accent)'}"></div></div><div class="bv">${money(res.porPago[k])}</div></div>`;}).join('')}</div></div>
+  <div class="panel" style="margin-top:16px" id="panelReparto"><h3>Reparto <span class="small">cargando…</span></h3></div>
   <div class="panel" style="margin-top:16px"><h3>Últimas ventas <span class="small">toca 🖨 para reimprimir el ticket</span></h3>
     <div id="ultVentas"><div class="empty">Cargando…</div></div></div>`;
+  cargarResumenReparto();
   cargarUltimasVentas();
+}
+async function cargarResumenReparto(){
+  const cont=$('#panelReparto');if(!cont)return;
+  const hoy=new Date().toISOString().slice(0,10);
+  let r;try{r=await API.get(`/api/reparto/reporte?sucursalId=${app.sucursalId}&desde=${hoy}&hasta=${hoy}`);}
+  catch{cont.style.display='none';return;}
+  if(!r.entregas&&!r.foliosSinLiquidar.length){cont.style.display='none';return;}
+  cont.innerHTML=`<h3>Reparto <span class="small">hoy</span></h3>
+    <div class="kpis" style="margin-bottom:12px">
+      <div class="kpi"><div class="lab">Entregas</div><div class="val">${r.entregas}</div></div>
+      <div class="kpi"><div class="lab">Venta a domicilio</div><div class="val">${money(r.venta)}</div></div>
+      <div class="kpi"><div class="lab">Minutos en ruta</div><div class="val">${r.minutosPromedioEnRuta!=null?r.minutosPromedioEnRuta:'—'}</div><div class="sub">promedio</div></div>
+      <div class="kpi"><div class="lab">Sin liquidar</div><div class="val" style="color:${r.efectivoSinLiquidar>0?'var(--accent-ink)':'var(--green)'}">${money(r.efectivoSinLiquidar)}</div><div class="sub">${r.foliosSinLiquidar.length} pedido(s)</div></div>
+    </div>
+    ${r.repartidores.length?`<table><thead><tr><th>Repartidor</th><th class="num">Entregas</th><th class="num">Venta</th><th class="num">Ticket prom.</th><th class="num">Min. prom.</th><th class="num">Fallidos</th></tr></thead><tbody>
+      ${r.repartidores.map(x=>`<tr><td style="font-weight:600">${x.nombre}</td><td class="num">${x.entregas}</td><td class="num">${money(x.venta)}</td><td class="num">${money(x.ticketPromedio)}</td><td class="num">${x.minutosPromedio!=null?x.minutosPromedio:'—'}</td><td class="num" style="color:${x.fallidos?'var(--red)':'inherit'}">${x.fallidos}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">Sin entregas hoy.</div>'}`;
 }
 async function cargarUltimasVentas(){
   let ventas=[];try{ventas=await API.get('/api/ventas/recientes?limit=15&sucursalId='+app.sucursalId);}catch{}
   app._ventas=ventas;
   const cont=$('#ultVentas');if(!cont)return;
   if(!ventas.length){cont.innerHTML='<div class="empty">Aún no hay ventas cobradas hoy.</div>';return;}
-  cont.innerHTML=`<table><thead><tr><th>Folio</th><th>Hora</th><th>Servicio</th><th class="num">Total</th><th></th></tr></thead><tbody>
-    ${ventas.map(p=>`<tr><td class="mono">${p.folio}</td><td>${new Date(p.actualizado||p.creado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-transform:capitalize">${p.tipoServicio}</td><td class="num">${money(p.total)}</td><td class="num"><button class="btn" data-print="${p.folio}" style="padding:7px 11px;font-size:13px;min-height:auto">🖨</button></td></tr>`).join('')}
+  cont.innerHTML=`<table><thead><tr><th>Folio</th><th>Hora</th><th>Servicio</th><th>Cobró</th><th class="num">Total</th><th></th></tr></thead><tbody>
+    ${ventas.map(p=>`<tr><td class="mono">${p.folio}</td><td>${new Date(p.actualizado||p.creado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-transform:capitalize">${p.tipoServicio}</td><td class="small">${quienCobro(p)}</td><td class="num">${money(p.total)}</td><td class="num"><button class="btn" data-print="${p.folio}" style="padding:7px 11px;font-size:13px;min-height:auto">🖨</button></td></tr>`).join('')}
     </tbody></table>`;
   document.querySelectorAll('[data-print]').forEach(b=>b.onclick=()=>{const p=app._ventas.find(v=>v.folio===b.dataset.print);if(p)imprimirTicket(p);});
 }
@@ -680,7 +705,8 @@ function vPOS(){
 function mesaNombre(id){return 'Mesa '+(app._mesaNum&&app._mesaNum[id]||'');}
 function onSvc(s){
   if(s==='mesa'){toast('Elige una mesa en la pestaña Mesas');go('mesas');return;}
-  if(app.pos.pedido&&app.pos.pedido.lineas.length){toast('Cobra o vacía el pedido actual antes de cambiar');return;}
+  if(app.pos.pedido&&app.pos.pedido.estado==='abierto'&&app.pos.pedido.lineas.length){toast('Cobra o vacía el pedido actual antes de cambiar');return;}
+  if(app.pos.pedido&&app.pos.pedido.estado!=='abierto'){app.pos.folio=null;app.pos.pedido=null;app.pos.entrega=null;}
   if(s==='domicilio'){
     // El pedido a domicilio no se abre sin direccion: la moto necesita a donde ir.
     modalEntrega(app.pos.entrega,ent=>{
@@ -1009,7 +1035,10 @@ function pintarReparto(){
       ${col('En ruta',tab.enRuta,'en_ruta')}
       ${col('Entregados sin liquidar',tab.porLiquidar,'entregado')}
     </div>`;
-  document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>modalLiquidar(b.dataset.liq,b.dataset.nom));
+  document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>{
+    const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===b.dataset.liq);
+    if(r)modalLiquidar(r,vReparto);
+  });
   document.querySelectorAll('[data-asignar]').forEach(b=>b.onclick=()=>modalAsignar(b.dataset.asignar));
   document.querySelectorAll('[data-salida]').forEach(b=>b.onclick=()=>accionReparto(b.dataset.salida,'salida','Salió a ruta'));
   document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=()=>modalEntregar(b.dataset.entregar));
@@ -1036,6 +1065,11 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${tipo==='entregado'?`<span class="rc-cash">${money(p.efectivo)} en efectivo</span><button class="btn" data-ticketrep="${p.folio}">Ticket</button>`:''}
     </div></div>`;
 }
+// El POS conserva una copia del pedido en memoria; si el folio se va por
+// Reparto esa copia queda vieja y bloquea la siguiente venta. Hay que soltarla.
+function soltarDelPOS(folio){
+  if(app.pos.folio===folio)app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat,canalId:'local',entrega:null};
+}
 async function accionReparto(folio,accion,msg){
   try{await API.post(`/api/reparto/${folio}/${accion}`);toast(msg,{tipo:'ok'});vReparto();}
   catch(e){toast(e.message);}
@@ -1050,7 +1084,7 @@ function modalAsignar(folio){
   ov.classList.add('show');
   $('#asClose').onclick=closeModal;
   modal.querySelectorAll('[data-r]').forEach(b=>b.onclick=async()=>{
-    try{await API.post(`/api/reparto/${folio}/asignar`,{repartidorId:b.dataset.r});closeModal();toast('Moto asignada',{tipo:'ok'});vReparto();}
+    try{await API.post(`/api/reparto/${folio}/asignar`,{repartidorId:b.dataset.r});soltarDelPOS(folio);closeModal();toast('Moto asignada',{tipo:'ok'});vReparto();}
     catch(e){toast(e.message);}
   });
 }
@@ -1097,18 +1131,17 @@ async function modalEntregar(folio){
       const propinaObj=pr>0?{monto:pr,metodo}:null;
       try{
         const p=await API.post(`/api/reparto/${folio}/entregado`,{pagos,recibido,propina:propinaObj});
-        closeModal();ticketFinal(p);toast('Entregado · pendiente de liquidar',{tipo:'ok',ms:4000});vReparto();
+        soltarDelPOS(folio);closeModal();ticketFinal(p);toast('Entregado · pendiente de liquidar',{tipo:'ok',ms:4000});vReparto();
       }catch(e){toast(e.message);}
     };
   };
   render();ov.classList.add('show');
 }
 // La moto regresa y entrega el efectivo: esas ventas entran al turno de caja.
-function modalLiquidar(repartidorId,nombre){
-  const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===repartidorId);
-  const esperado=r?r.efectivoPendiente:0;
-  modal.innerHTML=`<h3>Liquidar a ${nombre}</h3>
-    <div class="sub">${r?r.porLiquidar:0} entrega(s) · las ventas entran al turno actual</div>
+function modalLiquidar(r,alTerminar){
+  const repartidorId=r.id;const esperado=r.efectivoPendiente||0;
+  modal.innerHTML=`<h3>Liquidar a ${r.nombre}</h3>
+    <div class="sub">${r.porLiquidar||0} entrega(s) · las ventas entran al turno actual</div>
     <div class="field"><label>Efectivo esperado</label><div class="bignum">${money(esperado)}</div></div>
     <div class="field"><label>Efectivo entregado (déjalo vacío si cuadra)</label><input id="liqCta" type="number" class="mono" placeholder="${esperado}"></div>
     <div class="cambio" id="liqDif"></div>
@@ -1130,7 +1163,8 @@ function modalLiquidar(repartidorId,nombre){
       const liq=await API.post('/api/reparto/liquidar',body);
       closeModal();
       toast(liq.resultado==='cuadrado'?`Liquidado · ${money(liq.efectivoEsperado)}`:`Liquidado con ${liq.resultado} de ${money(Math.abs(liq.diferencia))}`,{tipo:liq.resultado==='cuadrado'?'ok':undefined,ms:4500});
-      await refreshTurno();renderTopbar();vReparto();
+      await refreshTurno();renderTopbar();
+      if(alTerminar)alTerminar();else vReparto();
     }catch(e){toast(e.message);}
   };
 }
@@ -1504,7 +1538,16 @@ async function vCaja(){
     API.get('/api/reservas?sucursalId='+app.sucursalId),
     API.get('/api/cancelaciones?sucursalId='+app.sucursalId)
   ]);
-  app._mesas=mesas;app._ventas=recientes;
+  // El reparto no debe tumbar la caja si algo falla: se degrada a vacio.
+  let motos=[],liquidaciones=[];
+  try{[motos,liquidaciones]=await Promise.all([
+    API.get('/api/reparto/repartidores?sucursalId='+app.sucursalId),
+    API.get('/api/reparto/liquidaciones?sucursalId='+app.sucursalId+'&limit=30')
+  ]);}catch{}
+  app._mesas=mesas;app._ventas=recientes;app._repCaja=motos;app._liqs=liquidaciones;
+  const efectivoCalle=motos.reduce((t,r)=>t+(r.efectivoPendiente||0),0);
+  const conPendiente=motos.filter(r=>r.porLiquidar>0);
+  const liqTurno=app.turno?liquidaciones.filter(l=>l.turnoId===app.turno.id):[];
   const mesasAb=mesas.filter(m=>m.estado==='ocupada'||m.estado==='cuenta').map(m=>({folio:m.pedidoFolio,etq:m.nombre,est:m.estado==='cuenta'?'Pidió cuenta':'Mesa ocupada',pidio:m.estado==='cuenta',items:m.items,total:m.total,esMesa:true,mesaId:m.id}));
   const otros=abiertos.filter(p=>p.tipoServicio!=='mesa'&&p.lineas.length&&!enReparto(p)).map(p=>({folio:p.folio,etq:p.origen==='qr'?('🔲 QR'+(p.cliente&&p.cliente.mesa?' · Mesa '+p.cliente.mesa:(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:''))):(p.tipoServicio==='domicilio'?('Domicilio'+(p.cliente&&p.cliente.nombre?' · '+p.cliente.nombre:'')):'Mostrador'),est:p.origen==='qr'?'Pedido del cliente':(p.tipoServicio==='domicilio'?'A domicilio':'En mostrador'),pidio:p.origen==='qr',items:p.lineas.length,total:p.total,esMesa:false}));
   const cuentas=[...mesasAb,...otros];
@@ -1518,6 +1561,7 @@ async function vCaja(){
     ${turnoCard}
     <div class="kpi"><div class="lab">Por cobrar ahora</div><div class="val" style="color:${cuentas.length?'var(--accent-ink)':'var(--green)'}">${money(totalCobrar)}</div><div class="lab" style="margin-top:2px">${cuentas.length} cuenta(s)</div></div>
     <div class="kpi"><div class="lab">Ventas (sucursal)</div><div class="val">${money(resumen.venta)}</div><div class="lab" style="margin-top:2px">${resumen.pedidos} ticket(s) · prom ${money(resumen.ticketPromedio)}</div></div>
+    <div class="kpi"><div class="lab">Efectivo en la calle</div><div class="val" style="color:${efectivoCalle>0?'var(--accent-ink)':'var(--green)'}">${money(efectivoCalle)}</div><div class="lab" style="margin-top:2px">${conPendiente.length} moto(s) sin liquidar</div></div>
   </div>
   ${app.turno?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px"><button class="btn" id="cajaEntrada" style="font-size:13px">+ Entrada de efectivo</button><button class="btn" id="cajaRetiro" style="font-size:13px">− Retiro de efectivo</button></div>`:''}
 
@@ -1526,13 +1570,28 @@ async function vCaja(){
       ${cuentas.map((c,i)=>`<tr><td style="font-weight:600">${c.etq}</td><td>${c.pidio?'<span style="color:var(--accent-ink);font-weight:600">Pidió cuenta</span>':c.est}</td><td class="num">${c.items||0}</td><td class="num" style="font-weight:600">${money(c.total)}</td><td class="num" style="white-space:nowrap">${c.folio?`<button class="btn dark" data-cobrarcaja="${c.folio}" style="padding:8px 14px;font-size:13px;min-height:auto">Cobrar</button> <button class="btn" data-cancc="${i}" style="padding:8px 11px;font-size:13px;min-height:auto;color:var(--red)">Cancelar</button>`:''}</td></tr>`).join('')}
       </tbody></table>`:'<div class="empty" style="color:var(--green)">✓ No hay cuentas pendientes de cobro.</div>'}</div>
 
+  ${(conPendiente.length||liqTurno.length)?`<div class="panel" style="margin-bottom:16px;border-color:${conPendiente.length?'var(--accent)':'var(--line)'}">
+    <h3 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">Reparto <span class="small">el efectivo entra a caja cuando la moto liquida</span></h3>
+    ${conPendiente.length?`<table><thead><tr><th>Repartidor</th><th class="num">En ruta</th><th class="num">Entregas</th><th class="num">Efectivo</th><th></th></tr></thead><tbody>
+      ${conPendiente.map(r=>`<tr><td style="font-weight:600">${r.nombre}</td><td class="num">${r.enRuta}</td><td class="num">${r.porLiquidar}</td><td class="num" style="font-weight:700;color:var(--accent-ink)">${money(r.efectivoPendiente)}</td>
+        <td class="num"><button class="btn dark" data-liqcaja="${r.id}" style="padding:8px 14px;font-size:13px;min-height:auto">Liquidar</button></td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty" style="color:var(--green)">✓ Ninguna moto trae efectivo pendiente.</div>'}
+    ${liqTurno.length?`<div style="margin-top:14px"><h3 style="font-size:14px">Liquidaciones de este turno</h3>
+      <table><thead><tr><th>Hora</th><th>Repartidor</th><th class="num">Pedidos</th><th class="num">Esperado</th><th class="num">Entregó</th><th class="num">Dif.</th><th>Recibió</th><th></th></tr></thead><tbody>
+      ${liqTurno.map(l=>`<tr><td>${new Date(l.fecha).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td style="font-weight:600">${l.repartidorNombre}</td><td class="num">${l.pedidos}</td><td class="num">${money(l.efectivoEsperado)}</td><td class="num">${money(l.conteoEfectivo)}</td>
+        <td class="num" style="font-weight:700;color:${l.diferencia===0?'var(--green)':(l.diferencia<0?'var(--red)':'var(--blue)')}">${l.diferencia===0?'✓':(l.diferencia<0?'−':'+')+money(Math.abs(l.diferencia)).slice(1)}</td>
+        <td class="small">${l.usuario||'—'}</td><td class="num"><button class="btn" data-verliq="${l.id}" style="padding:6px 10px;font-size:12px;min-height:auto">Folios</button></td></tr>`).join('')}
+      </tbody></table></div>`:''}
+    <button class="btn" id="cajaIrReparto" style="margin-top:12px;font-size:13px">Abrir tablero de Reparto</button>
+  </div>`:''}
+
   <div class="cols2-wide">
     <div class="panel"><h3>Ventas del turno <span class="small">${sucNombre}</span></h3>
       <div class="bar-row"><div class="bn">Efectivo</div><div class="bt"><div class="bf" style="width:${pct(resumen.porPago.efectivo,resumen.venta)}%;background:var(--green)"></div></div><div class="bv">${money(resumen.porPago.efectivo)}</div></div>
       <div class="bar-row"><div class="bn">Tarjeta</div><div class="bt"><div class="bf" style="width:${pct(resumen.porPago.tarjeta,resumen.venta)}%;background:var(--blue)"></div></div><div class="bv">${money(resumen.porPago.tarjeta)}</div></div>
       <div class="bar-row"><div class="bn">Transfer.</div><div class="bt"><div class="bf" style="width:${pct(resumen.porPago.transferencia,resumen.venta)}%;background:var(--accent)"></div></div><div class="bv">${money(resumen.porPago.transferencia)}</div></div>
       ${resumen.propinas?`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)"><span style="font-weight:600">Propinas a repartir</span><span style="font-family:'Bricolage Grotesque';font-weight:700;color:var(--green)">${money(resumen.propinas)}</span></div><div class="small" style="color:var(--muted)">No es venta; va completa al personal.</div>`:''}
-      <div style="margin-top:14px"><h3 style="font-size:14px">Últimas ventas</h3>${recientes.length?`<table><tbody>${recientes.map(p=>`<tr><td class="mono" style="font-size:12px">${p.folio}</td><td>${new Date(p.actualizado||p.creado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(p.total)}</td><td class="num"><button class="btn" data-print="${p.folio}" style="padding:6px 10px;font-size:12px;min-height:auto">🖨</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Sin ventas aún.</div>'}</div>
+      <div style="margin-top:14px"><h3 style="font-size:14px">Últimas ventas</h3>${recientes.length?`<table><thead><tr><th>Folio</th><th>Hora</th><th>Cobró</th><th class="num">Total</th><th></th></tr></thead><tbody>${recientes.map(p=>`<tr><td class="mono" style="font-size:12px">${p.folio}</td><td>${new Date(p.actualizado||p.creado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</td><td class="small">${quienCobro(p)}</td><td class="num">${money(p.total)}</td><td class="num"><button class="btn" data-print="${p.folio}" style="padding:6px 10px;font-size:12px;min-height:auto">🖨</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Sin ventas aún.</div>'}</div>
     </div>
     <div class="panel"><h3>Reservas de hoy <span class="small">${resvHoy.length}</span></h3>
       ${resvHoy.length?resvHoy.map(r=>`<div class="resv" style="padding:9px 0"><div class="resv-main"><div class="resv-top"><span class="resv-hora">${r.hora}</span><span class="resv-nom">${r.nombre}</span></div><div class="resv-sub">${r.personas} pers.${r.mesaNombre?' · '+r.mesaNombre:''}</div></div></div>`).join(''):'<div class="empty">Sin reservas para hoy.</div>'}
@@ -1552,6 +1611,37 @@ async function vCaja(){
   if($('#cajaAbrir'))$('#cajaAbrir').onclick=modalAbrirTurno;
   if($('#cajaCerrar'))$('#cajaCerrar').onclick=modalCerrarTurno;
   if($('#cajaVerReservas'))$('#cajaVerReservas').onclick=()=>go('reservas');
+  if($('#cajaIrReparto'))$('#cajaIrReparto').onclick=()=>go('reparto');
+  document.querySelectorAll('[data-liqcaja]').forEach(b=>b.onclick=()=>{
+    const r=(app._repCaja||[]).find(x=>x.id===b.dataset.liqcaja);
+    if(r)modalLiquidar(r,vCaja);
+  });
+  document.querySelectorAll('[data-verliq]').forEach(b=>b.onclick=()=>modalDetalleLiquidacion(b.dataset.verliq));
+}
+// Detalle de una liquidacion: que folios trajo esa moto y por cuanto.
+async function modalDetalleLiquidacion(id){
+  const l=(app._liqs||[]).find(x=>x.id===id);
+  if(!l){toast('Liquidación no encontrada');return;}
+  modal.innerHTML=`<h3>Liquidación de ${l.repartidorNombre}</h3>
+    <div class="sub">${new Date(l.fecha).toLocaleString('es-MX')} · recibió ${l.usuario||'—'}</div>
+    <div id="liqDet"><div class="empty">Cargando pedidos…</div></div>
+    <div class="modal-foot"><button class="btn-ghost" id="ldClose">Cerrar</button></div>`;
+  ov.classList.add('show');
+  $('#ldClose').onclick=closeModal;
+  const peds=[];
+  for(const f of l.folios){try{peds.push(await API.get('/api/pedidos/'+f));}catch{}}
+  const det=$('#liqDet');if(!det)return;
+  det.innerHTML=`<table><thead><tr><th>Folio</th><th>Cliente</th><th>Entregó</th><th class="num">Total</th></tr></thead><tbody>
+    ${peds.map(p=>`<tr><td class="mono" style="font-size:12px">${p.folio}</td><td>${(p.cliente&&p.cliente.nombre)||'—'}</td>
+      <td class="small">${p.reparto&&p.reparto.entregado?new Date(p.reparto.entregado).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
+      <td class="num">${money(p.total)}</td></tr>`).join('')}
+    </tbody></table>
+    <table style="margin-top:10px"><tbody>
+      <tr><td>Efectivo esperado</td><td class="num">${money(l.efectivoEsperado)}</td></tr>
+      <tr><td>Efectivo entregado</td><td class="num">${money(l.conteoEfectivo)}</td></tr>
+      <tr><td><b>${l.resultado==='cuadrado'?'Cuadró':(l.resultado==='faltante'?'Faltante':'Sobrante')}</b></td>
+        <td class="num"><b style="color:${l.diferencia===0?'var(--green)':(l.diferencia<0?'var(--red)':'var(--blue)')}">${money(Math.abs(l.diferencia))}</b></td></tr>
+    </tbody></table>`;
 }
 function pct(part,total){return total>0?Math.round(part/total*100):0;}
 async function cobrarDesdeCaja(folio){
@@ -2196,6 +2286,8 @@ function mostrarQR(url,nombre){
 }
 function imprimirCorte(r){
   const E=r.esperado;const suc=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
+  const liqs=(app._liqs||[]).filter(l=>l.turnoId===r.id);
+  const av=r.avisosReparto||null;
   const w=window.open('','corte','width=340,height=680');if(!w){toast('Permite ventanas emergentes');return;}
   const f=new Date(r.cerrado).toLocaleString('es-MX');
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Corte</title><style>body{font-family:'Courier New',monospace;width:280px;margin:0 auto;padding:10px;font-size:12px;color:#000}.r{display:flex;justify-content:space-between;margin:3px 0}.b{font-weight:bold}hr{border:none;border-top:1px dashed #000;margin:6px 0}h2{text-align:center;font-size:15px;margin:2px 0}</style></head><body>
@@ -2211,6 +2303,11 @@ function imprimirCorte(r){
   <div class="r"><span>Transferencia</span><span>${money(E.transferencia)}</span></div>
   <div class="r b"><span>Venta total</span><span>${money(E.ventaTotal)}</span></div>
   ${E.propinasTotal?`<div class="r"><span>Propinas a repartir</span><span>${money(E.propinasTotal)}</span></div>`:''}
+  ${liqs.length?`<hr><div class="b" style="text-align:center">REPARTO</div>
+    ${liqs.map(l=>`<div class="r"><span>${l.repartidorNombre} (${l.pedidos})</span><span>${money(l.conteoEfectivo)}</span></div>${l.diferencia?`<div class="r"><span>&nbsp;&nbsp;${l.diferencia<0?'faltante':'sobrante'}</span><span>${money(Math.abs(l.diferencia))}</span></div>`:''}`).join('')}
+    <div class="r b"><span>Liquidado en efectivo</span><span>${money(liqs.reduce((t,l)=>t+l.conteoEfectivo,0))}</span></div>`:''}
+  ${av&&av.sinLiquidar?`<hr><div class="r b"><span>CERRADO CON ${av.sinLiquidar} ENTREGA(S) SIN LIQUIDAR</span><span></span></div>`:''}
+  ${av&&av.enRuta?`<div class="r"><span>Pedidos aún en ruta</span><span>${av.enRuta}</span></div>`:''}
   </body></html>`);
   w.document.close();setTimeout(()=>{try{w.focus();w.print();}catch(e){}},350);
 }
