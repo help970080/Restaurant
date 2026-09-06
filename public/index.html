@@ -348,6 +348,10 @@
 .rc-nav{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .rc-nav .btn{flex:1;min-width:130px;text-align:center;text-decoration:none;padding:9px 10px;font-size:13px;font-weight:700}
 .rc-nav .btn.nav{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+.lnk-gps{background:none;border:none;color:var(--blue);text-decoration:underline;font-size:12px;font-weight:700;cursor:pointer;padding:0;margin-left:4px}
+#modal ol{margin:10px 0 0;padding-left:20px;font-size:13.5px;line-height:1.55}
+#modal ol li{margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -450,23 +454,63 @@ let kdsTimer=null;
 // el servidor no guarda recorrido. El repartidor lo prende y lo apaga.
 let geoTimer=null;
 const gpsOn=()=>localStorage.getItem('cp_gps')==='1';
+// Un fallo de ubicación tiene tres causas muy distintas y el mensaje tiene que
+// decir cuál es: el permiso del sitio, el permiso de la app en Android, o el
+// GPS del teléfono apagado. "Permiso denegado" a secas no ayuda a nadie.
+function leerPosicion(opciones){
+  return new Promise((ok,err)=>navigator.geolocation.getCurrentPosition(ok,err,opciones));
+}
+async function posicionConReintento(){
+  try{
+    return await leerPosicion({enableHighAccuracy:true,timeout:15000,maximumAge:10000});
+  }catch(e){
+    // Timeout o sin fix fino: se reintenta sin alta precisión, que casi siempre
+    // sí responde (torres y wifi). Un permiso denegado no se reintenta.
+    if(e&&e.code===1)throw e;
+    return await leerPosicion({enableHighAccuracy:false,timeout:20000,maximumAge:60000});
+  }
+}
+function textoErrorGPS(err){
+  if(!err)return 'No se pudo leer la ubicación';
+  if(err.code===1)return 'Ubicación bloqueada para este sitio';
+  if(err.code===2)return 'El teléfono no encuentra señal de GPS';
+  if(err.code===3)return 'La ubicación tardó demasiado en responder';
+  return err.message||'No se pudo leer la ubicación';
+}
+async function permisoGPS(){
+  try{
+    if(!navigator.permissions||!navigator.permissions.query)return 'desconocido';
+    const p=await navigator.permissions.query({name:'geolocation'});
+    return p.state; // granted | denied | prompt
+  }catch{return 'desconocido';}
+}
 function iniciarGPS(silencioso){
-  if(!navigator.geolocation){if(!silencioso)toast('Este teléfono no permite ubicación');return;}
+  if(!navigator.geolocation){if(!silencioso)toast('Este navegador no maneja ubicación');return;}
+  if(!window.isSecureContext){app._gpsErr='La página no va por HTTPS';app._gpsCodigo=0;pintarBannerGPS();return;}
   localStorage.setItem('cp_gps','1');
   if(geoTimer)clearInterval(geoTimer);
-  const mandar=()=>navigator.geolocation.getCurrentPosition(async pos=>{
-    app._gpsErr=null;
+  const mandar=async()=>{
+    let pos;
+    try{pos=await posicionConReintento();}
+    catch(err){
+      app._gpsErr=textoErrorGPS(err);app._gpsCodigo=err&&err.code;
+      if(app.vista==='reparto')pintarBannerGPS();
+      return;
+    }
+    app._gpsErr=null;app._gpsCodigo=null;
     try{
       const r=await API.post('/api/reparto/ubicacion',{lat:pos.coords.latitude,lng:pos.coords.longitude,precision:pos.coords.accuracy});
-      app._gpsUlt=new Date().toISOString();app._gpsRuta=r.enRuta;
-      if(app.vista==='reparto')pintarBannerGPS();
-    }catch(e){app._gpsErr=e.message;if(app.vista==='reparto')pintarBannerGPS();}
-  },err=>{
-    app._gpsErr=err.code===1?'Permiso de ubicación denegado':'No se pudo leer la ubicación';
+      app._gpsUlt=new Date().toISOString();app._gpsRuta=r.enRuta;app._gpsPrec=Math.round(pos.coords.accuracy||0);
+    }catch(e){
+      // 403/404: este usuario no tiene ficha de repartidor. No tiene caso seguir
+      // intentando ni enseñarle el error a caja.
+      if(/no es de repartidor|ficha de empleado/i.test(e.message||'')){detenerGPS();return;}
+      app._gpsErr=e.message;app._gpsCodigo=null;
+    }
     if(app.vista==='reparto')pintarBannerGPS();
-  },{enableHighAccuracy:true,timeout:15000,maximumAge:10000});
+  };
   mandar();geoTimer=setInterval(mandar,25000);
-  if(!silencioso)toast('Compartiendo ubicación',{tipo:'ok'});
+  if(!silencioso)toast('Buscando tu ubicación…');
 }
 function detenerGPS(){
   localStorage.removeItem('cp_gps');
@@ -484,20 +528,76 @@ function pintarBannerGPS(){
   if(!on){titulo='Ubicación apagada';detalle='Préndela para que el cliente vea dónde va su pedido';}
   else if(fallando){
     titulo='No se está compartiendo';
-    detalle=`<b style="color:var(--red)">${app._gpsErr}</b>`+
-      (/denegado/i.test(app._gpsErr)
-        ?'<br>Toca el candado 🔒 junto a la dirección del navegador → Permisos → Ubicación → Permitir, y vuelve a prender.'
-        :'<br>Revisa que el GPS del teléfono esté encendido.');
+    detalle=`<b style="color:var(--red)">${app._gpsErr}</b> <button class="lnk-gps" id="gpsAyuda">¿Cómo lo arreglo?</button>`;
   }
   else if(app._gpsUlt){
     titulo='Compartiendo tu ubicación';
-    detalle=`Última señal ${new Date(app._gpsUlt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}${app._gpsRuta?` · ${app._gpsRuta} pedido(s) en ruta`:''}`;
+    detalle=`Última señal ${new Date(app._gpsUlt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}${app._gpsPrec?` · precisión ${app._gpsPrec} m`:''}${app._gpsRuta?` · ${app._gpsRuta} pedido(s) en ruta`:''}`;
   }
   else{titulo='Buscando señal…';detalle='Dale unos segundos. No cierres esta pantalla.';}
   c.innerHTML=`<div class="gps-card ${clase}">
     <div><div class="gps-t">${titulo}</div><div class="gps-s">${detalle}</div></div>
     <button class="btn ${on?'':'accent'}" id="gpsTog">${on?'Apagar':'Prender'}</button></div>`;
-  $('#gpsTog').onclick=()=>{if(on){detenerGPS();}else{app._gpsErr=null;iniciarGPS();}pintarBannerGPS();};
+  $('#gpsTog').onclick=()=>{if(on){detenerGPS();}else{app._gpsErr=null;app._gpsCodigo=null;iniciarGPS();}pintarBannerGPS();};
+  if($('#gpsAyuda'))$('#gpsAyuda').onclick=modalArreglarGPS;
+}
+// Diagnóstico real: dice en qué capa está el problema y da los pasos del
+// navegador que la persona trae puesto, no los de otro.
+async function modalArreglarGPS(){
+  const ua=navigator.userAgent||'';
+  const android=/Android/i.test(ua), ios=/iPhone|iPad|iPod/i.test(ua);
+  const chrome=/Chrome|CriOS/i.test(ua), safari=/Safari/i.test(ua)&&!/Chrome|CriOS/i.test(ua);
+  const perm=await permisoGPS();
+  let pasos;
+  if(android&&chrome){
+    pasos=`<ol>
+      <li><b>Permiso del sitio.</b> En Chrome, toca el icono a la <b>izquierda de la dirección</b> (se ve como tres barritas con perillas, no es un candado) → <b>Permisos</b> → <b>Ubicación</b> → <b>Permitir</b>.<br>
+        <span class="small" style="color:var(--muted)">Si no lo ves ahí: menú ⋮ → Configuración → Configuración de sitios → Ubicación → busca <b>rest-nxy5.onrender.com</b>.</span></li>
+      <li><b>Permiso de Chrome en Android.</b> Ajustes del teléfono → Aplicaciones → <b>Chrome</b> → Permisos → Ubicación → <b>Permitir solo con la app en uso</b>.</li>
+      <li><b>GPS del teléfono.</b> Baja la barra de notificaciones y revisa que <b>Ubicación</b> esté encendida.</li>
+    </ol>`;
+  }else if(ios){
+    pasos=`<ol>
+      <li>Ajustes del iPhone → <b>Privacidad y seguridad</b> → <b>Localización</b> → enciéndela.</li>
+      <li>En la misma lista busca <b>${safari?'Safari':'Chrome'}</b> → <b>Al usar la app</b>.</li>
+      <li>${safari?'Ajustes → Safari → Ubicación → <b>Preguntar</b> o <b>Permitir</b>.':'En Chrome: menú ⋯ → Configuración → Configuración del contenido → Ubicación.'}</li>
+    </ol>`;
+  }else{
+    pasos=`<ol>
+      <li>Toca el icono a la izquierda de la dirección del navegador → <b>Ubicación</b> → <b>Permitir</b>.</li>
+      <li>Revisa que el sistema tenga la ubicación encendida.</li>
+    </ol>`;
+  }
+  const dx={granted:['El navegador SÍ dio el permiso','var(--green)'],
+            denied:['El navegador tiene la ubicación BLOQUEADA para este sitio','var(--red)'],
+            prompt:['El navegador aún no ha preguntado','var(--accent-ink)'],
+            desconocido:['No se pudo leer el estado del permiso','var(--muted)']}[perm];
+  modal.innerHTML=`<h3>Arreglar la ubicación</h3>
+    <div class="sub">Hay tres permisos distintos y basta que falle uno</div>
+    <div class="field" style="background:var(--paper);border-radius:10px;padding:10px 12px">
+      <div style="font-weight:700;color:${dx[1]}">${dx[0]}</div>
+      ${app._gpsErr?`<div class="small" style="color:var(--muted);margin-top:4px">Último error: ${app._gpsErr}</div>`:''}
+      ${perm==='denied'?'<div class="small" style="margin-top:4px">Cuando está bloqueado, el navegador ya no vuelve a preguntar: hay que cambiarlo a mano.</div>':''}
+      ${app._gpsCodigo===2?'<div class="small" style="margin-top:4px">El permiso puede estar bien: lo que falla es la señal. Sal a la calle o enciende el GPS.</div>':''}
+    </div>
+    ${pasos}
+    <div class="modal-foot"><button class="btn-ghost" id="gaCerrar">Cerrar</button><button class="btn-primary" id="gaProbar">Probar ahora</button></div>`;
+  ov.classList.add('show');
+  $('#gaCerrar').onclick=closeModal;
+  $('#gaProbar').onclick=async()=>{
+    const b=$('#gaProbar');b.disabled=true;b.textContent='Probando…';
+    try{
+      const pos=await posicionConReintento();
+      app._gpsErr=null;app._gpsCodigo=null;
+      closeModal();toast(`Listo · precisión ${Math.round(pos.coords.accuracy||0)} m`,{tipo:'ok',ms:4000});
+      iniciarGPS(true);
+    }catch(err){
+      app._gpsErr=textoErrorGPS(err);app._gpsCodigo=err&&err.code;
+      b.disabled=false;b.textContent='Probar ahora';
+      modalArreglarGPS();
+    }
+    if(app.vista==='reparto')pintarBannerGPS();
+  };
 }
 
 const IC={resumen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
@@ -1162,7 +1262,7 @@ function pintarReparto(){
     <div class="rep-col-h"><span>${titulo}</span><span class="rep-n">${arr.length}</span></div>
     ${arr.length?arr.map(p=>tarjetaPedidoRep(p,tipo,caja)).join(''):'<div class="empty">Nada aquí</div>'}</div>`;
   $('#view').innerHTML=`
-    <div id="gpsBanner"></div>
+    ${tab.puedeGps?'<div id="gpsBanner"></div>':''}
     <div class="kpis">
       <div class="kpi"><div class="lab">Por asignar</div><div class="val">${tab.porAsignar.length}</div></div>
       <div class="kpi"><div class="lab">En ruta</div><div class="val">${tab.enRuta.length}</div></div>
@@ -1191,7 +1291,8 @@ function pintarReparto(){
       ${col('En ruta',tab.enRuta,'en_ruta')}
       ${col('Entregados sin liquidar',tab.porLiquidar,'entregado')}
     </div>`;
-  pintarBannerGPS();
+  if(tab.puedeGps)pintarBannerGPS();
+  else if(gpsOn())detenerGPS(); // un interruptor encendido por error deja de molestar
   if(tab.enRuta.length)dibujarMapaOperacion(tab.enRuta);
   document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
   document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>{
