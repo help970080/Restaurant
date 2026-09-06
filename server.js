@@ -663,6 +663,11 @@ app.post('/api/pedidos', wrap(async (req, res) => {
       // El reparto es propio: sin direccion y telefono no sale la moto.
       const entrega = M.normalizarEntrega(cliente);
       const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente: entrega, usuario: c.username, canalId });
+      // Directorio: la próxima vez basta el teléfono para llenar la dirección.
+      const dir = M.upsertCliente(e, entrega, { sumarPedido: true });
+      // Si ya sabemos dónde vive (lo aprendimos al entregarle antes), el
+      // tablero puede calcular qué tan lejos va la moto.
+      if (dir && dir.lat != null) p.reparto.destino = { lat: dir.lat, lng: dir.lng };
       return p;
     }
     if (tipoServicio === 'mesa') {
@@ -723,7 +728,13 @@ app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
     if (costoEnvio != null) p.costoEnvio = costoEnvio;
     if (propina != null) p.propina = propina;
     if (descuento !== undefined) p.descuento = descuento;
-    if (cliente !== undefined) p.cliente = p.tipoServicio === 'domicilio' ? M.normalizarEntrega(cliente) : cliente;
+    if (cliente !== undefined) {
+      p.cliente = p.tipoServicio === 'domicilio' ? M.normalizarEntrega(cliente) : cliente;
+      if (p.tipoServicio === 'domicilio') {
+        const d = M.upsertCliente(e, p.cliente);
+        if (d && d.lat != null && p.reparto) p.reparto.destino = { lat: d.lat, lng: d.lng };
+      }
+    }
     if (canalId !== undefined) p.canalId = canalId;
     return M.recalcularPedido(p);
   });
@@ -846,9 +857,13 @@ app.get('/api/reparto/repartidores', wrap(async (req, res) => {
     const suyos = peds.filter((p) => p.reparto && p.reparto.repartidorId === emp.id);
     const ruta = suyos.filter(M.enRuta);
     const pend = suyos.filter(M.porLiquidar);
+    const califs = peds.map((p) => p.reparto && p.reparto.calificacion).filter((x) => x && x.repartidorId === emp.id);
+    const prom = califs.length ? M.r2(califs.reduce((t, x) => t + x.estrellas, 0) / califs.length) : null;
     return {
       id: emp.id, nombre: emp.nombre, puesto: emp.puesto, telefono: emp.telefono,
       sucursalId: emp.sucursalId,
+      ubicacion: M.ubicacionViva(e, emp.id),
+      estrellas: prom, calificaciones: califs.length,
       enRuta: ruta.length, foliosEnRuta: ruta.map((p) => p.folio),
       porLiquidar: pend.length,
       efectivoPendiente: M.r2(pend.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
@@ -863,17 +878,34 @@ app.get('/api/reparto', wrap(async (req, res) => {
   const { sucursalId } = req.query;
   const dom = Object.values(e.pedidos)
     .filter((p) => M.esDomicilio(p) && p.estado !== 'cancelado' && (!sucursalId || p.sucursalId === sucursalId));
-  const vista = (p) => ({
-    folio: p.folio, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
-    creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
-    items: p.lineas.reduce((t, l) => t + l.cantidad, 0),
-    cliente: p.cliente || null,
-    reparto: p.reparto || null,
-    efectivo: M.efectivoDePedido(p),
-    tiempos: M.tiemposReparto(p),
-  });
+  const prom = M.promedioEnRuta(e, sucursalId);
+  const vista = (p) => {
+    const r = p.reparto || {};
+    const moto = r.estado === 'en_ruta' && r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
+    const dist = moto && r.destino ? M.distanciaKm(moto, r.destino) : null;
+    let etaMin = null;
+    if (r.estado === 'en_ruta' && prom != null && r.salida) {
+      etaMin = Math.max(0, prom - Math.round((Date.now() - new Date(r.salida).getTime()) / 60000));
+    }
+    return {
+      folio: p.folio, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
+      creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
+      items: p.lineas.reduce((t, l) => t + l.cantidad, 0),
+      cliente: p.cliente || null,
+      reparto: r,
+      efectivo: M.efectivoDePedido(p),
+      tiempos: M.tiemposReparto(p),
+      // Para que caja vea el avance sin abrir nada más
+      moto, destino: r.destino || null, distanciaKm: dist, etaMin,
+      promedioMin: prom,
+      seguimiento: p.seguimiento ? p.seguimiento.token : null,
+    };
+  };
   const abiertos = dom.filter((p) => p.estado === 'abierto');
+  const sucCoord = (e.config && e.config.coordenadas) || null;
   res.json({
+    promedioMin: prom,
+    sucursal: sucCoord,
     porAsignar: abiertos.filter((p) => !p.reparto || p.reparto.estado === 'por_asignar').map(vista),
     asignados:  abiertos.filter((p) => p.reparto && p.reparto.estado === 'asignado').map(vista),
     enRuta:     dom.filter(M.enRuta).map(vista),
@@ -937,6 +969,14 @@ app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
     M.descontarInventario(e, ped);
     M.marcarEntregado(ped);
     ped.entregadoPor = (c || {}).username || null;
+    // El repartidor está parado en la puerta del cliente: esa es la mejor
+    // coordenada del domicilio que vamos a conseguir. Se guarda en el
+    // directorio para que el próximo pedido ya sepa a dónde va.
+    const u = M.ubicacionViva(e, r.repartidorId, 6);
+    if (u) {
+      ped.reparto.destino = { lat: u.lat, lng: u.lng };
+      M.upsertCliente(e, ped.cliente || {}, { lat: u.lat, lng: u.lng });
+    }
     return ped;
   });
   res.json(p);
@@ -969,6 +1009,17 @@ app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
     return { ok: true, ts: u.ts, enRuta };
   });
   res.json(out);
+}));
+
+// Directorio de clientes: al teclear el teléfono, el POS llena lo demás.
+app.get('/api/clientes', wrap(async (req, res) => {
+  const e = await readState();
+  const { q = '', telefono = '' } = req.query;
+  if (telefono) {
+    const c = (e.clientes || {})[M.llaveTel(telefono)];
+    return res.json(c || null);
+  }
+  res.json(M.buscarClientes(e, q));
 }));
 
 // Liga de seguimiento para mandarle al cliente. Genera el token si el pedido es
@@ -1056,7 +1107,8 @@ app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
   for (const p of peds) {
     const r = p.reparto;
     const k = r.repartidorId || 'sin_asignar';
-    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, venta: 0, minutos: 0, conTiempo: 0, fallidos: 0 };
+    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, venta: 0, minutos: 0, conTiempo: 0, fallidos: 0, estrellas: 0, califs: 0 };
+    if (r.calificacion) { porRep[k].estrellas += r.calificacion.estrellas; porRep[k].califs++; }
     porRep[k].entregas++;
     porRep[k].venta = M.r2(porRep[k].venta + p.total);
     porRep[k].fallidos += r.intentos || 0;
@@ -1066,13 +1118,18 @@ app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
   const repartidores = Object.values(porRep).map((x) => ({
     ...x, minutosPromedio: x.conTiempo ? M.r2(x.minutos / x.conTiempo) : null,
     ticketPromedio: x.entregas ? M.r2(x.venta / x.entregas) : 0,
+    calificacion: x.califs ? M.r2(x.estrellas / x.califs) : null,
   })).sort((a, b) => b.entregas - a.entregas);
+  const comentarios = peds.filter((p) => p.reparto.calificacion && p.reparto.calificacion.comentario)
+    .sort((a, b) => new Date(b.reparto.calificacion.fecha) - new Date(a.reparto.calificacion.fecha))
+    .slice(0, 25)
+    .map((p) => ({ folio: p.folio, repartidor: p.reparto.repartidorNombre, estrellas: p.reparto.calificacion.estrellas, comentario: p.reparto.calificacion.comentario, fecha: p.reparto.calificacion.fecha }));
   const pendientes = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && (!sucursalId || p.sucursalId === sucursalId));
   res.json({
     entregas: peds.length,
     venta: M.r2(peds.reduce((t, p) => t + p.total, 0)),
     minutosPromedioEnRuta: nRuta ? M.r2(sumRuta / nRuta) : null,
-    repartidores,
+    repartidores, comentarios,
     efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
     foliosSinLiquidar: pendientes.map((p) => p.folio),
   });
@@ -1541,6 +1598,24 @@ app.get('/t/:row/:token/estado', (req, res) => {
     } catch (err) {
       console.error('[seguimiento]', err && err.message);
       res.status(500).json({ error: 'Error al consultar el pedido' });
+    }
+  });
+});
+
+app.post('/t/:row/:token/calificar', express.json(), (req, res) => {
+  const { estrellas, comentario = '' } = req.body || {};
+  runPublic(Number(req.params.row), async () => {
+    try {
+      const out = await withState((e) => {
+        const tok = String(req.params.token || '');
+        const p = tok && Object.values(e.pedidos).find((x) => x.seguimiento && x.seguimiento.token === tok);
+        if (!p) throw bad('Pedido no encontrado', 404);
+        if (p.reparto && p.reparto.calificacion) return p.reparto.calificacion; // no se recalifica
+        return M.calificarReparto(p, { estrellas, comentario });
+      });
+      res.json({ ok: true, estrellas: out.estrellas });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message || 'No se pudo calificar' });
     }
   });
 });
