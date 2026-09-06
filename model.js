@@ -273,7 +273,15 @@ function guardarUbicacion(e, empleadoId, { lat, lng, precision = null }) {
   if (!isFinite(la) || !isFinite(ln) || la < -90 || la > 90 || ln < -180 || ln > 180) {
     const x = new Error('Coordenadas inválidas'); x.status = 400; throw x;
   }
-  e.repartoUbicaciones[empleadoId] = { lat: la, lng: ln, precision: precision == null ? null : +precision, ts: new Date().toISOString() };
+  const ahora = new Date().toISOString();
+  const prev = e.repartoUbicaciones[empleadoId] || {};
+  const corte = Date.now() - 40 * 60000;
+  const rastro = (prev.rastro || []).filter((p) => new Date(p.ts).getTime() > corte);
+  rastro.push({ lat: la, lng: ln, ts: ahora });
+  while (rastro.length > 20) rastro.shift();
+  e.repartoUbicaciones[empleadoId] = {
+    lat: la, lng: ln, precision: precision == null ? null : +precision, ts: ahora, rastro,
+  };
   return e.repartoUbicaciones[empleadoId];
 }
 // Una posicion vieja miente mas de lo que informa: se descarta a los 4 minutos.
