@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e0841a">
+<title>Sigue tu pedido</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  *{box-sizing:border-box}
+  :root{--ink:#17150f;--paper:#f4f1ea;--card:#fff;--line:#e5dfd2;--accent:#e0841a;--green:#2f8f4e;--red:#c8472f;--muted:#8c857a}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:520px;margin:0 auto;padding:16px 14px 40px}
+  .top{text-align:center;padding:10px 0 16px}
+  .neg{font-size:20px;font-weight:800;letter-spacing:-.2px}
+  .fol{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);margin-top:3px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
+  .estado{text-align:center}
+  .estado h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}
+  .estado p{margin:0;color:var(--muted);font-size:14px;line-height:1.45}
+  .eta{margin-top:12px;font-size:15px;font-weight:700;color:var(--accent)}
+  .eta b{font-size:26px;display:block;line-height:1.1;margin-top:2px}
+  .pasos{display:flex;gap:6px;margin:18px 0 4px}
+  .paso{flex:1;text-align:center}
+  .paso .dot{height:6px;border-radius:4px;background:var(--line);transition:background .4s}
+  .paso.on .dot{background:var(--accent)}
+  .paso.done .dot{background:var(--green)}
+  .paso span{display:block;font-size:10px;margin-top:7px;color:var(--muted);font-weight:600;line-height:1.25}
+  .paso.on span{color:var(--ink)}
+  .rep{display:flex;align-items:center;gap:12px}
+  .rep .av{width:46px;height:46px;border-radius:50%;background:#fbeed8;display:grid;place-items:center;flex:none}
+  .rep .nm{font-weight:700;font-size:16px}
+  .rep .rl{font-size:12px;color:var(--muted)}
+  .call{margin-left:auto;background:var(--green);color:#fff;text-decoration:none;padding:10px 16px;border-radius:11px;font-weight:700;font-size:14px;white-space:nowrap}
+  #map{height:280px;border-radius:14px;border:1px solid var(--line);overflow:hidden;background:#e9e5db}
+  .maplbl{font-size:12px;color:var(--muted);margin-top:8px;text-align:center}
+  .items{list-style:none;margin:0;padding:0}
+  .items li{display:flex;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .items li:last-child{border:none}
+  .items .q{font-weight:700;color:var(--accent);flex:none}
+  .items .md{font-size:12px;color:var(--muted)}
+  .tot{display:flex;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-weight:800}
+  h3{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 10px}
+  .fin{text-align:center;padding:26px 16px}
+  .fin .big{font-size:44px;line-height:1}
+  .msg{text-align:center;color:var(--muted);padding:50px 20px;font-size:15px;line-height:1.5}
+  .pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:p 1.6s infinite}
+  @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+  .moto-ico{font-size:26px;line-height:1;filter:drop-shadow(0 2px 3px rgba(0,0,0,.3))}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="msg">Cargando tu pedido…</div></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+  var partes=location.pathname.split('/').filter(Boolean); // ['t', row, token]
+  var ROW=partes[1], TOKEN=partes[2];
+  var map=null, motoMk=null, yoMk=null, yo=null, ultimo=null, timer=null;
+  var PASOS=[
+    {t:'Pedido recibido',  s:'Ya lo tenemos. En un momento entra a la cocina.'},
+    {t:'Preparándose',     s:'Tu pedido está en la cocina.'},
+    {t:'Listo',            s:'Sale con el repartidor en cuanto se asigne.'},
+    {t:'En camino',        s:'Tu pedido ya va para allá.'},
+    {t:'Entregado',        s:'¡Buen provecho!'}
+  ];
+  var CORTOS=['Recibido','Cocina','Listo','En camino','Entregado'];
+  var $=function(s){return document.querySelector(s);};
+  var esc=function(x){return String(x==null?'':x).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+  var money=function(n){return '$'+(+(n||0)).toFixed(2);};
+
+  function pedir(){
+    return fetch('/t/'+ROW+'/'+TOKEN+'/estado').then(function(r){
+      if(!r.ok)throw new Error(r.status===404?'nf':'err');
+      return r.json();
+    });
+  }
+  function tick(){
+    pedir().then(pintar).catch(function(e){
+      if(e.message==='nf')$('#app').innerHTML='<div class="msg">No encontramos este pedido.<br>Revisa la liga o pregúntanos por WhatsApp.</div>';
+      // Un error de red pasajero no debe borrar lo que el cliente ya está viendo
+    });
+  }
+  function reagendar(d){
+    if(timer)clearTimeout(timer);
+    timer=setTimeout(function(){tick();},d);
+  }
+
+  function pintar(d){
+    ultimo=d;
+    if(d.cancelado){
+      $('#app').innerHTML=cabeza(d)+'<div class="card fin"><div class="big">😔</div><h1 style="font-size:19px;margin:10px 0 4px">Tu pedido fue cancelado</h1><p style="color:var(--muted);margin:0;font-size:14px">Si crees que es un error, comunícate con nosotros.</p></div>';
+      return;
+    }
+    var p=d.paso, info=PASOS[p];
+    var h=cabeza(d);
+    h+='<div class="card estado">';
+    if(p===4){
+      h+='<div class="big" style="font-size:40px">🎉</div>';
+      h+='<h1 style="margin-top:8px">Entregado</h1><p>¡Buen provecho! Gracias por tu compra.</p>';
+    }else{
+      h+='<h1>'+esc(info.t)+'</h1><p>'+esc(info.s)+'</p>';
+      if(p===3&&d.etaMin!=null){
+        h+='<div class="eta">Llega aproximadamente en<b>'+(d.etaMin>0?d.etaMin+' min':'menos de 1 min')+'</b></div>';
+      }
+    }
+    h+='<div class="pasos">';
+    for(var i=0;i<5;i++)h+='<div class="paso '+(i<p?'done':(i===p?'on':''))+'"><div class="dot"></div><span>'+CORTOS[i]+'</span></div>';
+    h+='</div></div>';
+
+    if(d.repartidor){
+      h+='<div class="card"><div class="rep"><div class="av"><span class="moto-ico">🛵</span></div>'+
+         '<div><div class="nm">'+esc(d.repartidor.nombre)+'</div><div class="rl">Tu repartidor</div></div>'+
+         (d.repartidor.telefono?'<a class="call" href="tel:'+esc(d.repartidor.telefono)+'">Llamar</a>':'')+
+         '</div></div>';
+    }
+    if(p===3){
+      h+='<div class="card"><h3>'+(d.moto?'<span class="pulse"></span>Dónde va tu pedido':'Dónde va tu pedido')+'</h3><div id="map"></div>'+
+         '<div class="maplbl" id="maplbl">'+(d.moto?'Ubicación en vivo del repartidor':'El repartidor aún no comparte su ubicación. El estado sí se actualiza solo.')+'</div></div>';
+    }
+    if(d.items&&d.items.length){
+      h+='<div class="card"><h3>Tu pedido</h3><ul class="items">';
+      d.items.forEach(function(it){
+        h+='<li><span class="q">'+it.cantidad+'×</span><span>'+esc(it.nombre)+
+           (it.modificadores&&it.modificadores.length?'<div class="md">'+esc(it.modificadores.join(' · '))+'</div>':'')+'</span></li>';
+      });
+      h+='</ul><div class="tot"><span>Total</span><span>'+money(d.total)+'</span></div></div>';
+    }
+    $('#app').innerHTML=h;
+    if(p===3)dibujarMapa(d);
+    reagendar(p===3?8000:(p===4?60000:15000));
+  }
+
+  function cabeza(d){
+    return '<div class="top"><div class="neg">'+esc(d.negocio||'Tu pedido')+'</div><div class="fol">'+esc(d.folio)+(d.sucursal?' · '+esc(d.sucursal):'')+'</div></div>';
+  }
+
+  function dibujarMapa(d){
+    var el=document.getElementById('map');
+    if(!el||typeof L==='undefined')return;
+    var centro=d.moto?[d.moto.lat,d.moto.lng]:(yo||[19.4326,-99.1332]);
+    map=L.map(el,{zoomControl:false,attributionControl:true}).setView(centro,15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+    L.control.zoom({position:'bottomright'}).addTo(map);
+    var iMoto=L.divIcon({className:'',html:'<div class="moto-ico">🛵</div>',iconSize:[30,30],iconAnchor:[15,15]});
+    var iYo=L.divIcon({className:'',html:'<div style="width:16px;height:16px;border-radius:50%;background:#3b6ea5;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',iconSize:[16,16],iconAnchor:[8,8]});
+    if(d.moto)motoMk=L.marker([d.moto.lat,d.moto.lng],{icon:iMoto}).addTo(map);
+    if(yo)yoMk=L.marker(yo,{icon:iYo}).addTo(map).bindPopup('Tú');
+    encuadrar();
+    if(!yo&&navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(function(pos){
+        yo=[pos.coords.latitude,pos.coords.longitude];
+        if(map){yoMk=L.marker(yo,{icon:iYo}).addTo(map).bindPopup('Tú');encuadrar();}
+      },function(){},{enableHighAccuracy:false,timeout:8000,maximumAge:120000});
+    }
+  }
+  function encuadrar(){
+    if(!map)return;
+    var ms=[];if(motoMk)ms.push(motoMk.getLatLng());if(yoMk)ms.push(yoMk.getLatLng());
+    if(ms.length>1)map.fitBounds(L.latLngBounds(ms).pad(0.35));
+    else if(ms.length===1)map.setView(ms[0],15);
+  }
+
+  if(!ROW||!TOKEN){$('#app').innerHTML='<div class="msg">Liga incompleta.</div>';return;}
+  tick();
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)tick();});
+})();
+</script>
+</body>
+</html>
