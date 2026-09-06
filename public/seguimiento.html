@@ -47,6 +47,15 @@
   .pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:p 1.6s infinite}
   @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
   .moto-ico{font-size:26px;line-height:1;filter:drop-shadow(0 2px 3px rgba(0,0,0,.3))}
+  .califica{text-align:center}
+  .stars{display:flex;justify-content:center;gap:6px;margin:6px 0 12px}
+  .st{background:none;border:none;font-size:34px;line-height:1;color:#d8d2c4;cursor:pointer;padding:0 2px;transition:color .15s,transform .15s}
+  .st.on{color:var(--accent);transform:scale(1.08)}
+  .st.fijo{font-size:30px;color:var(--accent);cursor:default}
+  .califica textarea{width:100%;min-height:64px;border:1px solid var(--line);border-radius:11px;padding:10px;font-family:inherit;font-size:14px;resize:vertical}
+  .enviar{width:100%;margin-top:10px;background:var(--accent);color:#fff;border:none;border-radius:12px;padding:13px;font-weight:700;font-size:15px;cursor:pointer}
+  .enviar:disabled{background:#ddd6c8;cursor:not-allowed}
+  .gr{margin:4px 0 0;color:var(--green);font-weight:600;font-size:14px}
 </style>
 </head>
 <body>
@@ -77,8 +86,13 @@
   }
   function tick(){
     pedir().then(pintar).catch(function(e){
-      if(e.message==='nf')$('#app').innerHTML='<div class="msg">No encontramos este pedido.<br>Revisa la liga o pregúntanos por WhatsApp.</div>';
-      // Un error de red pasajero no debe borrar lo que el cliente ya está viendo
+      if(e.message==='nf'){
+        $('#app').innerHTML='<div class="msg">No encontramos este pedido.<br>Revisa la liga o pregúntanos por WhatsApp.</div>';
+        return; // este sí es definitivo: no reintentar
+      }
+      // Falla de red: si ya hay algo pintado no se borra; si no, se avisa y se reintenta.
+      if(!ultimo)$('#app').innerHTML='<div class="msg">No pudimos conectar.<br>Reintentando…</div>';
+      reagendar(5000);
     });
   }
   function reagendar(d){
@@ -108,6 +122,18 @@
     for(var i=0;i<5;i++)h+='<div class="paso '+(i<p?'done':(i===p?'on':''))+'"><div class="dot"></div><span>'+CORTOS[i]+'</span></div>';
     h+='</div></div>';
 
+    if(p===4&&(d.puedeCalificar||d.calificacion)){
+      h+='<div class="card califica" id="calBox">';
+      if(d.calificacion){
+        h+='<h3>Tu calificación</h3><div class="stars fija">'+estrellas(d.calificacion.estrellas)+'</div><p class="gr">¡Gracias por calificar!</p>';
+      }else{
+        h+='<h3>¿Cómo estuvo la entrega'+(d.repartidorNombre?' de '+esc(d.repartidorNombre):'')+'?</h3>'+
+           '<div class="stars" id="stars">'+[1,2,3,4,5].map(function(i){return '<button class="st" data-n="'+i+'">☆</button>';}).join('')+'</div>'+
+           '<textarea id="calCom" placeholder="Cuéntanos (opcional)" maxlength="300"></textarea>'+
+           '<button class="enviar" id="calOk" disabled>Enviar calificación</button>';
+      }
+      h+='</div>';
+    }
     if(d.repartidor){
       h+='<div class="card"><div class="rep"><div class="av"><span class="moto-ico">🛵</span></div>'+
          '<div><div class="nm">'+esc(d.repartidor.nombre)+'</div><div class="rl">Tu repartidor</div></div>'+
@@ -127,10 +153,36 @@
       h+='</ul><div class="tot"><span>Total</span><span>'+money(d.total)+'</span></div></div>';
     }
     $('#app').innerHTML=h;
+    if(p===4&&d.puedeCalificar)armarCalificacion();
     if(p===3)dibujarMapa(d);
     reagendar(p===3?8000:(p===4?60000:15000));
   }
 
+  function estrellas(n){var o='';for(var i=1;i<=5;i++)o+='<span class="st fijo">'+(i<=n?'★':'☆')+'</span>';return o;}
+  function armarCalificacion(){
+    var sel=0;
+    var pinta=function(){
+      [].forEach.call(document.querySelectorAll('#stars .st'),function(b){
+        b.textContent=(+b.dataset.n<=sel)?'★':'☆';
+        b.classList.toggle('on',+b.dataset.n<=sel);
+      });
+      $('#calOk').disabled=!sel;
+    };
+    [].forEach.call(document.querySelectorAll('#stars .st'),function(b){
+      b.onclick=function(){sel=+b.dataset.n;pinta();};
+    });
+    $('#calOk').onclick=function(){
+      if(!sel)return;
+      var btn=$('#calOk');btn.disabled=true;btn.textContent='Enviando…';
+      fetch('/t/'+ROW+'/'+TOKEN+'/calificar',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({estrellas:sel,comentario:($('#calCom')||{}).value||''})})
+        .then(function(r){return r.json();})
+        .then(function(){
+          $('#calBox').innerHTML='<h3>Tu calificación</h3><div class="stars fija">'+estrellas(sel)+'</div><p class="gr">¡Gracias! Nos ayuda a mejorar.</p>';
+        })
+        .catch(function(){btn.disabled=false;btn.textContent='Enviar calificación';});
+    };
+  }
   function cabeza(d){
     return '<div class="top"><div class="neg">'+esc(d.negocio||'Tu pedido')+'</div><div class="fol">'+esc(d.folio)+(d.sucursal?' · '+esc(d.sucursal):'')+'</div></div>';
   }
