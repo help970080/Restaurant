@@ -1,4 +1,4 @@
-'use strict';
+''use strict';
 // ============================================================================
 //  server.js — API de ComandaPro
 // ============================================================================
@@ -9,7 +9,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const M = require('./model');
-const { firmarToken, auth, ctx, readState, withState, runPublic } = require('./context');
+const { firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache } = require('./context');
 const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
 
 const app = express();
@@ -75,6 +75,7 @@ app.post('/api/admin/provision', wrap(async (req, res) => {
   const row = sys.nextRow || 1;
   const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
   await db.insertState(row, doc);
+  invalidarCache(row);
   sys.tenants[row] = { nombre };
   sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
   sys.nextRow = row + 1;
@@ -130,6 +131,7 @@ app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
   est.meta.menuRecargado = new Date().toISOString();
 
   await db.saveState(Number(row), est);
+  invalidarCache(Number(row));
 
   res.json({
     ok: true, row: Number(row), nombre: est.meta.nombre, plantilla,
@@ -191,6 +193,7 @@ app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
   const row = sys.nextRow || 1;
   const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
   await db.insertState(row, doc);
+  invalidarCache(row);
   sys.tenants[row] = { nombre, activo: true, creado: new Date().toISOString() };
   sys.usuarios[adminUser] = { row, rol: 'admin', nombre: adminNombre, passHash: bcrypt.hashSync(adminPass, 10) };
   sys.nextRow = row + 1;
