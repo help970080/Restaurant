@@ -898,7 +898,9 @@ function vPOS(){
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}</button>`).join('')}</div>`:''}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?tarjetaEntrega(ped):''}
-      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<button class="btn accent" id="btnSeg" style="width:100%;margin-bottom:10px;font-size:13px"${ped&&ped.folio?'':' disabled'}>📲 Enviar seguimiento por WhatsApp</button>`:''}
+      ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="btn accent" id="btnSeg" style="flex:1;font-size:13px"${ped&&ped.folio?'':' disabled'}>📲 Enviar seguimiento</button>
+        <button class="btn" id="btnSegCopia" style="font-size:13px"${ped&&ped.folio?'':' disabled'} title="Copiar la liga">📋</button></div>`:''}
       <div class="lines" id="lines"></div>
       <div class="totals">
         <div class="trow"><span>Subtotal</span><span class="mono" id="tSub">$0.00</span></div>
@@ -915,6 +917,7 @@ function vPOS(){
   if($('#salirMesa'))$('#salirMesa').onclick=()=>{app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:app.pos.cat};vPOS();};
   if($('#btnEditEntrega'))$('#btnEditEntrega').onclick=editarEntrega;
   if($('#btnSeg'))$('#btnSeg').onclick=()=>mandarSeguimiento(app.pos.folio);
+  if($('#btnSegCopia'))$('#btnSegCopia').onclick=()=>copiarSeguimiento(app.pos.folio);
   if($('#btnNuevo'))$('#btnNuevo').onclick=()=>{app.pos.folio=null;app.pos.pedido=null;if(app.pos.tipoServicio==='mesa'){app.pos.tipoServicio='mostrador';app.pos.mesaId=null;}vPOS();};
   if($('#btnPromo'))$('#btnPromo').onclick=aplicarPromocion;
   if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
@@ -1048,6 +1051,7 @@ function renderLines(){
   $('#tTotal').textContent=money(tot);
   const bc=$('#btnCobrar');if(bc&&app.pos.tipoServicio!=='mesa')bc.disabled=!(app.turno&&ped&&ped.lineas.length>0);
   const bs=$('#btnSeg');if(bs)bs.disabled=!(ped&&ped.folio);
+  const bsc=$('#btnSegCopia');if(bsc)bsc.disabled=!(ped&&ped.folio);
 }
 function modalModificadores(prod){
   const grupos=prod.gruposIds.map(id=>app.menu.gruposModificadores[id]);
@@ -1295,6 +1299,7 @@ function pintarReparto(){
   else if(gpsOn())detenerGPS(); // un interruptor encendido por error deja de molestar
   if(tab.enRuta.length)dibujarMapaOperacion(tab.enRuta);
   document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
+  document.querySelectorAll('[data-copiaseg]').forEach(b=>b.onclick=()=>copiarSeguimiento(b.dataset.copiaseg));
   document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>{
     const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===b.dataset.liq);
     if(r)modalLiquidar(r,vReparto);
@@ -1371,7 +1376,8 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
-      ${tipo!=='entregado'&&caja?`<button class="btn" data-wa="${p.folio}" title="Mandar la liga de seguimiento por WhatsApp">Enviar liga</button>`:''}
+      ${tipo!=='entregado'&&caja?`<button class="btn" data-wa="${p.folio}" title="Abrir WhatsApp con la liga de seguimiento">Enviar liga</button>
+        <button class="btn" data-copiaseg="${p.folio}" title="Copiar la liga para pegarla a mano">📋 Copiar</button>`:''}
       ${tipo==='entregado'?`<span class="rc-cash">${money(p.efectivo)} en efectivo</span><button class="btn" data-ticketrep="${p.folio}">Ticket</button>`:''}
     </div></div>`;
 }
@@ -1454,16 +1460,47 @@ async function mandarSeguimiento(folio){
   }
   const texto=`Hola ${s.nombre||''}, ${s.negocio||''} ya recibió tu pedido ${s.folio}. Sigue tu pedido en vivo aquí: ${s.url}`.replace(/\s+/g,' ').trim();
   if(!s.telefono){
-    copiar(s.url);toast('Pedido sin teléfono — liga copiada');return;
+    if(await copiar(s.url))toast('Pedido sin teléfono — liga copiada');
+    else modalLiga(s);
+    return;
   }
   // Los celulares mexicanos necesitan el 521 delante para que WhatsApp entregue.
   const dig=String(s.telefono).replace(/\D/g,'');
   const num=dig.length===10?'521'+dig:dig;
   window.open(`https://wa.me/${num}?text=${encodeURIComponent(texto)}`,'_blank');
 }
-function copiar(t){
-  try{navigator.clipboard.writeText(t);}
-  catch(e){const i=document.createElement('textarea');i.value=t;document.body.appendChild(i);i.select();document.execCommand('copy');i.remove();}
+async function copiar(t){
+  try{await navigator.clipboard.writeText(t);return true;}catch(e){}
+  try{
+    const i=document.createElement('textarea');
+    i.value=t;i.style.position='fixed';i.style.opacity='0';
+    document.body.appendChild(i);i.select();
+    const ok=document.execCommand('copy');i.remove();
+    return ok;
+  }catch(e){return false;}
+}
+// Copiar la liga para pegarla a mano donde sea (WhatsApp, SMS, Messenger…).
+// Si el navegador no deja copiar, se muestra para seleccionarla.
+async function copiarSeguimiento(folio){
+  let s;
+  try{s=await API.get(`/api/pedidos/${folio}/seguimiento`);}catch(e){toast(e.message);return;}
+  if(!s.url||/^\/t\//.test(s.url)){toast('Falta configurar PUBLIC_URL en el servidor');return;}
+  if(await copiar(s.url)){toast('Liga copiada · pégala en WhatsApp',{tipo:'ok',ms:3500});return;}
+  modalLiga(s);
+}
+function modalLiga(s){
+  modal.innerHTML=`<h3>Liga de seguimiento</h3><div class="sub">${s.folio}${s.nombre?' · '+s.nombre:''}</div>
+    <div class="field"><label>Cópiala y pégala donde quieras</label>
+      <input id="lgUrl" value="${s.url}" readonly style="font-size:13px"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="lgCerrar">Cerrar</button><button class="btn-primary" id="lgCopiar">Copiar</button></div>`;
+  ov.classList.add('show');
+  const inp=$('#lgUrl');
+  setTimeout(()=>{inp.focus();inp.select();},60);
+  $('#lgCerrar').onclick=closeModal;
+  $('#lgCopiar').onclick=async()=>{
+    inp.select();
+    toast(await copiar(s.url)?'Liga copiada':'Selecciónala y cópiala a mano',{tipo:'ok'});
+  };
 }
 function modalAsignar(folio){
   const reps=(app._rep&&app._rep.reps)||[];
