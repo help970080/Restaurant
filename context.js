@@ -35,10 +35,49 @@ function runPublic(row, fn) {
   return als.run({ row: Number(row), rol: 'public', username: 'qr', sucursalId: null }, fn);
 }
 
+// ---- Caché del documento en memoria ----------------------------------------
+//  El documento del tenant se guarda COMPLETO en un JSONB. Sin caché, cada
+//  petición —incluidos los sondeos del KDS, el tablero y los avisos— lo baja
+//  entero de Postgres, y cada escritura lo baja y lo vuelve a subir. Con unos
+//  miles de pedidos el documento pasa de varios MB y eso es el lag que se
+//  siente en cada movimiento.
+//
+//  Como TODA mutación pasa por la cola de withState dentro de este proceso, la
+//  copia en memoria es la autoridad y basta con escribir. Esto asume UN SOLO
+//  proceso de servidor: si algún día se corre con varias instancias, hay que
+//  apagarlo con ESTADO_EN_MEMORIA=0.
+const CACHE_ON = process.env.ESTADO_EN_MEMORIA !== '0';
+const CACHE_MAX = Math.max(1, parseInt(process.env.ESTADO_CACHE_MAX || '20', 10));
+const cache = new Map(); // Map conserva orden de inserción: sirve de LRU simple
+
+function recordar(row, doc) {
+  cache.delete(row);
+  cache.set(row, doc);
+  // Con muchos restaurantes en el mismo servidor, se suelta el menos usado.
+  while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+}
+async function cargarEstado(row) {
+  if (CACHE_ON && cache.has(row)) {
+    const doc = cache.get(row);
+    recordar(row, doc); // marcarlo como recién usado
+    return doc;
+  }
+  const doc = await db.loadState(row);
+  if (CACHE_ON && doc) recordar(row, doc);
+  return doc;
+}
+// Para cuando el estado se escribe por fuera (alta o reseteo de un tenant).
+function invalidarCache(row) {
+  if (row == null) cache.clear();
+  else cache.delete(Number(row));
+}
+
 // ---- Acceso al estado del tenant del request -------------------------------
+//  OJO: con la caché encendida esto devuelve el MISMO objeto que mutan las
+//  escrituras. Un handler de solo lectura nunca debe modificarlo.
 function readState() {
   const c = ctx();
-  return db.loadState(c.row);
+  return cargarEstado(c.row);
 }
 
 // ---- Serializacion de escrituras por tenant --------------------------------
@@ -64,12 +103,20 @@ function enCola(row, fn) {
 function withState(fn) {
   const c = ctx();
   return enCola(c.row, async () => {
-    const st = await db.loadState(c.row);
+    const st = await cargarEstado(c.row);
     if (!st) throw new Error('Tenant sin estado');
     const result = await fn(st, c);
-    await db.saveState(c.row, st);
+    try {
+      await db.saveState(c.row, st);
+    } catch (err) {
+      // Si no se pudo guardar, la copia en memoria ya trae el cambio pero la
+      // base no: se descarta para que la siguiente lectura venga de Postgres.
+      invalidarCache(c.row);
+      throw err;
+    }
+    if (CACHE_ON) recordar(c.row, st);
     return result;
   });
 }
 
-module.exports = { als, firmarToken, auth, ctx, readState, withState, runPublic };
+module.exports = { als, firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache };
