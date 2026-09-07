@@ -847,6 +847,8 @@ app.post('/api/cocina/:folio/entregar', wrap(async (req, res) => {
 //  El efectivo NO entra al turno al entregar: entra cuando la moto liquida.
 // ---------------------------------------------------------------------------
 const repartoDe = (p) => (p.reparto || (p.reparto = M.nuevoReparto()));
+// Un domicilio ya despachado se cobra en Reparto, no en la lista de caja.
+const enReparto = (p) => M.esDomicilio(p) && p.reparto && p.reparto.estado !== 'por_asignar';
 // El usuario con el que se entra al sistema y la ficha de Personal son dos
 // registros distintos; se ligan con empleado.username. Sin esa liga, un
 // repartidor puede entrar pero el sistema no sabe quién es.
@@ -962,7 +964,9 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
     if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
     if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
     M.recalcularPedido(ped);
-    return M.marcarSalida(e, ped);
+    const r = M.marcarSalida(e, ped);
+    for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
+    return r;
   });
   res.json(p);
 }));
@@ -992,6 +996,7 @@ app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
     M.registrarPago(ped, { pagos, recibido, propina });
     M.descontarInventario(e, ped);
     M.marcarEntregado(ped);
+    for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido'; // por si no se marcó la salida
     ped.entregadoPor = (c || {}).username || null;
     // El repartidor está parado en la puerta del cliente: esa es la mejor
     // coordenada del domicilio que vamos a conseguir. Se guarda en el
@@ -1157,6 +1162,60 @@ app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
     repartidores, comentarios,
     efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
     foliosSinLiquidar: pendientes.map((p) => p.folio),
+  });
+}));
+
+// ---------------------------------------------------------------------------
+//  AVISOS — un solo latido para toda la app
+//  Devuelve folios, no conteos: el panel compara contra lo que ya tenía y sabe
+//  qué es NUEVO. Con puros números no se distingue "entró uno y salió otro".
+// ---------------------------------------------------------------------------
+app.get('/api/avisos', wrap(async (req, res) => {
+  const e = await readState();
+  const c = ctx();
+  const { sucursalId } = req.query;
+  const mio = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
+  const deSuc = (p) => !sucursalId || p.sucursalId === sucursalId;
+  const peds = Object.values(e.pedidos).filter((p) => deSuc(p) && p.estado !== 'cancelado');
+
+  // Cocina
+  const enCocina = [], listos = [];
+  for (const p of peds) {
+    if (p.estado === 'cobrado') continue;
+    if (p.reparto && ['en_ruta', 'entregado'].includes(p.reparto.estado)) continue;
+    const ls = p.lineas.filter((l) => l.cocina === 'enviado');
+    if (ls.length) enCocina.push(p.folio);
+    else if (p.tiemposCocina && p.tiemposCocina.listo && p.lineas.some((l) => l.cocina === 'servido') === false) listos.push(p.folio);
+  }
+
+  // Reparto (el repartidor solo ve lo suyo)
+  const dom = peds.filter((p) => M.esDomicilio(p) && (!mio || (p.reparto && p.reparto.repartidorId === mio.id)));
+  const prom = M.promedioEnRuta(e, sucursalId);
+  const limite = Math.max(25, Math.round((prom || 22) * 1.5));
+  const tardios = dom.filter((p) => M.enRuta(p) && p.reparto.salida
+    && (Date.now() - new Date(p.reparto.salida).getTime()) / 60000 >= limite).map((p) => p.folio);
+  const porLiquidar = dom.filter(M.porLiquidar);
+
+  const turno = sucursalId ? M.turnoAbierto(e, sucursalId) : null;
+  res.json({
+    ts: new Date().toISOString(),
+    cocina: { pendientes: enCocina, listos },
+    reparto: {
+      porAsignar: mio ? [] : dom.filter((p) => p.estado === 'abierto' && (!p.reparto || p.reparto.estado === 'por_asignar')).map((p) => p.folio),
+      asignados: dom.filter((p) => p.reparto && p.reparto.estado === 'asignado').map((p) => p.folio),
+      enRuta: dom.filter(M.enRuta).map((p) => p.folio),
+      porLiquidar: porLiquidar.map((p) => p.folio),
+      entregados: dom.filter((p) => p.reparto && p.reparto.estado === 'entregado').map((p) => p.folio),
+      tardios,
+      efectivoPendiente: M.r2(porLiquidar.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
+      promedioMin: prom,
+    },
+    caja: {
+      turnoAbierto: !!turno,
+      // Mesas se cobran en Mesas y domicilios en Reparto (los cobra la moto).
+      porCobrar: mio ? [] : peds.filter((p) => p.estado === 'abierto' && p.tipoServicio === 'mostrador' && p.lineas.length).map((p) => p.folio),
+      mesasConCuenta: mio ? 0 : Object.values(e.mesas || {}).filter((m) => (!sucursalId || m.sucursalId === sucursalId) && m.estado === 'cuenta').length,
+    },
   });
 }));
 
