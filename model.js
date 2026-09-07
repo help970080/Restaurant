@@ -28,7 +28,9 @@ function estadoInicial(meta = {}) {
     conteos: [],
     liquidaciones: [],
     clientes: {},
-    secuencias: { pedido: {} },
+    proveedores: {},
+    gastos: [],
+    secuencias: { pedido: {}, gasto: {} },
   };
 }
 
@@ -404,6 +406,126 @@ function calificarReparto(p, { estrellas, comentario = '' }) {
   return p.reparto.calificacion;
 }
 
+// ---- GASTOS Y COMPRAS -------------------------------------------------------
+//  Distinción que importa para no mentirle al estado de resultados:
+//  - Comprar insumos NO es gasto del periodo: es inventario. Se vuelve costo
+//    (COGS) cuando el producto se vende. Si se contara como gasto además del
+//    COGS, el mismo peso se restaría dos veces.
+//  - Gasolina, renta, reparaciones y demás sí son gasto operativo del periodo.
+const CATEGORIAS_GASTO = {
+  insumos:       { nombre: 'Insumos y mercancía', inventario: true },
+  gasolina:      { nombre: 'Gasolina y transporte' },
+  mantenimiento: { nombre: 'Mantenimiento y reparaciones' },
+  servicios:     { nombre: 'Servicios (luz, agua, gas)' },
+  renta:         { nombre: 'Renta' },
+  nomina:        { nombre: 'Nómina y honorarios' },
+  empaque:       { nombre: 'Empaques y desechables' },
+  limpieza:      { nombre: 'Limpieza' },
+  publicidad:    { nombre: 'Publicidad' },
+  otros:         { nombre: 'Otros' },
+};
+const esCompraInventario = (cat) => !!(CATEGORIAS_GASTO[cat] && CATEGORIAS_GASTO[cat].inventario);
+
+const crearProveedor = ({ nombre, telefono = '', contacto = '', notas = '' }) => ({
+  id: uid('prov'), nombre: String(nombre || '').trim(), telefono: String(telefono || '').replace(/[^\d+]/g, ''),
+  contacto, notas, activo: true, creado: new Date().toISOString(),
+});
+
+function folioGasto(e, sucId, codigo = 'SUC') {
+  if (!e.secuencias.gasto) e.secuencias.gasto = {};
+  e.secuencias.gasto[sucId] = (e.secuencias.gasto[sucId] || 0) + 1;
+  return `G-${codigo}-${String(e.secuencias.gasto[sucId]).padStart(4, '0')}`;
+}
+
+// Cada línea: { descripcion, insumoId?, cantidad, precioUnitario }
+function normalizarLineasGasto(e, lineas = []) {
+  const out = [];
+  for (const l of lineas) {
+    const cant = +l.cantidad, pu = +l.precioUnitario;
+    const desc = String(l.descripcion || '').trim() || ((e.insumos[l.insumoId] || {}).nombre) || '';
+    if (!desc) { const x = new Error('Cada renglón necesita concepto'); x.status = 400; throw x; }
+    if (!(cant > 0)) { const x = new Error(`Cantidad inválida en "${desc}"`); x.status = 400; throw x; }
+    if (!(pu >= 0)) { const x = new Error(`Precio inválido en "${desc}"`); x.status = 400; throw x; }
+    const insumoId = l.insumoId && e.insumos[l.insumoId] ? l.insumoId : null;
+    out.push({ id: uid('gl'), descripcion: desc, insumoId, unidad: insumoId ? e.insumos[insumoId].unidad : (l.unidad || ''),
+      cantidad: r2(cant), precioUnitario: r2(pu), importe: r2(cant * pu) });
+  }
+  if (!out.length) { const x = new Error('El gasto necesita al menos un renglón'); x.status = 400; throw x; }
+  return out;
+}
+
+function crearGasto(e, { sucursalId, codigo = 'SUC', categoria = 'otros', proveedorId = null, proveedorNombre = '',
+  lineas = [], metodoPago = 'efectivo', folioFactura = '', notas = '', turnoId = null, usuario = 'sistema', fecha = null }) {
+  if (!CATEGORIAS_GASTO[categoria]) { const x = new Error('Categoría de gasto desconocida'); x.status = 400; throw x; }
+  const ls = normalizarLineasGasto(e, lineas);
+  const prov = proveedorId ? e.proveedores[proveedorId] : null;
+  const g = {
+    id: uid('gas'), folio: folioGasto(e, sucursalId, codigo), sucursalId, categoria,
+    proveedorId: prov ? prov.id : null,
+    proveedor: prov ? prov.nombre : String(proveedorNombre || '').trim(),
+    lineas: ls, total: r2(ls.reduce((t, l) => t + l.importe, 0)),
+    metodoPago, folioFactura: String(folioFactura || '').trim(), notas: String(notas || '').trim(),
+    inventario: esCompraInventario(categoria),
+    estado: 'activo', turnoId, movimientoId: null,
+    fecha: fecha || new Date().toISOString(), creadoPor: usuario,
+  };
+  if (!e.gastos) e.gastos = [];
+  e.gastos.unshift(g);
+  return g;
+}
+
+// Compra de insumos: sube el stock y recalcula el costo unitario con promedio
+// ponderado, para que el food cost deje de ser un número teórico.
+function aplicarCompraInsumos(e, gasto, signo = 1) {
+  const tocados = [];
+  for (const l of gasto.lineas) {
+    if (!l.insumoId) continue;
+    const ins = e.insumos[l.insumoId];
+    if (!ins) continue;
+    const cant = r2(l.cantidad * signo);
+    if (signo > 0) {
+      const stockPrev = Math.max(0, ins.stock || 0);
+      const valorPrev = stockPrev * (ins.costoUnitario || 0);
+      const nuevoStock = r2(stockPrev + cant);
+      if (nuevoStock > 0) ins.costoUnitario = r2((valorPrev + l.cantidad * l.precioUnitario) / nuevoStock);
+      ins.stock = nuevoStock;
+    } else {
+      ins.stock = r2((ins.stock || 0) + cant); // al cancelar solo se devuelve el stock
+    }
+    tocados.push({ insumoId: ins.id, nombre: ins.nombre, stock: ins.stock, costoUnitario: ins.costoUnitario });
+  }
+  return tocados;
+}
+
+// Corta los gastos de un rango en compras de inventario vs gasto operativo
+function resumirGastos(gastos, { desde, hasta, sucursalId, tz = 'America/Mexico_City' } = {}) {
+  const dia = (iso) => {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: tz }); }
+    catch { return String(iso).slice(0, 10); }
+  };
+  const dentro = (g) => {
+    if (g.estado === 'cancelado') return false;
+    if (sucursalId && g.sucursalId !== sucursalId) return false;
+    const d = dia(g.fecha);
+    return (!desde || d >= desde) && (!hasta || d <= hasta);
+  };
+  const usados = gastos.filter(dentro);
+  const porCategoria = {};
+  let operativos = 0, compras = 0;
+  for (const g of usados) {
+    const k = g.categoria;
+    porCategoria[k] = porCategoria[k] || { categoria: k, nombre: (CATEGORIAS_GASTO[k] || {}).nombre || k, total: 0, movimientos: 0, inventario: !!g.inventario };
+    porCategoria[k].total = r2(porCategoria[k].total + g.total);
+    porCategoria[k].movimientos++;
+    if (g.inventario) compras = r2(compras + g.total); else operativos = r2(operativos + g.total);
+  }
+  return {
+    operativos, compras, total: r2(operativos + compras), movimientos: usados.length,
+    porCategoria: Object.values(porCategoria).sort((a, b) => b.total - a.total),
+  };
+}
+
 // ---- Pago -------------------------------------------------------------------
 function registrarPago(p, { pagos = [], recibido = 0, propina = null } = {}) {
   const ef = pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
@@ -494,6 +616,8 @@ module.exports = {
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
   llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
+  CATEGORIAS_GASTO, esCompraInventario, crearProveedor, folioGasto, normalizarLineasGasto,
+  crearGasto, aplicarCompraInsumos, resumirGastos,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
   costoReceta, foodCostPct, descontarInventario,
 };
