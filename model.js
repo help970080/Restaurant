@@ -458,6 +458,7 @@ function crearGasto(e, { sucursalId, codigo = 'SUC', categoria = 'otros', provee
   lineas = [], metodoPago = 'efectivo', folioFactura = '', notas = '', turnoId = null, usuario = 'sistema', fecha = null }) {
   if (!CATEGORIAS_GASTO[categoria]) { const x = new Error('Categoría de gasto desconocida'); x.status = 400; throw x; }
   const ls = normalizarLineasGasto(e, lineas);
+  if (!e.proveedores) e.proveedores = {};
   const prov = proveedorId ? e.proveedores[proveedorId] : null;
   const g = {
     id: uid('gas'), folio: folioGasto(e, sucursalId, codigo), sucursalId, categoria,
