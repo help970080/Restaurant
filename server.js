@@ -227,7 +227,7 @@ app.get('/api/me', wrap(async (req, res) => {
   const c = ctx();
   if (c.rol === 'superadmin') return res.json({ username: c.username, rol: 'superadmin', sucursalId: null, tenant: { nombre: 'Super Admin', logo: null } });
   const e = await readState();
-  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, row: c.row, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, fiscal: (e.config && e.config.fiscal) || {} } });
+  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, row: c.row, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, fiscal: (e.config && e.config.fiscal) || {}, zonaHoraria: tzTenant(e) } });
 }));
 
 // ---------------------------------------------------------------------------
@@ -1118,9 +1118,10 @@ app.get('/api/reparto/liquidaciones', puedeCaja, wrap(async (req, res) => {
 app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
   const e = await readState();
   const { sucursalId, desde, hasta } = req.query;
+  const tz = tzTenant(e);
   const dentro = (iso) => {
     if (!iso) return false;
-    const d = iso.slice(0, 10);
+    const d = diaLocal(iso, tz);
     return (!desde || d >= desde) && (!hasta || d <= hasta);
   };
   const peds = Object.values(e.pedidos).filter((p) =>
@@ -1157,6 +1158,127 @@ app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
     efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
     foliosSinLiquidar: pendientes.map((p) => p.folio),
   });
+}));
+
+// ---------------------------------------------------------------------------
+//  GASTOS Y COMPRAS
+//  Un gasto en efectivo sale del cajón: se registra como movimiento del turno
+//  para que el corte cuadre. Uno con tarjeta o transferencia no toca la caja
+//  pero sí el estado de resultados.
+// ---------------------------------------------------------------------------
+app.get('/api/gastos/categorias', wrap(async (req, res) => {
+  res.json(Object.entries(M.CATEGORIAS_GASTO).map(([id, c]) => ({ id, nombre: c.nombre, inventario: !!c.inventario })));
+}));
+
+app.get('/api/proveedores', wrap(async (req, res) => {
+  const e = await readState();
+  res.json(Object.values(e.proveedores || {}).filter((p) => p.activo !== false).sort((a, b) => a.nombre.localeCompare(b.nombre)));
+}));
+
+app.post('/api/proveedores', puedeCaja, wrap(async (req, res) => {
+  const { nombre } = req.body || {};
+  if (!String(nombre || '').trim()) throw bad('Falta el nombre del proveedor');
+  const p = await withState((e) => {
+    if (!e.proveedores) e.proveedores = {};
+    const ya = Object.values(e.proveedores).find((x) => x.nombre.toLowerCase() === String(nombre).trim().toLowerCase());
+    if (ya) return ya; // no duplicar al capturar rápido
+    const x = M.crearProveedor(req.body || {});
+    e.proveedores[x.id] = x;
+    return x;
+  });
+  res.json(p);
+}));
+
+app.patch('/api/proveedores/:id', soloAdmin, wrap(async (req, res) => {
+  const p = await withState((e) => {
+    const x = (e.proveedores || {})[req.params.id];
+    if (!x) throw bad('Proveedor inexistente', 404);
+    for (const k of ['nombre', 'telefono', 'contacto', 'notas', 'activo']) if (req.body[k] !== undefined) x[k] = req.body[k];
+    return x;
+  });
+  res.json(p);
+}));
+
+app.get('/api/gastos', wrap(async (req, res) => {
+  const e = await readState();
+  const { desde, hasta, sucursalId, categoria, limit = 100 } = req.query;
+  const tz = tzTenant(e);
+  const dentro = (g) => {
+    if (g.estado === 'cancelado' && !desde && !hasta) return true;
+    if (sucursalId && g.sucursalId !== sucursalId) return false;
+    if (categoria && g.categoria !== categoria) return false;
+    const d = diaLocal(g.fecha, tz);
+    return (!desde || d >= desde) && (!hasta || d <= hasta);
+  };
+  const lista = (e.gastos || []).filter(dentro);
+  res.json({
+    resumen: M.resumirGastos(e.gastos || [], { desde, hasta, sucursalId, tz: tzTenant(e) }),
+    gastos: lista.slice(0, +limit),
+  });
+}));
+
+app.post('/api/gastos', puedeCaja, wrap(async (req, res) => {
+  const { sucursalId, categoria = 'otros', lineas = [], metodoPago = 'efectivo' } = req.body || {};
+  if (!sucursalId) throw bad('Falta sucursalId');
+  if (!['efectivo', 'tarjeta', 'transferencia', 'credito'].includes(metodoPago)) throw bad('Método de pago inválido');
+  const out = await withState((e, c) => {
+    const suc = e.sucursales[sucursalId];
+    if (!suc) throw bad('Sucursal inexistente');
+    const turno = M.turnoAbierto(e, sucursalId);
+    // Solo el efectivo exige turno: es lo único que sale físicamente del cajón.
+    if (metodoPago === 'efectivo' && !turno) throw bad('Abre el turno de caja para registrar un gasto en efectivo', 409);
+    // Si llega solo el nombre, se busca o se crea: así no quedan gastos
+    // huérfanos ni proveedores duplicados por diferencias de mayúsculas.
+    let provId = req.body.proveedorId || null;
+    const provNom = String(req.body.proveedorNombre || '').trim();
+    if (!provId && provNom) {
+      if (!e.proveedores) e.proveedores = {};
+      const ya = Object.values(e.proveedores).find((x) => x.nombre.toLowerCase() === provNom.toLowerCase());
+      if (ya) provId = ya.id;
+      else { const np = M.crearProveedor({ nombre: provNom }); e.proveedores[np.id] = np; provId = np.id; }
+    }
+    const g = M.crearGasto(e, Object.assign({}, req.body, {
+      proveedorId: provId,
+      codigo: suc.codigo, turnoId: metodoPago === 'efectivo' && turno ? turno.id : null,
+      usuario: c.username, lineas, categoria,
+    }));
+    let insumos = [];
+    if (g.inventario) insumos = M.aplicarCompraInsumos(e, g, 1);
+    if (metodoPago === 'efectivo' && turno) {
+      M.registrarMovimiento(turno, {
+        tipo: 'salida', monto: g.total,
+        motivo: `${(M.CATEGORIAS_GASTO[g.categoria] || {}).nombre || g.categoria}${g.proveedor ? ' · ' + g.proveedor : ''} (${g.folio})`,
+        usuario: c.username,
+      });
+      g.movimientoId = turno.movimientos[turno.movimientos.length - 1].id;
+    }
+    return { gasto: g, insumos };
+  });
+  res.json(out);
+}));
+
+app.post('/api/gastos/:id/cancelar', soloAdmin, wrap(async (req, res) => {
+  const out = await withState((e, c) => {
+    const g = (e.gastos || []).find((x) => x.id === req.params.id);
+    if (!g) throw bad('Gasto inexistente', 404);
+    if (g.estado === 'cancelado') throw bad('El gasto ya está cancelado', 409);
+    let devuelto = null;
+    if (g.movimientoId) {
+      // El dinero ya salió del cajón: se repone con una entrada en el turno
+      // abierto, para no alterar un corte que ya se cerró.
+      const turno = M.turnoAbierto(e, g.sucursalId);
+      if (!turno) throw bad('Abre el turno de caja: hay que reponer el efectivo de este gasto', 409);
+      M.registrarMovimiento(turno, { tipo: 'entrada', monto: g.total, motivo: `Cancelación de ${g.folio}`, usuario: c.username });
+      devuelto = turno.id;
+    }
+    if (g.inventario) M.aplicarCompraInsumos(e, g, -1);
+    g.estado = 'cancelado';
+    g.canceladoPor = c.username;
+    g.cancelado = new Date().toISOString();
+    g.motivoCancelacion = String((req.body || {}).motivo || '').trim();
+    return { gasto: g, efectivoRepuestoEn: devuelto };
+  });
+  res.json(out);
 }));
 
 // ---------------------------------------------------------------------------
@@ -1454,14 +1576,25 @@ app.post('/api/mesas/bulk', wrap(async (req, res) => {
 //  REPORTES
 // ---------------------------------------------------------------------------
 // --- Filtro de pedidos cobrados por sucursal y rango de fechas (para reportes) ---
-function _fechaPed(p) { return new Date((p.pago && p.pago.timestamp) || p.actualizado || p.creado).getTime(); }
+function _fechaPed(p) { return (p.pago && p.pago.timestamp) || p.actualizado || p.creado; }
+// Zona horaria del restaurante. Un pedido de las 9 de la noche en Morelos cae
+// al día siguiente en UTC: sin esto, la venta de la noche se contaba en el día
+// equivocado y el filtro "hasta" dejaba fuera el último día completo.
+const tzTenant = (e) => (e.config && e.config.zonaHoraria) || 'America/Mexico_City';
+function diaLocal(iso, tz) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: tz }); }
+  catch { return String(iso).slice(0, 10); }
+}
 function pedsCobrados(e, sucursalId, desde, hasta) {
-  const d = desde ? new Date(desde).getTime() : null;
-  const h = hasta ? new Date(hasta).getTime() : null;
-  return Object.values(e.pedidos).filter((p) => p.estado === 'cobrado'
-    && (!sucursalId || p.sucursalId === sucursalId)
-    && (d == null || _fechaPed(p) >= d)
-    && (h == null || _fechaPed(p) <= h));
+  const tz = tzTenant(e);
+  return Object.values(e.pedidos).filter((p) => {
+    if (p.estado !== 'cobrado') return false;
+    if (sucursalId && p.sucursalId !== sucursalId) return false;
+    if (!desde && !hasta) return true;
+    const d = diaLocal(_fechaPed(p), tz);
+    return (!desde || d >= desde) && (!hasta || d <= hasta);
+  });
 }
 app.get('/api/reportes/resumen', wrap(async (req, res) => {
   const e = await readState();
@@ -1531,6 +1664,10 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
   const comisionTotal = M.r2(canalesOut.reduce((s, c) => s + c.comision, 0));
   const envios = M.r2(peds.reduce((s, p) => s + (p.costoEnvio || 0), 0));
   const nominaBase = M.r2(Object.values(e.empleados || {}).filter((x) => x.activo).reduce((s, x) => s + x.salarioBase, 0));
+  // Gastos capturados en el mismo rango. Las compras de insumos NO se restan
+  // aquí: ya entran como COGS al venderse. Restarlas otra vez duplicaría el costo.
+  const gastos = M.resumirGastos(e.gastos || [], { desde, hasta, sucursalId, tz: tzTenant(e) });
+  const utilidadOperativa = M.r2(margenBruto - comisionTotal - gastos.operativos);
   const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
     nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
     margen: M.r2(d.ingreso - d.costo), margenPct: d.ingreso ? M.r2((d.ingreso - d.costo) / d.ingreso * 100) : 0,
@@ -1542,6 +1679,9 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
     descuentos, pedidos: peds.length,
     ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
     comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
+    gastos,
+    utilidadOperativa,
+    utilidadPct: ingresos ? M.r2(utilidadOperativa / ingresos * 100) : 0,
     // 'envios' se separa para que no infle el margen: no es venta de producto.
     envios, ingresosProducto: M.r2(ingresos - envios),
     foodCostPctProducto: (ingresos - envios) > 0 ? M.r2(cogs / (ingresos - envios) * 100) : 0,
