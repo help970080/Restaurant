@@ -493,6 +493,27 @@
 .dia-n{flex:0 0 26px;text-align:right;font-weight:700}
 .dia-v{flex:0 0 84px;text-align:right}
 @media(max-width:820px){.dia-f{flex:0 0 76px}.dia-v{flex:0 0 70px}}
+
+/* ---- Pantalla del repartidor ---- */
+.moto-hero{background:var(--ink);color:#f2ede2;border-radius:16px;padding:14px 16px;margin-bottom:12px;text-align:center}
+.moto-hero.apura{background:var(--red)}
+.mh-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.75;font-weight:700}
+.mh-cron{font-family:var(--mono);font-size:40px;font-weight:700;line-height:1.05;margin:2px 0}
+.mh-sub{font-size:12.5px;opacity:.85}
+.moto-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.mt{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 8px;text-align:center;min-width:0}
+.mt b{display:block;font-family:var(--mono);font-size:16px;font-weight:700;line-height:1.15;overflow-wrap:anywhere}
+.mt span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;font-weight:600;margin-top:2px}
+.mt.ojo b{color:var(--accent-ink)}
+.moto-corte{margin-bottom:12px}
+.mc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.mc{background:var(--paper);border-radius:10px;padding:8px;text-align:center}
+.mc b{display:block;font-family:var(--mono);font-size:15px;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.mc span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;font-weight:600;margin-top:2px}
+.mc-liq{margin-top:10px;background:#fffaf2;border:1px solid var(--accent);border-radius:10px;padding:8px 10px;font-size:13px;text-align:center}
+.mc-ok{margin-top:10px;color:var(--green);font-size:13px;text-align:center;font-weight:600}
+.rc-cron{margin-left:auto;font-size:12px;font-weight:700;color:var(--blue)}
+@media(max-width:360px){.moto-tiles{grid-template-columns:repeat(2,1fr)}.mc-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -1621,6 +1642,7 @@ function pintarReparto(){
     </div>`;
   if(tab.puedeGps)pintarBannerGPS();
   else if(gpsOn())detenerGPS(); // un interruptor encendido por error deja de molestar
+  arrancarCronos();
   if(tab.enRuta.length)dibujarMapaOperacion(tab.enRuta);
   document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
   document.querySelectorAll('[data-copiaseg]').forEach(b=>b.onclick=()=>copiarSeguimiento(b.dataset.copiaseg));
@@ -1647,30 +1669,80 @@ function urlComoLlegar(p){
   if(!dir)return null;
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dir)}&travelmode=driving`;
 }
+// Pantalla del repartidor: cabe en un teléfono sin scroll interminable.
+// Mosaico compacto arriba, columnas vacías escondidas, y su corte del día.
 function pintarRepartoMoto(tab,reps){
   const mio=reps[0]||{};
   const pend=tab.porLiquidar.reduce((t,p)=>t+(p.efectivo||0),0);
-  const col=(titulo,arr,tipo)=>`<div class="rep-col">
+  const activo=tab.enRuta[0]||null;
+  const col=(titulo,arr,tipo)=>arr.length?`<div class="rep-col">
     <div class="rep-col-h"><span>${titulo}</span><span class="rep-n">${arr.length}</span></div>
-    ${arr.length?arr.map(p=>tarjetaPedidoRep(p,tipo,false)).join(''):'<div class="empty">Nada aquí</div>'}</div>`;
+    ${arr.map(p=>tarjetaPedidoRep(p,tipo,false)).join('')}</div>`:'';
+  const vacio=!tab.asignados.length&&!tab.enRuta.length&&!tab.porLiquidar.length;
   $('#view').innerHTML=`
     <div id="gpsBanner"></div>
-    <div class="kpis">
-      <div class="kpi"><div class="lab">Por salir</div><div class="val">${tab.asignados.length}</div></div>
-      <div class="kpi"><div class="lab">En ruta</div><div class="val">${tab.enRuta.length}</div></div>
-      <div class="kpi"><div class="lab">Traes en efectivo</div><div class="val" style="color:${pend>0?'var(--accent-ink)':'var(--green)'}">${money(pend)}</div><div class="lab" style="margin-top:2px">${tab.porLiquidar.length} entrega(s) por liquidar en caja</div></div>
-      ${mio.estrellas?`<div class="kpi"><div class="lab">Tu calificación</div><div class="val" style="color:var(--accent)">${mio.estrellas}</div><div class="lab" style="margin-top:2px">${estrellasTxt(mio.estrellas)} · ${mio.calificaciones} opinión(es)</div></div>`:''}
+    ${activo?`<div class="moto-hero${activo.etaMin===0?' apura':''}">
+      <div class="mh-l">En ruta ahora · ${activo.folio}</div>
+      <div class="mh-cron" data-cron="${(activo.reparto||{}).salida||''}">--:--</div>
+      <div class="mh-sub">${(activo.cliente&&activo.cliente.nombre)||''}${activo.distanciaKm!=null?` · a ${activo.distanciaKm<1?Math.round(activo.distanciaKm*1000)+' m':activo.distanciaKm.toFixed(1)+' km'}`:''}${activo.etaMin!=null?` · quedan ~${activo.etaMin} min`:''}</div>
+    </div>`:''}
+    <div class="moto-tiles">
+      <div class="mt"><b>${tab.asignados.length}</b><span>Por salir</span></div>
+      <div class="mt"><b>${tab.enRuta.length}</b><span>En ruta</span></div>
+      <div class="mt ${pend>0?'ojo':''}"><b>${money(pend)}</b><span>Traes en efectivo</span></div>
+      <div class="mt"><b>${tab.porLiquidar.length}</b><span>Por liquidar</span></div>
     </div>
+    <div id="motoCorte"></div>
+    ${vacio?'<div class="panel"><div class="empty">Sin entregas asignadas. En cuanto caja te asigne un pedido aparece aquí y suena.</div></div>':`
     <div class="rep-board moto">
       ${col('Por salir',tab.asignados,'asignado')}
       ${col('En ruta',tab.enRuta,'en_ruta')}
       ${col('Entregados sin liquidar',tab.porLiquidar,'entregado')}
-    </div>`;
+    </div>`}`;
   pintarBannerGPS();
+  arrancarCronos();
+  cargarCorteMoto(mio);
   document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=()=>modalEntregar(b.dataset.entregar));
   document.querySelectorAll('[data-ticketrep]').forEach(b=>b.onclick=async()=>{
     try{ticketFinal(await API.get('/api/pedidos/'+b.dataset.ticketrep));}catch(e){toast(e.message);}
   });
+}
+// Cronómetro vivo: los minutos del tablero se refrescan cada 20s, pero el
+// repartidor quiere ver correr el tiempo de la entrega que trae encima.
+let cronoTimer=null;
+function arrancarCronos(){
+  if(cronoTimer){clearInterval(cronoTimer);cronoTimer=null;}
+  const pinta=()=>{
+    const els=document.querySelectorAll('[data-cron]');
+    if(!els.length){if(cronoTimer){clearInterval(cronoTimer);cronoTimer=null;}return;}
+    els.forEach(el=>{
+      const t0=el.dataset.cron;if(!t0)return;
+      const s=Math.max(0,Math.floor((Date.now()-new Date(t0).getTime())/1000));
+      el.textContent=`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+    });
+  };
+  pinta();cronoTimer=setInterval(pinta,1000);
+}
+// Corte personal del día: lo que hizo y lo que trae
+async function cargarCorteMoto(mio){
+  const c=$('#motoCorte');if(!c)return;
+  const hoy=fechaHoy();
+  let d;try{d=await API.get(`/api/reparto/reporte?sucursalId=${app.sucursalId}&desde=${hoy}&hasta=${hoy}`);}catch{c.innerHTML='';return;}
+  if(!$('#motoCorte'))return;
+  const r=(d.repartidores||[])[0]||{};
+  if(!d.entregas&&!d.efectivoSinLiquidar){c.innerHTML='';return;}
+  c.innerHTML=`<div class="panel moto-corte"><h3>Tu corte de hoy</h3>
+    <div class="mc-grid">
+      <div class="mc"><b>${d.entregas}</b><span>Entregas</span></div>
+      <div class="mc"><b>${d.piezas}</b><span>Piezas</span></div>
+      <div class="mc"><b>${money(d.venta)}</b><span>Cobrado</span></div>
+      <div class="mc"><b>${money(d.propinas||0)}</b><span>Propinas</span></div>
+      <div class="mc"><b>${d.minutosPromedioEnRuta!=null?d.minutosPromedioEnRuta+' min':'—'}</b><span>Promedio</span></div>
+      <div class="mc"><b>${r.calificacion?estrellasTxt(r.calificacion):'—'}</b><span>${r.califs?r.califs+' opinión(es)':'Sin calificar'}</span></div>
+    </div>
+    ${d.efectivoSinLiquidar>0?`<div class="mc-liq">Entrega <b>${money(d.efectivoSinLiquidar)}</b> en caja para cerrar tu turno.</div>`:'<div class="mc-ok">✓ No traes efectivo pendiente.</div>'}
+    ${r.fallidos?`<div class="small" style="color:var(--red);margin-top:6px">${r.fallidos} intento(s) fallido(s) hoy.</div>`:''}
+  </div>`;
 }
 function tarjetaPedidoRep(p,tipo,caja){
   const c=p.cliente||{};const r=p.reparto||{};
@@ -1682,6 +1754,7 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${p.distanciaKm!=null?`<span class="rc-km">${p.distanciaKm<1?Math.round(p.distanciaKm*1000)+' m':p.distanciaKm.toFixed(1)+' km'}</span><span class="rc-al">del domicilio</span>`
         :(p.moto?'<span class="rc-al">Sin domicilio ubicado — se aprende en esta entrega</span>':'<span class="rc-al">La moto no comparte ubicación</span>')}
       ${p.etaMin!=null?`<span class="rc-eta">${p.etaMin>0?'~'+p.etaMin+' min':'debería estar llegando'}</span>`:''}
+      ${(p.reparto&&p.reparto.salida)?`<span class="rc-cron mono" data-cron="${p.reparto.salida}">--:--</span>`:''}
     </div>`:'';
   const califica=r.calificacion?`<div class="rc-cal" title="${(r.calificacion.comentario||'').replace(/"/g,'')}">${estrellasTxt(r.calificacion.estrellas)}${r.calificacion.comentario?' <span class="rc-com">“'+r.calificacion.comentario.slice(0,60)+'”</span>':''}</div>`:'';
   return `<div class="rep-card ${tarde?'tarde':''}">
