@@ -68,7 +68,7 @@ app.post('/api/admin/provision', wrap(async (req, res) => {
   const setup = process.env.SETUP_TOKEN;
   if (!setup) throw bad('SETUP_TOKEN no configurado', 500);
   if (req.headers['x-setup-token'] !== setup) throw bad('No autorizado', 401);
-  const { nombre = 'Jefe Burgers', adminUser, adminPass, plantilla = 'restaurante' } = req.body || {};
+  const { nombre = 'Jefe Pizzas', adminUser, adminPass, plantilla = 'restaurante' } = req.body || {};
   if (!adminUser || !adminPass) throw bad('Falta adminUser/adminPass');
   const sys = await db.loadSys();
   if (sys.usuarios[adminUser]) throw bad('Ese usuario ya existe', 409);
