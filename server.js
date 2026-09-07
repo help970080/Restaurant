@@ -1120,14 +1120,15 @@ app.get('/api/reparto/liquidaciones', puedeCaja, wrap(async (req, res) => {
 }));
 
 // Desempeño de reparto en un rango
-app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
+app.get('/api/reparto/reporte', puedeCaja, wrap(async (req, res) => {
   const e = await readState();
   const { sucursalId, desde, hasta } = req.query;
   const tz = tzTenant(e);
+  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
   const dentro = (iso) => {
     if (!iso) return false;
     const d = diaLocal(iso, tz);
-    return (!desde || d >= desde) && (!hasta || d <= hasta);
+    return (!d1 || d >= d1) && (!d2 || d <= d2);
   };
   const peds = Object.values(e.pedidos).filter((p) =>
     M.esDomicilio(p) && p.reparto && p.reparto.estado === 'entregado' &&
@@ -1137,9 +1138,10 @@ app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
   for (const p of peds) {
     const r = p.reparto;
     const k = r.repartidorId || 'sin_asignar';
-    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, venta: 0, minutos: 0, conTiempo: 0, fallidos: 0, estrellas: 0, califs: 0 };
+    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, piezas: 0, venta: 0, minutos: 0, conTiempo: 0, fallidos: 0, estrellas: 0, califs: 0 };
     if (r.calificacion) { porRep[k].estrellas += r.calificacion.estrellas; porRep[k].califs++; }
     porRep[k].entregas++;
+    porRep[k].piezas += (p.lineas || []).reduce((t, l) => t + l.cantidad, 0);
     porRep[k].venta = M.r2(porRep[k].venta + p.total);
     porRep[k].fallidos += r.intentos || 0;
     const t = M.tiemposReparto(p);
@@ -1155,9 +1157,20 @@ app.get('/api/reparto/reporte', soloAdmin, wrap(async (req, res) => {
     .slice(0, 25)
     .map((p) => ({ folio: p.folio, repartidor: p.reparto.repartidorNombre, estrellas: p.reparto.calificacion.estrellas, comentario: p.reparto.calificacion.comentario, fecha: p.reparto.calificacion.fecha }));
   const pendientes = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && (!sucursalId || p.sucursalId === sucursalId));
+  // Serie por día para ver la tendencia de la semana o del mes
+  const porDia = {};
+  for (const p of peds) {
+    const d = diaLocal(p.reparto.entregado, tz);
+    porDia[d] = porDia[d] || { dia: d, entregas: 0, piezas: 0, venta: 0 };
+    porDia[d].entregas++;
+    porDia[d].piezas += (p.lineas || []).reduce((t, l) => t + l.cantidad, 0);
+    porDia[d].venta = M.r2(porDia[d].venta + p.total);
+  }
   res.json({
     entregas: peds.length,
+    piezas: peds.reduce((t, p) => t + (p.lineas || []).reduce((u, l) => u + l.cantidad, 0), 0),
     venta: M.r2(peds.reduce((t, p) => t + p.total, 0)),
+    porDia: Object.values(porDia).sort((a, b) => a.dia.localeCompare(b.dia)),
     minutosPromedioEnRuta: nRuta ? M.r2(sumRuta / nRuta) : null,
     repartidores, comentarios,
     efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
@@ -1262,16 +1275,16 @@ app.get('/api/gastos', wrap(async (req, res) => {
   const e = await readState();
   const { desde, hasta, sucursalId, categoria, limit = 100 } = req.query;
   const tz = tzTenant(e);
+  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
   const dentro = (g) => {
-    if (g.estado === 'cancelado' && !desde && !hasta) return true;
     if (sucursalId && g.sucursalId !== sucursalId) return false;
     if (categoria && g.categoria !== categoria) return false;
     const d = diaLocal(g.fecha, tz);
-    return (!desde || d >= desde) && (!hasta || d <= hasta);
+    return (!d1 || d >= d1) && (!d2 || d <= d2);
   };
   const lista = (e.gastos || []).filter(dentro);
   res.json({
-    resumen: M.resumirGastos(e.gastos || [], { desde, hasta, sucursalId, tz: tzTenant(e) }),
+    resumen: M.resumirGastos(e.gastos || [], { desde: d1, hasta: d2, sucursalId, tz: tzTenant(e) }),
     gastos: lista.slice(0, +limit),
   });
 }));
@@ -1645,14 +1658,23 @@ function diaLocal(iso, tz) {
   try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: tz }); }
   catch { return String(iso).slice(0, 10); }
 }
+// desde/hasta pueden llegar como '2026-09-01' (vista Gastos) o como fecha-hora
+// ISO completa (los presets de Reportes mandan el instante exacto). Ambas se
+// reducen al DÍA del restaurante para comparar contra días, no contra textos.
+function diaParam(v, tz) {
+  const t = String(v || '').trim();
+  if (!t) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : diaLocal(t, tz);
+}
 function pedsCobrados(e, sucursalId, desde, hasta) {
   const tz = tzTenant(e);
+  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
   return Object.values(e.pedidos).filter((p) => {
     if (p.estado !== 'cobrado') return false;
     if (sucursalId && p.sucursalId !== sucursalId) return false;
-    if (!desde && !hasta) return true;
+    if (!d1 && !d2) return true;
     const d = diaLocal(_fechaPed(p), tz);
-    return (!desde || d >= desde) && (!hasta || d <= hasta);
+    return (!d1 || d >= d1) && (!d2 || d <= d2);
   });
 }
 app.get('/api/reportes/resumen', wrap(async (req, res) => {
@@ -1725,7 +1747,7 @@ app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
   const nominaBase = M.r2(Object.values(e.empleados || {}).filter((x) => x.activo).reduce((s, x) => s + x.salarioBase, 0));
   // Gastos capturados en el mismo rango. Las compras de insumos NO se restan
   // aquí: ya entran como COGS al venderse. Restarlas otra vez duplicaría el costo.
-  const gastos = M.resumirGastos(e.gastos || [], { desde, hasta, sucursalId, tz: tzTenant(e) });
+  const gastos = M.resumirGastos(e.gastos || [], { desde: diaParam(desde, tzTenant(e)), hasta: diaParam(hasta, tzTenant(e)), sucursalId, tz: tzTenant(e) });
   const utilidadOperativa = M.r2(margenBruto - comisionTotal - gastos.operativos);
   const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
     nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
