@@ -1120,9 +1120,13 @@ app.get('/api/reparto/liquidaciones', puedeCaja, wrap(async (req, res) => {
 }));
 
 // Desempeño de reparto en un rango
-app.get('/api/reparto/reporte', puedeCaja, wrap(async (req, res) => {
+app.get('/api/reparto/reporte', wrap(async (req, res) => {
   const e = await readState();
+  const c = ctx();
   const { sucursalId, desde, hasta } = req.query;
+  const mio = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
+  if (esRolRepartidor(c) && !mio) throw bad('Tu usuario no está ligado a una ficha de Personal.', 409);
+  if (!mio && !['admin', 'gerente', 'cajero'].includes(c.rol)) throw bad('Sin permiso', 403);
   const tz = tzTenant(e);
   const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
   const dentro = (iso) => {
@@ -1132,17 +1136,19 @@ app.get('/api/reparto/reporte', puedeCaja, wrap(async (req, res) => {
   };
   const peds = Object.values(e.pedidos).filter((p) =>
     M.esDomicilio(p) && p.reparto && p.reparto.estado === 'entregado' &&
-    (!sucursalId || p.sucursalId === sucursalId) && dentro(p.reparto.entregado));
+    (!sucursalId || p.sucursalId === sucursalId) && dentro(p.reparto.entregado) &&
+    (!mio || p.reparto.repartidorId === mio.id));
   const porRep = {};
   let sumRuta = 0, nRuta = 0;
   for (const p of peds) {
     const r = p.reparto;
     const k = r.repartidorId || 'sin_asignar';
-    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, piezas: 0, venta: 0, minutos: 0, conTiempo: 0, fallidos: 0, estrellas: 0, califs: 0 };
+    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, piezas: 0, venta: 0, propinas: 0, minutos: 0, conTiempo: 0, fallidos: 0, estrellas: 0, califs: 0 };
     if (r.calificacion) { porRep[k].estrellas += r.calificacion.estrellas; porRep[k].califs++; }
     porRep[k].entregas++;
     porRep[k].piezas += (p.lineas || []).reduce((t, l) => t + l.cantidad, 0);
     porRep[k].venta = M.r2(porRep[k].venta + p.total);
+    porRep[k].propinas = M.r2((porRep[k].propinas || 0) + ((p.propina && p.propina.monto) || 0));
     porRep[k].fallidos += r.intentos || 0;
     const t = M.tiemposReparto(p);
     if (t.enRuta != null) { porRep[k].minutos = M.r2(porRep[k].minutos + t.enRuta); porRep[k].conTiempo++; sumRuta += t.enRuta; nRuta++; }
@@ -1156,7 +1162,8 @@ app.get('/api/reparto/reporte', puedeCaja, wrap(async (req, res) => {
     .sort((a, b) => new Date(b.reparto.calificacion.fecha) - new Date(a.reparto.calificacion.fecha))
     .slice(0, 25)
     .map((p) => ({ folio: p.folio, repartidor: p.reparto.repartidorNombre, estrellas: p.reparto.calificacion.estrellas, comentario: p.reparto.calificacion.comentario, fecha: p.reparto.calificacion.fecha }));
-  const pendientes = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && (!sucursalId || p.sucursalId === sucursalId));
+  const pendientes = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && (!sucursalId || p.sucursalId === sucursalId)
+    && (!mio || p.reparto.repartidorId === mio.id));
   // Serie por día para ver la tendencia de la semana o del mes
   const porDia = {};
   for (const p of peds) {
@@ -1170,6 +1177,8 @@ app.get('/api/reparto/reporte', puedeCaja, wrap(async (req, res) => {
     entregas: peds.length,
     piezas: peds.reduce((t, p) => t + (p.lineas || []).reduce((u, l) => u + l.cantidad, 0), 0),
     venta: M.r2(peds.reduce((t, p) => t + p.total, 0)),
+    propinas: M.r2(peds.reduce((t, p) => t + ((p.propina && p.propina.monto) || 0), 0)),
+    soloMias: !!mio,
     porDia: Object.values(porDia).sort((a, b) => a.dia.localeCompare(b.dia)),
     minutosPromedioEnRuta: nRuta ? M.r2(sumRuta / nRuta) : null,
     repartidores, comentarios,
