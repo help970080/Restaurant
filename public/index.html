@@ -482,6 +482,17 @@
   .tira-l{font-size:10px}
   .tira .btn{width:100%;margin-left:0;margin-top:4px}
 }
+
+/* ---- Ranking de repartidores y entregas por día ---- */
+.rk-bar{height:5px;background:var(--paper);border-radius:3px;margin-top:4px;overflow:hidden}
+.rk-bar div{height:100%;background:var(--accent);border-radius:3px}
+.dia-r{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px}
+.dia-f{flex:0 0 96px;color:var(--muted);text-transform:capitalize}
+.dia-b{flex:1;height:8px;background:var(--paper);border-radius:4px;overflow:hidden;min-width:30px}
+.dia-b div{height:100%;background:var(--blue);border-radius:4px}
+.dia-n{flex:0 0 26px;text-align:right;font-weight:700}
+.dia-v{flex:0 0 84px;text-align:right}
+@media(max-width:820px){.dia-f{flex:0 0 76px}.dia-v{flex:0 0 70px}}
 </style>
 </head>
 <body>
@@ -2716,7 +2727,11 @@ async function vReportes(){
   <div class="panel" style="margin-top:16px"><h3>Cortes de caja</h3>${cortes.length?`<table><thead><tr><th>Cierre</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th><th>Resultado</th></tr></thead><tbody>
     ${cortes.map(t=>`<tr><td>${new Date(t.cerrado).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="num">${money(t.esperado.efectivo)}</td><td class="num">${money(t.conteo)}</td><td class="num" style="color:${t.diferencia<0?'var(--red)':t.diferencia>0?'var(--accent-ink)':'var(--green)'}">${money(t.diferencia)}</td><td><span class="chip ${t.resultado==='faltante'?'low':t.resultado==='cuadrado'?'ok':''}">${t.resultado}</span></td></tr>`).join('')}
   </tbody></table>`:'<div class="empty">Aún no cierras ningún turno.</div>'}</div>
+  <div id="repartoBlock"></div>
+  <div id="gastosBlock"></div>
   <div id="finBlock"></div>`;
+  renderRepartoReporte();
+  if(esAdmin())renderGastosReporte();
   if(esAdmin())renderFinanciero();
   if($('#repCSV'))$('#repCSV').onclick=()=>exportarReportesCSV(res);
   if($('#repEjec'))$('#repEjec').onclick=resumenEjecutivo;
@@ -2727,7 +2742,7 @@ function descargarCSV(nombre,filas){
   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download=nombre;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-function exportarReportesCSV(res){
+async function exportarReportesCSV(res){
   const fecha=new Date().toLocaleDateString('es-MX');const suc=app.sucursales.find(s=>s.id===app.sucursalId)?.nombre||'';
   const f=[['ComandaPro · Reporte de ventas'],[ (app.tenant&&app.tenant.nombre)||'', suc, fecha],[],
     ['Venta total',res.venta],['Pedidos',res.pedidos],['Ticket promedio',res.ticketPromedio],['Propinas',res.propinas||0],[],
@@ -2736,8 +2751,98 @@ function exportarReportesCSV(res){
   f.push([],['POR SERVICIO'],['Servicio','Importe']);['mostrador','domicilio','mesa'].forEach(k=>f.push([k,res.porServicio[k]]));
   f.push([],['POR MÉTODO DE PAGO'],['Método','Importe']);['efectivo','tarjeta','transferencia'].forEach(k=>f.push([k,res.porPago[k]]));
   f.push([],['POR HORA'],['Hora','Venta','Pedidos']);(res.porHora||[]).forEach((x,h)=>{if(x.venta>0)f.push([String(h).padStart(2,'0')+':00',x.venta,x.pedidos]);});
+  // Reparto y gastos del mismo periodo, para que el CSV cuente la historia completa
+  try{
+    const d=await API.get('/api/reparto/reporte'+qsRango(app.sucursalId,app._repRango));
+    if(d.entregas){
+      f.push([],['REPARTO A DOMICILIO'],['Entregas',d.entregas],['Piezas',d.piezas],['Venta',d.venta],['Minutos promedio en ruta',d.minutosPromedioEnRuta==null?'':d.minutosPromedioEnRuta]);
+      f.push([],['RANKING DE REPARTIDORES'],['Repartidor','Entregas','Piezas','Venta','Ticket promedio','Min. promedio','Calificación','Fallidos']);
+      d.repartidores.slice().sort((a,b)=>b.venta-a.venta).forEach(x=>f.push([x.nombre,x.entregas,x.piezas,x.venta,x.ticketPromedio,x.minutosPromedio==null?'':x.minutosPromedio,x.calificacion==null?'':x.calificacion,x.fallidos]));
+      if((d.porDia||[]).length){f.push([],['ENTREGAS POR DÍA'],['Día','Entregas','Piezas','Venta']);d.porDia.forEach(x=>f.push([x.dia,x.entregas,x.piezas,x.venta]));}
+    }
+  }catch(e){}
+  try{
+    const g=await API.get('/api/gastos'+qsRango(app.sucursalId,app._repRango));
+    if(g.resumen.movimientos){
+      f.push([],['GASTOS'],['Gasto operativo',g.resumen.operativos],['Compra de insumos',g.resumen.compras],['Salida total',g.resumen.total]);
+      f.push([],['GASTOS POR CATEGORÍA'],['Categoría','Importe','Movimientos','Es inventario']);
+      g.resumen.porCategoria.forEach(x=>f.push([x.nombre,x.total,x.movimientos,x.inventario?'sí':'no']));
+      f.push([],['DETALLE DE GASTOS'],['Fecha','Folio','Categoría','Proveedor','Concepto','Pago','Total']);
+      g.gastos.filter(x=>x.estado!=='cancelado').forEach(x=>f.push([
+        new Date(x.fecha).toLocaleDateString('es-MX'),x.folio,x.categoria,x.proveedor||'',
+        x.lineas.map(l=>`${l.cantidad}x ${l.descripcion}`).join(' | '),x.metodoPago,x.total]));
+    }
+  }catch(e){}
   descargarCSV(`reporte_ventas_${fecha.replace(/\//g,'-')}.csv`,f);
   toast('CSV descargado');
+}
+// Desempeño de reparto del mismo periodo que el resto del reporte
+async function renderRepartoReporte(){
+  const c=$('#repartoBlock');if(!c)return;
+  let d;try{d=await API.get('/api/reparto/reporte'+qsRango(app.sucursalId,app._repRango));}catch{c.innerHTML='';return;}
+  if(!d.entregas&&!d.foliosSinLiquidar.length){c.innerHTML='';return;}
+  const maxV=Math.max(1,...d.repartidores.map(x=>x.venta));
+  const maxD=Math.max(1,...(d.porDia||[]).map(x=>x.venta));
+  c.innerHTML=`
+  <div style="margin:22px 0 10px;font-family:'Bricolage Grotesque';font-weight:700;font-size:20px">Reparto a domicilio</div>
+  <div class="kpis">
+    <div class="kpi accent"><div class="lab">Entregas</div><div class="val">${d.entregas}</div></div>
+    <div class="kpi"><div class="lab">Piezas entregadas</div><div class="val">${d.piezas}</div></div>
+    <div class="kpi"><div class="lab">Venta a domicilio</div><div class="val">${money(d.venta)}</div></div>
+    <div class="kpi"><div class="lab">Minutos en ruta</div><div class="val">${d.minutosPromedioEnRuta!=null?d.minutosPromedioEnRuta:'—'}</div><div class="sub">promedio</div></div>
+  </div>
+  <div class="cols" style="margin-top:4px">
+    <div class="panel"><h3>Ranking de repartidores <span class="small">por venta entregada</span></h3>
+      ${d.repartidores.length?`<table><thead><tr><th></th><th>Repartidor</th><th class="num">Entregas</th><th class="num">Piezas</th><th class="num">Venta</th><th class="num">Ticket</th><th class="num">Min.</th><th>Calif.</th><th class="num">Fallidos</th></tr></thead><tbody>
+        ${d.repartidores.slice().sort((a,b)=>b.venta-a.venta).map((x,i)=>`<tr>
+          <td>${['🥇','🥈','🥉'][i]||''}</td>
+          <td style="font-weight:600">${x.nombre}<div class="rk-bar"><div style="width:${Math.round(x.venta/maxV*100)}%"></div></div></td>
+          <td class="num">${x.entregas}</td><td class="num">${x.piezas}</td>
+          <td class="num" style="font-weight:700">${money(x.venta)}</td>
+          <td class="num">${money(x.ticketPromedio)}</td>
+          <td class="num">${x.minutosPromedio!=null?x.minutosPromedio:'—'}</td>
+          <td>${x.calificacion?`<span style="color:var(--accent);letter-spacing:1px">${estrellasTxt(x.calificacion)}</span> <span class="small">${x.calificacion}</span>`:'<span class="small" style="color:var(--muted)">—</span>'}</td>
+          <td class="num" style="color:${x.fallidos?'var(--red)':'inherit'}">${x.fallidos}</td></tr>`).join('')}
+        </tbody></table>`:'<div class="empty">Sin entregas en el periodo.</div>'}
+      ${d.efectivoSinLiquidar>0?`<div class="small" style="color:var(--accent-ink);margin-top:10px">⚠ ${money(d.efectivoSinLiquidar)} sin liquidar en ${d.foliosSinLiquidar.length} entrega(s).</div>`:''}
+    </div>
+    <div class="panel"><h3>Entregas por día</h3>
+      ${(d.porDia||[]).length?d.porDia.slice(-31).map(x=>`<div class="dia-r">
+        <div class="dia-f">${new Date(x.dia+'T12:00:00').toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short'})}</div>
+        <div class="dia-b"><div style="width:${Math.round(x.venta/maxD*100)}%"></div></div>
+        <div class="dia-n mono">${x.entregas}</div><div class="dia-v mono">${money(x.venta)}</div>
+      </div>`).join(''):'<div class="empty">Sin datos.</div>'}
+    </div>
+  </div>
+  ${(d.comentarios&&d.comentarios.length)?`<div class="panel" style="margin-top:16px"><h3>Lo que dicen los clientes</h3>
+    ${d.comentarios.map(x=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)">
+      <div style="font-size:13px"><span style="color:var(--accent);letter-spacing:1px">${estrellasTxt(x.estrellas)}</span> <b>${x.repartidor||''}</b> <span class="small" style="color:var(--muted)">· ${x.folio} · ${new Date(x.fecha).toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}</span></div>
+      <div style="font-size:13px;color:var(--muted);font-style:italic">“${x.comentario}”</div></div>`).join('')}</div>`:''}`;
+}
+// Gastos del mismo periodo, junto a los ingresos
+async function renderGastosReporte(){
+  const c=$('#gastosBlock');if(!c)return;
+  let d;try{d=await API.get('/api/gastos'+qsRango(app.sucursalId,app._repRango));}catch{c.innerHTML='';return;}
+  const s=d.resumen;
+  if(!s.movimientos){c.innerHTML='';return;}
+  const venta=(app._repRes||{}).venta||0;
+  const pctVenta=venta?Math.round(s.operativos/venta*1000)/10:null;
+  c.innerHTML=`
+  <div style="margin:22px 0 10px;font-family:'Bricolage Grotesque';font-weight:700;font-size:20px">Gastos del periodo</div>
+  <div class="kpis">
+    <div class="kpi"><div class="lab">Gasto operativo</div><div class="val">${money(s.operativos)}</div>${pctVenta!=null?`<div class="sub">${pctVenta}% de la venta</div>`:''}</div>
+    <div class="kpi"><div class="lab">Compra de insumos</div><div class="val">${money(s.compras)}</div><div class="sub">entra a inventario</div></div>
+    <div class="kpi"><div class="lab">Salida total</div><div class="val">${money(s.total)}</div><div class="sub">${s.movimientos} movimiento(s)</div></div>
+    <div class="kpi"><div class="lab">Venta − gasto operativo</div><div class="val" style="color:${venta-s.operativos>=0?'var(--green)':'var(--red)'}">${money(venta-s.operativos)}</div><div class="sub">antes de costo de insumos</div></div>
+  </div>
+  <div class="panel"><h3>En qué se fue <span class="small">${(app._repRango||{}).label||''}</span></h3>
+    ${s.porCategoria.map(x=>`<div class="gs-cat">
+      <div class="gs-cn">${x.nombre}${x.inventario?' <span class="gs-inv">inventario</span>':''}</div>
+      <div class="gs-bar"><div style="width:${s.total?Math.max(2,Math.round(x.total/s.total*100)):0}%;background:${x.inventario?'var(--blue)':'var(--accent)'}"></div></div>
+      <div class="gs-cm mono">${money(x.total)}</div><div class="gs-cp">${s.total?Math.round(x.total/s.total*100):0}%</div>
+    </div>`).join('')}
+    <button class="btn" style="margin-top:12px;font-size:13px" id="gIrGastos">Ver el detalle en Gastos</button></div>`;
+  if($('#gIrGastos'))$('#gIrGastos').onclick=()=>go('gastos');
 }
 async function resumenEjecutivo(){
   toast('Generando resumen…');
