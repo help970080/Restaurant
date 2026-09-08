@@ -1410,7 +1410,8 @@ function construirConsultas(cliente, region = GEO_REGION) {
 }
 
 async function consultarNominatim(q) {
-  const espera = Math.max(0, 1100 - (Date.now() - geoUltima));  // Nominatim: 1 por segundo
+  const GEO_THROTTLE = +(process.env.GEO_THROTTLE_MS || 1100);
+  const espera = Math.max(0, GEO_THROTTLE - (Date.now() - geoUltima));  // Nominatim: 1 por segundo
   if (espera) await new Promise((r) => setTimeout(r, espera));
   geoUltima = Date.now();
   const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=' + encodeURIComponent(q);
