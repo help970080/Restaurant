@@ -514,6 +514,29 @@
 .mc-ok{margin-top:10px;color:var(--green);font-size:13px;text-align:center;font-weight:600}
 .rc-cron{margin-left:auto;font-size:12px;font-weight:700;color:var(--blue)}
 @media(max-width:360px){.moto-tiles{grid-template-columns:repeat(2,1fr)}.mc-grid{grid-template-columns:repeat(2,1fr)}}
+
+/* ---- Zona de riesgo: limpieza de pruebas ---- */
+.panel.riesgo{border-color:var(--red)}
+.panel.riesgo h3{color:var(--red)}
+.lm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(160px,100%),1fr));gap:6px;margin-bottom:12px}
+.lm-r{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;font-size:13px;background:var(--paper)}
+.lm-r b{font-family:var(--mono)}
+.lm-r.va{background:#fdf1ee;color:var(--red)}
+.lm-r.queda{background:#f2faf4;color:var(--green)}
+.lm-ops{display:flex;flex-direction:column;gap:7px;font-size:13px}
+.lm-ops label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.lm-ops input{width:auto;margin:0}
+.lm-alerta{margin-top:10px;background:#fdf1ee;border:1px solid var(--red);border-radius:9px;padding:8px 10px;font-size:13px;color:var(--red)}
+.btn.peligro{background:var(--red);color:#fff;border-color:var(--red);margin-top:10px}
+.btn.peligro:disabled{opacity:.45;cursor:not-allowed}
+
+/* ---- Dirección de la sucursal ---- */
+.suc-card{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:#fff}
+.suc-h{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-size:15px}
+.suc-ok{font-size:11px;color:var(--green);font-weight:700;background:#f2faf4;border-radius:6px;padding:2px 7px}
+.suc-no{font-size:11px;color:var(--red);font-weight:700;background:#fdf1ee;border-radius:6px;padding:2px 7px}
+.suc-btns{display:flex;gap:7px;flex-wrap:wrap}
+.suc-btns .btn{font-size:13px;text-decoration:none;display:inline-flex;align-items:center}
 </style>
 </head>
 <body>
@@ -3085,10 +3108,16 @@ async function vAjustes(){
       ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>Sucursales <span class="small">la dirección del local es el punto de partida de cada entrega</span></h3>
+    <div id="sucBox"><div class="empty">Cargando…</div></div>
+  </div>
   <div class="panel" style="margin-top:16px"><h3>Respaldo <span class="small">la única copia que no depende de la base de datos</span></h3>
     <div class="small" style="color:var(--muted);margin-bottom:10px">Descarga un archivo con todo: menú, pedidos, clientes, gastos y personal. Guárdalo fuera del servidor. El sistema además deja una copia automática cada vez que cierras turno.</div>
     <button class="btn dark" id="btnRespaldo">↓ Descargar respaldo ahora</button>
     <div id="listaRespaldos" style="margin-top:12px"></div>
+  </div>
+  <div class="panel riesgo" style="margin-top:16px"><h3>Terminar las pruebas <span class="small">deja el sistema listo para operar de verdad</span></h3>
+    <div id="limpiezaBox"><div class="empty">Cargando…</div></div>
   </div>
   <div class="panel" style="margin-top:16px"><h3>Menú QR / pedido en línea <span class="small">el cliente escanea, ve el menú y manda su pedido (sin comisión)</span></h3>
     <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Pega un QR por sucursal en las mesas o en la entrada. El pedido llega a <b>Caja</b> como cuenta por cobrar (marcada 🔲 QR); ahí lo confirmas y cobras. El pago es en caja.</div>
@@ -3116,7 +3145,9 @@ async function vAjustes(){
   $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
   $('#addUser').onclick=modalNuevoUsuario;
   if($('#btnRespaldo'))$('#btnRespaldo').onclick=descargarRespaldo;
+  pintarSucursales();
   pintarRespaldos();
+  pintarLimpieza();
   document.querySelectorAll('[data-du]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar usuario '+b.dataset.du+'?'))return;try{await API.del('/api/usuarios/'+encodeURIComponent(b.dataset.du));toast('Usuario eliminado');vAjustes();}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-com]').forEach(inp=>inp.onchange=async()=>{try{await API.patch('/api/canales/'+inp.dataset.com,{comisionPct:+inp.value||0});app.canales=await API.get('/api/canales');toast('Comisión actualizada');}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-togglecanal]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/canales/'+b.dataset.togglecanal,{activo:b.dataset.act!=='true'});app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
@@ -3140,6 +3171,41 @@ function modalNuevoCanal(){
     <div class="modal-foot"><button class="btn-ghost" id="caCancel">Cancelar</button><button class="btn-primary" id="caOk">Crear</button></div>`;
   ov.classList.add('show');$('#caCancel').onclick=closeModal;
   $('#caOk').onclick=async()=>{const n=$('#caNom').value.trim();if(!n){toast('Falta nombre');return;}try{await API.post('/api/canales',{nombre:n,comisionPct:+$('#caCom').value||0});app.canales=await API.get('/api/canales');closeModal();toast('Canal creado');vAjustes();}catch(e){toast(e.message);}};
+}
+// Capturar la dirección del local una sola vez. De ahí sale el origen de todas
+// las entregas, así no depende del GPS ni de dónde se hagan las pruebas.
+async function pintarSucursales(){
+  const c=$('#sucBox');if(!c)return;
+  let ss;try{ss=await API.get('/api/sucursales');}catch{c.innerHTML='';return;}
+  c.innerHTML=ss.map(s=>`<div class="suc-card" data-suc="${s.id}">
+    <div class="suc-h"><b>${s.nombre}</b>
+      ${s.coordenadas?`<span class="suc-ok">✓ ubicada${s.coordFuente==='manual'?' a mano':(s.coordFuente==='direccion'?' por dirección':' por GPS')}</span>`
+        :'<span class="suc-no">sin ubicar</span>'}</div>
+    <div class="field"><label>Dirección del local</label>
+      <input class="suc-dir" value="${(s.direccion||'').replace(/"/g,'&quot;')}" placeholder="Carr. Xochimilco-Oaxtepec km 67.5, Texalco, Tlayacapan"></div>
+    <div class="field"><label>Ubicación exacta <span class="small" style="color:var(--muted)">pega la liga de Google Maps (la de Compartir) o las coordenadas</span></label>
+      <input class="suc-coord" value="${s.coordenadas?s.coordenadas.lat+', '+s.coordenadas.lng:''}" placeholder="https://share.google/... o 18.9145, -98.9760"></div>
+    <div class="suc-btns">
+      <button class="btn" data-sucgeo="${s.id}">Buscar por dirección</button>
+      <button class="btn dark" data-sucsave="${s.id}">Guardar</button>
+      ${s.coordenadas?`<a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${s.coordenadas.lat},${s.coordenadas.lng}">Ver en el mapa</a>`:''}
+    </div></div>`).join('');
+  const datos=(id)=>{const k=c.querySelector(`[data-suc="${id}"]`);
+    return {direccion:k.querySelector('.suc-dir').value.trim(),coordenadas:k.querySelector('.suc-coord').value.trim()};};
+  c.querySelectorAll('[data-sucsave]').forEach(b=>b.onclick=async()=>{
+    const d=datos(b.dataset.sucsave);
+    try{await API.patch('/api/sucursales/'+b.dataset.sucsave,{direccion:d.direccion,coordenadas:d.coordenadas||null});
+      toast('Sucursal actualizada',{tipo:'ok'});pintarSucursales();}
+    catch(e){toast(e.message);}
+  });
+  c.querySelectorAll('[data-sucgeo]').forEach(b=>b.onclick=async()=>{
+    const d=datos(b.dataset.sucgeo);
+    if(!d.direccion){toast('Captura primero la dirección');return;}
+    b.disabled=true;const t=b.textContent;b.textContent='Buscando…';
+    try{const r=await API.post(`/api/sucursales/${b.dataset.sucgeo}/ubicar`,{direccion:d.direccion});
+      toast(`Ubicada: ${r.etiqueta||'listo'}`,{tipo:'ok',ms:6000});pintarSucursales();}
+    catch(e){toast(e.message,{ms:6000});b.disabled=false;b.textContent=t;}
+  });
 }
 // El respaldo se baja al equipo del dueño: si la base se pierde o se corrompe,
 // es lo único que queda fuera del servidor.
@@ -3166,6 +3232,51 @@ async function pintarRespaldos(){
   c.innerHTML=`<div class="small" style="font-weight:700;margin-bottom:4px">Copias automáticas en el servidor (últimas 5)</div>
     <table><tbody>${l.map(x=>`<tr><td>${new Date(x.ts).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td>
       <td class="small">${x.motivo}</td><td class="num">${x.pedidos} pedidos</td><td class="num">${x.tamanoKB} KB</td></tr>`).join('')}</tbody></table>`;
+}
+// Borrar los movimientos de prueba conservando la configuración.
+async function pintarLimpieza(){
+  const c=$('#limpiezaBox');if(!c)return;
+  let d;try{d=await API.get('/api/admin/limpiar-pruebas');}catch{c.innerHTML='';return;}
+  const n=d.conteos;
+  const fila=(t,v,cls)=>`<div class="lm-r ${cls||''}"><span>${t}</span><b>${v}</b></div>`;
+  c.innerHTML=`
+    <div class="small" style="color:var(--muted);margin-bottom:10px">Borra los movimientos de prueba y <b>conserva</b> tu menú, precios, sucursales, personal, usuarios y marca. Los folios vuelven a empezar en 0001. Antes de borrar se guarda una copia automática.</div>
+    ${d.limpiadoAntes?`<div class="small" style="color:var(--muted);margin-bottom:8px">Última limpieza: ${new Date(d.limpiadoAntes).toLocaleString('es-MX')}</div>`:''}
+    <div class="lm-grid">
+      ${fila('Pedidos',n.pedidos,'va')}
+      ${fila('Turnos de caja',n.turnos,'va')}
+      ${fila('Gastos',n.gastos,'va')}
+      ${fila('Liquidaciones',n.liquidaciones,'va')}
+      ${fila('Cancelaciones',n.cancelaciones,'va')}
+      ${fila('Productos del menú',n.productos,'queda')}
+      ${fila('Insumos',n.insumos,'queda')}
+      ${fila('Personal',n.empleados,'queda')}
+    </div>
+    <div class="lm-ops">
+      <label><input type="checkbox" id="lmCli" checked> Borrar también el directorio de clientes (${n.clientes})</label>
+      <label><input type="checkbox" id="lmProv"> Borrar proveedores (${n.proveedores})</label>
+      <label><input type="checkbox" id="lmInv" checked> Poner el inventario en cero (conserva insumos y costos)</label>
+      <label><input type="checkbox" id="lmRes" checked> Borrar reservas y asistencias</label>
+      <label><input type="checkbox" id="lmEmp"> Borrar también el personal (${n.empleados})</label>
+    </div>
+    ${n.turnosAbiertos?`<div class="lm-alerta">Hay ${n.turnosAbiertos} turno(s) de caja abierto(s). Ciérralo antes de limpiar.</div>`:''}
+    <div class="field" style="margin-top:12px"><label>Escribe el nombre del restaurante para confirmar: <b>${d.restaurante}</b></label>
+      <input id="lmConf" placeholder="${d.restaurante}" autocomplete="off"></div>
+    <button class="btn peligro" id="lmOk" ${n.turnosAbiertos?'disabled':''}>Borrar datos de prueba</button>`;
+  $('#lmOk').onclick=async()=>{
+    const conf=$('#lmConf').value.trim();
+    if(conf!==d.restaurante){toast('El nombre no coincide');return;}
+    const b=$('#lmOk');b.disabled=true;b.textContent='Borrando…';
+    try{
+      const r=await API.post('/api/admin/limpiar-pruebas',{confirmar:conf,opciones:{
+        clientes:$('#lmCli').checked,proveedores:$('#lmProv').checked,
+        inventarioEnCero:$('#lmInv').checked,reservas:$('#lmRes').checked,
+        asistencias:$('#lmRes').checked,empleados:$('#lmEmp').checked}});
+      toast(`Listo · se borraron ${r.antes.pedidos} pedidos y ${r.antes.gastos} gastos${r.respaldado?' (copia guardada)':''}`,{tipo:'ok',ms:6000});
+      app.turno=null;app._avisos=null;app._gData=null;
+      await boot();
+    }catch(e){toast(e.message);b.disabled=false;b.textContent='Borrar datos de prueba';}
+  };
 }
 function modalNuevoUsuario(){
   modal.innerHTML=`<h3>Nuevo usuario</h3><div class="sub">El nombre de usuario debe ser único</div>
