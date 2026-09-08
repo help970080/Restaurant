@@ -22,6 +22,8 @@
   .estado p{margin:0;color:var(--muted);font-size:14px;line-height:1.45}
   .eta{margin-top:12px;font-size:15px;font-weight:700;color:var(--accent)}
   .eta b{font-size:26px;display:block;line-height:1.1;margin-top:2px}
+  .eta-d{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-top:3px}
+  .eta.eta-sin{color:var(--muted);font-weight:600;font-size:14px}
   .pasos{display:flex;gap:6px;margin:18px 0 4px}
   .paso{flex:1;text-align:center}
   .paso .dot{height:6px;border-radius:4px;background:var(--line);transition:background .4s}
@@ -116,8 +118,16 @@
       h+='<h1 style="margin-top:8px">Entregado</h1><p>¡Buen provecho! Gracias por tu compra.</p>';
     }else{
       h+='<h1>'+esc(info.t)+'</h1><p>'+esc(info.s)+'</p>';
-      if(p===3&&d.etaMin!=null){
-        h+='<div class="eta">Llega aproximadamente en<b>'+(d.etaMin>0?d.etaMin+' min':'menos de 1 min')+'</b></div>';
+      if(p===3){
+        if(d.distanciaKm!=null&&d.distanciaKm<0.15){
+          h+='<div class="eta">Tu repartidor<b>ya está llegando</b></div>';
+        }else if(d.etaMin!=null){
+          var mins=Math.max(1,d.etaMin);
+          h+='<div class="eta">Llega aproximadamente en<b>'+mins+(mins===1?' minuto':' minutos')+'</b>'+
+             (d.distanciaKm!=null?'<span class="eta-d">a '+(d.distanciaKm<1?Math.round(d.distanciaKm*1000)+' m':d.distanciaKm.toFixed(1)+' km')+' de ti</span>':'')+'</div>';
+        }else{
+          h+='<div class="eta eta-sin">Tu pedido va en camino<span class="eta-d">te avisamos aquí cuando llegue</span></div>';
+        }
       }
     }
     h+='<div class="pasos">';
