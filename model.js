@@ -440,6 +440,7 @@ function upsertCliente(e, entrega, extra = {}) {
   if (extra.lat != null && extra.lng != null) {
     c.lat = +extra.lat; c.lng = +extra.lng;
     c.fuente = extra.fuente || 'gps';
+    if (extra.verificado != null) c.verificado = !!extra.verificado;
     c.ubicadoEn = new Date().toISOString();
   }
   if (extra.sumarPedido) { c.pedidos = (c.pedidos || 0) + 1; c.ultimoPedido = new Date().toISOString(); }
