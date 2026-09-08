@@ -9,7 +9,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const M = require('./model');
-const { firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache } = require('./context');
+const { als, firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache } = require('./context');
 const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
 
 const app = express();
@@ -629,6 +629,107 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
 
 app.get('/api/sucursales', wrap(async (req, res) => { const e = await readState(); res.json(Object.values(e.sucursales)); }));
 
+// Acepta "18.9145, -98.9760" o cualquier liga de Google Maps pegada tal cual.
+function leerCoordenadas(txt) {
+  const t = String(txt || '').trim();
+  if (!t) return null;
+  const patrones = [
+    /@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,            // .../@18.91,-98.97,17z
+    /[?&#]q(?:uery)?=(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)/, // ?q=lat,lng
+    /!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/,        // formato interno de Maps
+    /[?&]ll=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,      // ?ll=lat,lng
+    /(-?\d{1,3}\.\d{3,})\s*[,;\s]\s*(-?\d{1,3}\.\d{3,})/,  // pegado a mano
+  ];
+  for (const p of patrones) {
+    const m = t.match(p);
+    if (!m) continue;
+    const lat = +m[1], lng = +m[2];
+    if (isFinite(lat) && isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) return { lat, lng };
+  }
+  return null;
+}
+
+const esLigaMaps = (t) => /^https?:\/\/\S+$/i.test(String(t || '').trim())
+  && /(google\.[a-z.]+\/maps|maps\.app\.goo\.gl|goo\.gl\/maps|share\.google)/i.test(t);
+
+// Las ligas cortas para compartir no traen coordenadas: hay que seguir el
+// redirect hasta la URL larga, que sí las trae. El servidor sí puede hacerlo.
+let mapsFetch = (url, opts) => fetch(url, opts);
+function _setMapsFetch(f) { mapsFetch = f; }
+async function resolverLigaMaps(liga) {
+  const directo = leerCoordenadas(liga);
+  if (directo) return directo;
+  if (!esLigaMaps(liga)) return null;
+  let url = String(liga).trim();
+  try {
+    for (let salto = 0; salto < 5; salto++) {
+      const r = await mapsFetch(url, {
+        redirect: 'manual',
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept-Language': 'es-MX' },
+      });
+      const sig = r.headers && (r.headers.get('location') || r.headers.get('Location'));
+      if (sig) {
+        url = new URL(sig, url).toString();
+        const c = leerCoordenadas(url);
+        if (c) return c;
+        continue;
+      }
+      const cuerpo = await r.text();
+      return leerCoordenadas(cuerpo.slice(0, 200000)) || leerCoordenadas(r.url || url);
+    }
+    return leerCoordenadas(url);
+  } catch (err) {
+    console.error('[maps] no se pudo resolver la liga:', err && err.message);
+    return null;
+  }
+}
+
+// La dirección del local es fija: se captura una vez y se acabaron las dudas.
+app.patch('/api/sucursales/:id', soloAdmin, wrap(async (req, res) => {
+  const { nombre, direccion, coordenadas, telefono } = req.body || {};
+  // Si pegan una liga (incluso corta), se resuelve ANTES de tocar el estado.
+  let coordsResueltas = null;
+  if (coordenadas !== undefined && coordenadas !== null && coordenadas !== '') {
+    const crudo = typeof coordenadas === 'string' ? coordenadas : `${coordenadas.lat}, ${coordenadas.lng}`;
+    coordsResueltas = await resolverLigaMaps(crudo);
+  }
+  const suc = await withState((e) => {
+    const x = e.sucursales[req.params.id];
+    if (!x) throw bad('Sucursal inexistente', 404);
+    if (nombre != null && String(nombre).trim()) x.nombre = String(nombre).trim();
+    if (telefono != null) x.telefono = String(telefono).replace(/[^\d+]/g, '');
+    if (direccion != null) x.direccion = String(direccion).trim();
+    if (coordenadas !== undefined) {
+      if (coordenadas === null || coordenadas === '') { x.coordenadas = null; x.coordFuente = null; }
+      else {
+        if (!coordsResueltas) throw bad('No pude leer esas coordenadas. Pega "18.9145, -98.9760" o la liga de Google Maps.');
+        x.coordenadas = coordsResueltas; x.coordFuente = 'manual';
+      }
+    }
+    return x;
+  });
+  res.json(suc);
+}));
+
+// Busca las coordenadas del local a partir de su dirección escrita.
+app.post('/api/sucursales/:id/ubicar', soloAdmin, wrap(async (req, res) => {
+  const e0 = await readState();
+  const suc0 = e0.sucursales[req.params.id];
+  if (!suc0) throw bad('Sucursal inexistente', 404);
+  const dir = String((req.body || {}).direccion || suc0.direccion || '').trim();
+  if (!dir) throw bad('Primero captura la dirección de la sucursal');
+  const punto = await geocodificar(dir);
+  if (!punto) throw bad('No se encontró esa dirección. Pega las coordenadas desde Google Maps.', 404);
+  const suc = await withState((e) => {
+    const x = e.sucursales[req.params.id];
+    x.direccion = dir;
+    x.coordenadas = { lat: punto.lat, lng: punto.lng };
+    x.coordFuente = 'direccion';
+    return x;
+  });
+  res.json({ sucursal: suc, etiqueta: punto.etiqueta || null });
+}));
+
 // ---------------------------------------------------------------------------
 //  CAJA
 // ---------------------------------------------------------------------------
@@ -709,9 +810,8 @@ app.post('/api/pedidos', wrap(async (req, res) => {
       const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente: entrega, usuario: c.username, canalId });
       // Directorio: la próxima vez basta el teléfono para llenar la dirección.
       const dir = M.upsertCliente(e, entrega, { sumarPedido: true });
-      // Si ya sabemos dónde vive (lo aprendimos al entregarle antes), el
-      // tablero puede calcular qué tan lejos va la moto.
-      if (dir && dir.lat != null) p.reparto.destino = { lat: dir.lat, lng: dir.lng };
+      // Si ya sabemos dónde vive (aprendido al entregarle antes), se reusa.
+      if (dir && dir.lat != null) p.reparto.destino = { lat: dir.lat, lng: dir.lng, fuente: dir.fuente || 'gps' };
       return p;
     }
     if (tipoServicio === 'mesa') {
@@ -725,6 +825,11 @@ app.post('/api/pedidos', wrap(async (req, res) => {
     }
     return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username, canalId });
   });
+  // Si no sabemos dónde vive, se busca por la dirección escrita, en segundo
+  // plano para no retrasar la toma del pedido.
+  if (M.esDomicilio(ped) && !(ped.reparto && ped.reparto.destino)) {
+    setImmediate(() => ubicarDomicilio(ctx().row, ped.folio));
+  }
   if (M.esDomicilio(ped) && ped.seguimiento) {
     avisarCliente({
       telefono: (ped.cliente && ped.cliente.telefono) || null,
@@ -1008,13 +1113,21 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
     M.recalcularPedido(ped);
     const r = M.marcarSalida(e, ped);
     for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
-    // La moto está parada en el local: ese es el origen del viaje. Sirve para
-    // medir la distancia recorrida y calibrar la velocidad real del negocio.
-    const uo = M.ubicacionViva(e, ped.reparto.repartidorId, 6);
-    if (uo) {
-      ped.reparto.origen = { lat: uo.lat, lng: uo.lng };
-      const suc = e.sucursales[ped.sucursalId];
-      if (suc && !suc.coordenadas) suc.coordenadas = { lat: uo.lat, lng: uo.lng };
+    // Si caja marca "salió", la moto está en la sucursal: el origen es la
+    // dirección fija del local, no una lectura de GPS que puede fallar o venir
+    // de una prueba hecha desde otro lugar.
+    const suc = e.sucursales[ped.sucursalId] || {};
+    if (suc.coordenadas) {
+      ped.reparto.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
+    } else {
+      // Sin dirección capturada todavía: se toma el GPS como aproximación y se
+      // propone como ubicación del local.
+      const uo = M.ubicacionViva(e, ped.reparto.repartidorId, 6);
+      if (uo) {
+        ped.reparto.origen = { lat: uo.lat, lng: uo.lng, fuente: 'gps' };
+        const s2 = e.sucursales[ped.sucursalId];
+        if (s2 && !s2.coordenadas) { s2.coordenadas = { lat: uo.lat, lng: uo.lng }; s2.coordFuente = 'gps'; }
+      }
     }
     return r;
   });
@@ -1052,9 +1165,11 @@ app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
     // coordenada del domicilio que vamos a conseguir. Se guarda en el
     // directorio para que el próximo pedido ya sepa a dónde va.
     const u = M.ubicacionViva(e, r.repartidorId, 6);
-    if (u) {
-      ped.reparto.destino = { lat: u.lat, lng: u.lng };
-      M.upsertCliente(e, ped.cliente || {}, { lat: u.lat, lng: u.lng });
+    const suc0 = e.sucursales[ped.sucursalId] || {};
+    // Solo se aprende el domicilio si la moto DE VERDAD se alejó del local.
+    if (u && M.destinoCreible(u, suc0.coordenadas || ped.reparto.origen)) {
+      ped.reparto.destino = { lat: u.lat, lng: u.lng, fuente: 'gps' };
+      M.upsertCliente(e, ped.cliente || {}, { lat: u.lat, lng: u.lng, fuente: 'gps' });
     }
     // Con origen, destino y minutos reales se calibra la velocidad de reparto.
     M.aprenderVelocidad(e, ped);
@@ -1237,6 +1352,89 @@ app.get('/api/reparto/reporte', wrap(async (req, res) => {
     efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
     foliosSinLiquidar: pendientes.map((p) => p.folio),
   });
+}));
+
+// ---------------------------------------------------------------------------
+//  GEOCODIFICACIÓN — convertir la dirección escrita en coordenadas
+//  Sin esto, el domicilio solo se conoce después de la primera entrega. Con
+//  esto, el primer pedido de un cliente nuevo ya calcula distancia y tiempo.
+//  Usa Nominatim (OpenStreetMap): gratis, sin llave, máximo 1 consulta por
+//  segundo. Se apaga con GEOCODER=off.
+// ---------------------------------------------------------------------------
+const GEO_ACTIVO = (process.env.GEOCODER || 'nominatim') !== 'off';
+const GEO_REGION = process.env.GEO_REGION || 'Morelos, México';
+const GEO_UA = `ComandaPro/1.0 (${process.env.GEO_EMAIL || 'soporte@legaxi.com'})`;
+const geoCache = new Map();
+let geoUltima = 0;
+// Inyectable para pruebas
+let geoFetch = (url, opts) => fetch(url, opts);
+function _setGeoFetch(f) { geoFetch = f; }
+
+async function geocodificar(direccion) {
+  if (!GEO_ACTIVO) return null;
+  const q = String(direccion || '').trim();
+  if (q.length < 8) return null;
+  const clave = q.toLowerCase();
+  if (geoCache.has(clave)) return geoCache.get(clave);
+  // Nominatim pide máximo una consulta por segundo
+  const espera = Math.max(0, 1100 - (Date.now() - geoUltima));
+  if (espera) await new Promise((r) => setTimeout(r, espera));
+  geoUltima = Date.now();
+  try {
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q='
+      + encodeURIComponent(`${q}, ${GEO_REGION}`);
+    const r = await geoFetch(url, { headers: { 'User-Agent': GEO_UA, 'Accept-Language': 'es' } });
+    if (!r || !r.ok) throw new Error('respuesta ' + (r && r.status));
+    const j = await r.json();
+    const p = Array.isArray(j) && j[0];
+    if (!p || !p.lat || !p.lon) { geoCache.set(clave, null); return null; }
+    const out = { lat: +p.lat, lng: +p.lon, precision: p.type || null, etiqueta: p.display_name || null };
+    if (!isFinite(out.lat) || !isFinite(out.lng)) { geoCache.set(clave, null); return null; }
+    geoCache.set(clave, out);
+    if (geoCache.size > 2000) geoCache.clear();
+    return out;
+  } catch (err) {
+    console.error('[geo] no se pudo ubicar "' + q + '":', err && err.message);
+    return null;
+  }
+}
+
+// Ubica la dirección de un pedido y la guarda. No bloquea la respuesta: si
+// tarda o falla, el pedido ya se creó igual.
+async function ubicarDomicilio(row, folio) {
+  try {
+    await als.run({ row, rol: 'sistema', username: 'geo', sucursalId: null }, async () => {
+      const e0 = await readState();
+      const p0 = e0 && e0.pedidos[folio];
+      if (!p0 || !p0.cliente) return;
+      // Si ya tiene coordenadas aprendidas por GPS, no se tocan: son mejores.
+      if (p0.reparto && p0.reparto.destino && p0.reparto.destino.fuente === 'gps') return;
+      const c = p0.cliente;
+      const dir = [c.calle, c.numero, c.colonia].filter(Boolean).join(' ');
+      const punto = await geocodificar(dir);
+      if (!punto) return;
+      await withState((e) => {
+        const p = e.pedidos[folio];
+        if (!p || !p.reparto) return;
+        if (p.reparto.destino && p.reparto.destino.fuente === 'gps') return;
+        p.reparto.destino = { lat: punto.lat, lng: punto.lng, fuente: 'direccion' };
+        const cli = (e.clientes || {})[M.llaveTel(c.telefono)];
+        if (cli && (cli.lat == null || cli.fuente !== 'gps')) {
+          cli.lat = punto.lat; cli.lng = punto.lng; cli.fuente = 'direccion'; cli.ubicadoEn = new Date().toISOString();
+        }
+      });
+    });
+  } catch (err) { console.error('[geo] ubicarDomicilio:', err && err.message); }
+}
+
+// Reintento manual desde caja, por si la dirección se corrigió.
+app.post('/api/pedidos/:folio/ubicar', puedeCaja, wrap(async (req, res) => {
+  const row = ctx().row;
+  await ubicarDomicilio(row, req.params.folio);
+  const e = await readState();
+  const p = e.pedidos[req.params.folio];
+  if (!p) throw bad('Pedido inexistente', 404);
+  res.json({ folio: p.folio, destino: (p.reparto && p.reparto.destino) || null });
 }));
 
 // ---------------------------------------------------------------------------
@@ -1808,6 +2006,36 @@ async function guardarSnapshot(row, doc, motivo) {
   }
 }
 
+// Qué se borraría y qué se conservaría. Sirve para que nadie apriete a ciegas.
+app.get('/api/admin/limpiar-pruebas', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  res.json({
+    restaurante: e.meta.nombre,
+    conteos: M.contarPruebas(e),
+    limpiadoAntes: e.meta.limpiado || null,
+    conserva: ['Menú, precios y modificadores', 'Sucursales y mesas', 'Usuarios y sus contraseñas', 'Marca, logo y datos fiscales', 'Insumos y sus costos', 'Promociones'],
+  });
+}));
+
+// Deja el sistema listo para operar de verdad. Antes de borrar nada guarda una
+// instantánea, para que un arrepentimiento tenga vuelta atrás.
+app.post('/api/admin/limpiar-pruebas', soloAdmin, wrap(async (req, res) => {
+  const { confirmar, opciones = {}, forzar = false } = req.body || {};
+  const c = ctx();
+  const previo = await readState();
+  if (!previo) throw bad('Sin estado', 404);
+  if (String(confirmar || '').trim() !== String(previo.meta.nombre || '').trim()) {
+    throw bad(`Para confirmar, escribe el nombre del restaurante tal cual: "${previo.meta.nombre}"`);
+  }
+  const abiertos = Object.values(previo.caja.turnos || {}).filter((t) => t.estado === 'abierto');
+  if (abiertos.length && !forzar) throw bad('Hay un turno de caja abierto. Ciérralo antes de limpiar (o manda forzar:true).', 409);
+
+  const respaldado = await guardarSnapshot(c.row, previo, 'antes de limpiar pruebas');
+  const out = await withState((e) => M.limpiarPruebas(e, opciones));
+  await ensureCanales();
+  res.json({ ok: true, respaldado, restaurante: previo.meta.nombre, ...out });
+}));
+
 app.get('/api/admin/respaldos', soloAdmin, wrap(async (req, res) => {
   const caja = await db.loadState(FILA_RESPALDO(ctx().row));
   res.json(((caja && caja.snapshots) || []).map((s) => ({
@@ -1995,3 +2223,8 @@ if (require.main === module) {
 }
 
 module.exports = app;
+module.exports._setGeoFetch = _setGeoFetch;
+module.exports._setMapsFetch = _setMapsFetch;
+module.exports._resolverLigaMaps = resolverLigaMaps;
+module.exports._leerCoordenadas = leerCoordenadas;
+module.exports._geocodificar = geocodificar;
