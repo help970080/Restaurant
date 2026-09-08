@@ -1682,6 +1682,13 @@ function pintarReparto(){
   if(tab.enRuta.length)dibujarMapaOperacion(tab.enRuta);
   document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
   document.querySelectorAll('[data-diag]').forEach(b=>b.onclick=()=>modalDiagnostico(b.dataset.diag));
+  document.querySelectorAll('[data-refijar]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;const t=b.textContent;b.textContent='Ubicando…';
+    try{const r=await API.post(`/api/pedidos/${b.dataset.refijar}/ubicar`,{forzar:true});
+      toast(r.destino?'Ubicación corregida con la dirección escrita':'No se encontró esa dirección',{tipo:r.destino?'ok':undefined});
+      vReparto();}
+    catch(e){toast(e.message);b.disabled=false;b.textContent=t;}
+  });
   document.querySelectorAll('[data-usadir]').forEach(b=>b.onclick=()=>resolverDuda(b.dataset.usadir,'direccion'));
   document.querySelectorAll('[data-usaguardado]').forEach(b=>b.onclick=()=>resolverDuda(b.dataset.usaguardado,'guardado'));
   document.querySelectorAll('[data-copiaseg]').forEach(b=>b.onclick=()=>copiarSeguimiento(b.dataset.copiaseg));
@@ -1725,9 +1732,12 @@ function pintarRepartoMoto(tab,reps){
   $('#view').innerHTML=`
     <div id="gpsBanner"></div>
     ${activo?`<div class="moto-hero${(activo.etaMin!=null&&activo.etaMin<=1)?' apura':''}">
-      <div class="mh-l">En ruta ahora · ${activo.folio}</div>
+      <div class="mh-l">${activo.folio} · llevas en ruta</div>
       <div class="mh-cron" data-cron="${(activo.reparto||{}).salida||''}">--:--</div>
-      <div class="mh-sub">${(activo.cliente&&activo.cliente.nombre)||''}${activo.distanciaKm!=null?` · a ${activo.distanciaKm<1?Math.round(activo.distanciaKm*1000)+' m':activo.distanciaKm.toFixed(1)+' km'}`:''}${(activo.distanciaKm!=null&&activo.distanciaKm<0.15)?' · ya llegaste':(activo.etaMin!=null?` · quedan ~${Math.max(1,activo.etaMin)} min`:'')}</div>
+      <div class="mh-sub">${(activo.cliente&&activo.cliente.nombre)||''}${
+        (activo.distanciaKm!=null&&activo.distanciaKm<0.15)?' · ya llegaste'
+        :(activo.etaMin!=null?` · faltan ~${Math.max(1,activo.etaMin)} min${activo.distanciaKm!=null?` (${activo.distanciaKm<1?Math.round(activo.distanciaKm*1000)+' m':activo.distanciaKm.toFixed(1)+' km'})`:''}`
+          :' · sin estimado')}</div>
     </div>`:''}
     <div class="moto-tiles">
       <div class="mt"><b>${tab.asignados.length}</b><span>Por salir</span></div>
@@ -1804,7 +1814,7 @@ function tarjetaPedidoRep(p,tipo,caja){
         :(p.moto?'<span class="rc-al">Sin domicilio ubicado — se aprende en esta entrega</span>':'<span class="rc-al">La moto no comparte ubicación</span>')}
       ${(p.distanciaKm!=null&&p.distanciaKm<0.15)?'<span class="rc-eta">está llegando</span>'
         :(p.etaMin!=null?`<span class="rc-eta">~${Math.max(1,p.etaMin)} min${p.etaBase==='historial'?'*':''}</span>`:'')}
-      ${(p.reparto&&p.reparto.salida)?`<span class="rc-cron mono" data-cron="${p.reparto.salida}">--:--</span>`:''}
+      ${(p.reparto&&p.reparto.salida)?`<span class="rc-cron mono" data-cron="${p.reparto.salida}" title="tiempo transcurrido desde que salió">--:--</span>`:''}
     </div>`:'';
   const califica=r.calificacion?`<div class="rc-cal" title="${(r.calificacion.comentario||'').replace(/"/g,'')}">${estrellasTxt(r.calificacion.estrellas)}${r.calificacion.comentario?' <span class="rc-com">“'+r.calificacion.comentario.slice(0,60)+'”</span>':''}</div>`:'';
   return `<div class="rep-card ${tarde?'tarde':''}">
@@ -1823,7 +1833,8 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
-      ${tipo==='en_ruta'&&caja?`<button class="btn" data-diag="${p.folio}" title="Por qué marca ese tiempo">¿Por qué?</button>`:''}
+      ${tipo==='en_ruta'&&caja?`<button class="btn" data-diag="${p.folio}" title="Por qué marca ese tiempo">¿Por qué?</button>
+        <button class="btn" data-refijar="${p.folio}" title="Volver a ubicar con la dirección escrita">↻ Reubicar</button>`:''}
       ${tipo!=='entregado'&&caja?`<button class="btn" data-wa="${p.folio}" title="Abrir WhatsApp con la liga de seguimiento">Enviar liga</button>
         <button class="btn" data-copiaseg="${p.folio}" title="Copiar la liga para pegarla a mano">📋 Copiar</button>`:''}
       ${tipo==='entregado'?`<span class="rc-cash">${money(p.efectivo)} en efectivo</span><button class="btn" data-ticketrep="${p.folio}">Ticket</button>`:''}
