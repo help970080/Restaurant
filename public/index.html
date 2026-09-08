@@ -1700,13 +1700,17 @@ function pintarReparto(){
 function estrellasTxt(n){return n?'★'.repeat(Math.round(n))+'☆'.repeat(5-Math.round(n)):'';}
 // Abrir la navegación del teléfono. Si ya conocemos las coordenadas del
 // domicilio se usan (exactas); si no, se manda la dirección escrita.
+// La DIRECCIÓN ESCRITA manda. Google sabe rutear direcciones mucho mejor de lo
+// que nosotros sabemos adivinar coordenadas, y una coordenada mal aprendida
+// manda al repartidor al lugar equivocado con toda confianza.
+// Solo se usan coordenadas cuando una entrega real ya las confirmó.
 function urlComoLlegar(p){
   const c=p.cliente||{};const r=p.reparto||{};
+  const dir=[c.calle,c.numero,c.colonia].filter(Boolean).join(', ')||c.direccion||'';
+  if(dir)return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dir)}&travelmode=driving`;
   if(r.destino&&r.destino.lat!=null)
     return `https://www.google.com/maps/dir/?api=1&destination=${r.destino.lat},${r.destino.lng}&travelmode=driving`;
-  const dir=c.direccion||[c.calle,c.numero,c.colonia].filter(Boolean).join(' ');
-  if(!dir)return null;
-  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dir)}&travelmode=driving`;
+  return null;
 }
 // Pantalla del repartidor: cabe en un teléfono sin scroll interminable.
 // Mosaico compacto arriba, columnas vacías escondidas, y su corte del día.
