@@ -1,4 +1,4 @@
-''use strict';
+'use strict';
 // ============================================================================
 //  server.js — API de ComandaPro
 // ============================================================================
@@ -43,17 +43,55 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => 
 });
 const bad = (msg, status = 400) => { const e = new Error(msg); e.status = status; return e; };
 
-app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+const arranque = Date.now();
+async function salud() {
+  const t = Date.now();
+  let base = 'ok', ms = null;
+  try { await db.loadSys(); ms = Date.now() - t; } catch (e) { base = 'error: ' + (e && e.message); }
+  return { ok: base === 'ok', ts: Date.now(), version: 'v0.9.22',
+    encendidoMin: Math.round((Date.now() - arranque) / 60000),
+    base, baseMs: ms, memoriaMB: Math.round(process.memoryUsage().heapUsed / 1048576) };
+}
+app.get('/health', wrap(async (req, res) => res.json(await salud())));
+app.get('/api/health', wrap(async (req, res) => res.json(await salud())));
 
 // ---------------------------------------------------------------------------
 //  AUTH
 // ---------------------------------------------------------------------------
+// bcrypt.compareSync bloquea el proceso ~100 ms por intento. Con un solo
+// proceso, alguien probando contraseñas congelaba la caja del restaurante.
+const compararClave = (clave, hash) => new Promise((ok) => bcrypt.compare(clave, hash, (err, r) => ok(!err && r)));
+// Freno de intentos por usuario+IP. En memoria: se limpia solo al reiniciar.
+const intentos = new Map();
+const ESPERAS = [0, 0, 0, 0, 0, 2000, 5000, 10000]; // el freno entra hasta el 6º fallo, tope 10 s
+function frenoLogin(llave) {
+  const x = intentos.get(llave);
+  if (!x) return 0;
+  const espera = ESPERAS[Math.min(x.fallos, ESPERAS.length - 1)];
+  const falta = x.ultimo + espera - Date.now();
+  return falta > 0 ? Math.ceil(falta / 1000) : 0;
+}
+function anotarFallo(llave) {
+  const x = intentos.get(llave) || { fallos: 0, ultimo: 0 };
+  x.fallos++; x.ultimo = Date.now();
+  intentos.set(llave, x);
+  if (intentos.size > 5000) intentos.clear(); // no crecer sin límite
+}
+setInterval(() => {
+  const corte = Date.now() - 30 * 60000;
+  for (const [k, v] of intentos) if (v.ultimo < corte) intentos.delete(k);
+}, 10 * 60000).unref();
+
 app.post('/api/auth/login', wrap(async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) throw bad('Faltan credenciales');
+  const llave = String(username).toLowerCase() + '|' + (req.headers['x-forwarded-for'] || req.ip || '');
+  const espera = frenoLogin(llave);
+  if (espera) throw bad(`Demasiados intentos. Espera ${espera} segundo(s).`, 429);
   const sys = await db.loadSys();
   const u = sys.usuarios[username];
-  if (!u || !bcrypt.compareSync(password, u.passHash)) throw bad('Usuario o contraseña incorrectos', 401);
+  if (!u || !(await compararClave(password, u.passHash))) { anotarFallo(llave); throw bad('Usuario o contraseña incorrectos', 401); }
+  intentos.delete(llave);
   if (u.rol !== 'superadmin' && sys.tenants[u.row] && sys.tenants[u.row].activo === false) throw bad('Esta cuenta está suspendida. Contacta al proveedor.', 403);
   const token = firmarToken({ row: u.row, rol: u.rol, username, sucursalId: u.sucursalId || null });
   if (u.rol === 'superadmin') return res.json({ token, tenant: { nombre: 'Super Admin', logo: null, rol: 'superadmin' } });
@@ -640,6 +678,9 @@ app.post('/api/caja/cerrar', puedeCaja, wrap(async (req, res) => {
     out.avisosReparto = { sinLiquidar: pend.length, enRuta: enRuta.length, forzado: !!forzar };
     return out;
   });
+  // Cerrar turno es el momento natural para dejar una copia del día.
+  const row = ctx().row;
+  readState().then((e) => guardarSnapshot(row, e, 'cierre de turno')).catch(() => {});
   res.json(t);
 }));
 app.get('/api/caja/cortes', wrap(async (req, res) => {
@@ -1709,8 +1750,64 @@ app.get('/api/reportes/resumen', wrap(async (req, res) => {
   res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, propinas, porProducto, porPago, porServicio, porHora, porDia });
 }));
 
-// estado completo (debug / export)
-app.get('/api/estado', wrap(async (req, res) => { res.json(await readState()); }));
+// Estado completo del restaurante: clientes con dirección, ventas, sueldos.
+// Solo administración, nunca un cajero, cocinero o repartidor.
+app.get('/api/estado', soloAdmin, wrap(async (req, res) => { res.json(await readState()); }));
+
+// Respaldo descargable. Es la única copia que NO depende de la base.
+app.get('/api/admin/respaldo', soloAdmin, wrap(async (req, res) => {
+  const e = await readState();
+  const c = ctx();
+  const nombre = `respaldo_${(e.meta.nombre || 'restaurante').replace(/[^a-zA-Z0-9]+/g, '_')}_${new Date().toISOString().slice(0, 10)}.json`;
+  res.setHeader('Content-Disposition', `attachment; filename="${nombre}"`);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.send(JSON.stringify({ version: 1, row: c.row, generado: new Date().toISOString(), estado: e }, null, 0));
+}));
+
+// Restauración: destruye el estado actual, por eso va con SETUP_TOKEN y no con
+// la sesión. Antes de pisar nada deja una copia de seguridad.
+app.post('/api/admin/restaurar', wrap(async (req, res) => {
+  if (!process.env.SETUP_TOKEN) throw bad('SETUP_TOKEN no configurado', 500);
+  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
+  const { row, estado, confirmar } = req.body || {};
+  if (!row || !estado || !estado.meta) throw bad('Falta row o un estado válido');
+  if (confirmar !== 'REEMPLAZAR') throw bad('Manda confirmar:"REEMPLAZAR" para aceptar que se pisa el estado actual');
+  const actual = await db.loadState(Number(row));
+  if (actual) await guardarSnapshot(Number(row), actual, 'antes de restaurar');
+  await db.saveState(Number(row), estado);
+  invalidarCache(Number(row));
+  res.json({ ok: true, row: Number(row), nombre: estado.meta.nombre });
+}));
+
+// Instantáneas automáticas en una fila aparte de la misma tabla. Se guardan
+// las últimas 5: si un documento se corrompe, hay de dónde volver.
+const FILA_RESPALDO = (row) => 900000 + Number(row);
+async function guardarSnapshot(row, doc, motivo) {
+  try {
+    const id = FILA_RESPALDO(row);
+    let caja = await db.loadState(id);
+    if (!caja || !Array.isArray(caja.snapshots)) {
+      caja = { snapshots: [] };
+      await db.insertState(id, caja).catch(() => {});
+    }
+    caja.snapshots.unshift({ ts: new Date().toISOString(), motivo, estado: doc });
+    caja.snapshots = caja.snapshots.slice(0, 5);
+    await db.saveState(id, caja);
+    return true;
+  } catch (err) {
+    console.error('[respaldo] no se pudo guardar la instantánea:', err && err.message);
+    return false;
+  }
+}
+
+app.get('/api/admin/respaldos', soloAdmin, wrap(async (req, res) => {
+  const caja = await db.loadState(FILA_RESPALDO(ctx().row));
+  res.json(((caja && caja.snapshots) || []).map((s) => ({
+    ts: s.ts, motivo: s.motivo,
+    pedidos: Object.keys((s.estado && s.estado.pedidos) || {}).length,
+    tamanoKB: Math.round(JSON.stringify(s.estado || {}).length / 1024),
+  })));
+}));
 
 // ---------------------------------------------------------------------------
 //  REPORTE FINANCIERO (admin)  — COGS teórico, margen, food cost, rentabilidad
