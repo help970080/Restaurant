@@ -948,10 +948,8 @@ app.get('/api/reparto', wrap(async (req, res) => {
     const r = p.reparto || {};
     const moto = r.estado === 'en_ruta' && r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
     const dist = moto && r.destino ? M.distanciaKm(moto, r.destino) : null;
-    let etaMin = null;
-    if (r.estado === 'en_ruta' && prom != null && r.salida) {
-      etaMin = Math.max(0, prom - Math.round((Date.now() - new Date(r.salida).getTime()) / 60000));
-    }
+    const eta = M.estimarLlegada(e, p, { ubicacion: moto, promedioMin: prom });
+    const etaMin = eta.min;
     return {
       folio: p.folio, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
       creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
@@ -961,7 +959,7 @@ app.get('/api/reparto', wrap(async (req, res) => {
       efectivo: M.efectivoDePedido(p),
       tiempos: M.tiemposReparto(p),
       // Para que caja vea el avance sin abrir nada más
-      moto, destino: r.destino || null, distanciaKm: dist, etaMin,
+      moto, destino: r.destino || null, distanciaKm: dist, etaMin, etaBase: eta.base,
       rastro: moto && moto.rastro ? moto.rastro : null,
       promedioMin: prom,
       seguimiento: p.seguimiento ? p.seguimiento.token : null,
@@ -1010,6 +1008,14 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
     M.recalcularPedido(ped);
     const r = M.marcarSalida(e, ped);
     for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
+    // La moto está parada en el local: ese es el origen del viaje. Sirve para
+    // medir la distancia recorrida y calibrar la velocidad real del negocio.
+    const uo = M.ubicacionViva(e, ped.reparto.repartidorId, 6);
+    if (uo) {
+      ped.reparto.origen = { lat: uo.lat, lng: uo.lng };
+      const suc = e.sucursales[ped.sucursalId];
+      if (suc && !suc.coordenadas) suc.coordenadas = { lat: uo.lat, lng: uo.lng };
+    }
     return r;
   });
   res.json(p);
@@ -1050,6 +1056,8 @@ app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
       ped.reparto.destino = { lat: u.lat, lng: u.lng };
       M.upsertCliente(e, ped.cliente || {}, { lat: u.lat, lng: u.lng });
     }
+    // Con origen, destino y minutos reales se calibra la velocidad de reparto.
+    M.aprenderVelocidad(e, ped);
     return ped;
   });
   res.json(p);
@@ -1943,12 +1951,13 @@ app.get('/t/:row/:token/estado', (req, res) => {
       // El repartidor y su ubicación solo se muestran cuando ya va en camino.
       const enCamino = r.estado === 'en_ruta';
       const ubi = enCamino && r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
-      let etaMin = null;
-      if (enCamino) {
-        const prom = M.promedioEnRuta(e, p.sucursalId);
-        if (prom != null && r.salida) etaMin = Math.max(0, prom - Math.round((Date.now() - new Date(r.salida).getTime()) / 60000));
-      }
-      res.json(M.vistaSeguimiento(e, p, { repartidor: enCamino ? emp : null, ubicacion: ubi, etaMin }));
+      const eta = enCamino
+        ? M.estimarLlegada(e, p, { ubicacion: ubi, promedioMin: M.promedioEnRuta(e, p.sucursalId) })
+        : { min: null, base: null, distanciaKm: null };
+      res.json(M.vistaSeguimiento(e, p, {
+        repartidor: enCamino ? emp : null, ubicacion: ubi,
+        etaMin: eta.min, etaBase: eta.base, distanciaKm: eta.distanciaKm,
+      }));
     } catch (err) {
       console.error('[seguimiento]', err && err.message);
       res.status(500).json({ error: 'Error al consultar el pedido' });
