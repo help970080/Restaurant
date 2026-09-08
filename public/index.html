@@ -1681,10 +1681,10 @@ function pintarRepartoMoto(tab,reps){
   const vacio=!tab.asignados.length&&!tab.enRuta.length&&!tab.porLiquidar.length;
   $('#view').innerHTML=`
     <div id="gpsBanner"></div>
-    ${activo?`<div class="moto-hero${activo.etaMin===0?' apura':''}">
+    ${activo?`<div class="moto-hero${(activo.etaMin!=null&&activo.etaMin<=1)?' apura':''}">
       <div class="mh-l">En ruta ahora · ${activo.folio}</div>
       <div class="mh-cron" data-cron="${(activo.reparto||{}).salida||''}">--:--</div>
-      <div class="mh-sub">${(activo.cliente&&activo.cliente.nombre)||''}${activo.distanciaKm!=null?` · a ${activo.distanciaKm<1?Math.round(activo.distanciaKm*1000)+' m':activo.distanciaKm.toFixed(1)+' km'}`:''}${activo.etaMin!=null?` · quedan ~${activo.etaMin} min`:''}</div>
+      <div class="mh-sub">${(activo.cliente&&activo.cliente.nombre)||''}${activo.distanciaKm!=null?` · a ${activo.distanciaKm<1?Math.round(activo.distanciaKm*1000)+' m':activo.distanciaKm.toFixed(1)+' km'}`:''}${(activo.distanciaKm!=null&&activo.distanciaKm<0.15)?' · ya llegaste':(activo.etaMin!=null?` · quedan ~${Math.max(1,activo.etaMin)} min`:'')}</div>
     </div>`:''}
     <div class="moto-tiles">
       <div class="mt"><b>${tab.asignados.length}</b><span>Por salir</span></div>
@@ -1753,7 +1753,8 @@ function tarjetaPedidoRep(p,tipo,caja){
   const avance=tipo==='en_ruta'?`<div class="rc-avance${tarde?' tarde':''}">
       ${p.distanciaKm!=null?`<span class="rc-km">${p.distanciaKm<1?Math.round(p.distanciaKm*1000)+' m':p.distanciaKm.toFixed(1)+' km'}</span><span class="rc-al">del domicilio</span>`
         :(p.moto?'<span class="rc-al">Sin domicilio ubicado — se aprende en esta entrega</span>':'<span class="rc-al">La moto no comparte ubicación</span>')}
-      ${p.etaMin!=null?`<span class="rc-eta">${p.etaMin>0?'~'+p.etaMin+' min':'debería estar llegando'}</span>`:''}
+      ${(p.distanciaKm!=null&&p.distanciaKm<0.15)?'<span class="rc-eta">está llegando</span>'
+        :(p.etaMin!=null?`<span class="rc-eta">~${Math.max(1,p.etaMin)} min${p.etaBase==='historial'?'*':''}</span>`:'')}
       ${(p.reparto&&p.reparto.salida)?`<span class="rc-cron mono" data-cron="${p.reparto.salida}">--:--</span>`:''}
     </div>`:'';
   const califica=r.calificacion?`<div class="rc-cal" title="${(r.calificacion.comentario||'').replace(/"/g,'')}">${estrellasTxt(r.calificacion.estrellas)}${r.calificacion.comentario?' <span class="rc-com">“'+r.calificacion.comentario.slice(0,60)+'”</span>':''}</div>`:'';
