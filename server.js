@@ -825,10 +825,11 @@ app.post('/api/pedidos', wrap(async (req, res) => {
     }
     return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username, canalId });
   });
-  // Si no sabemos dónde vive, se busca por la dirección escrita, en segundo
-  // plano para no retrasar la toma del pedido.
-  if (M.esDomicilio(ped) && !(ped.reparto && ped.reparto.destino)) {
-    setImmediate(() => ubicarDomicilio(ctx().row, ped.folio));
+  // Siempre se contrasta contra la dirección escrita, aunque ya haya un punto
+  // guardado: así se detecta un domicilio aprendido mal. En segundo plano.
+  if (M.esDomicilio(ped)) {
+    const row = ctx().row;
+    setImmediate(() => ubicarDomicilio(row, ped.folio));
   }
   if (M.esDomicilio(ped) && ped.seguimiento) {
     avisarCliente({
@@ -1065,6 +1066,8 @@ app.get('/api/reparto', wrap(async (req, res) => {
       tiempos: M.tiemposReparto(p),
       // Para que caja vea el avance sin abrir nada más
       moto, destino: r.destino || null, distanciaKm: dist, etaMin, etaBase: eta.base,
+      destinoDudoso: (r.destino && r.destino.dudoso) || null,
+      destinoFuente: (r.destino && r.destino.fuente) || null,
       rastro: moto && moto.rastro ? moto.rastro : null,
       promedioMin: prom,
       seguimiento: p.seguimiento ? p.seguimiento.token : null,
@@ -1370,67 +1373,183 @@ let geoUltima = 0;
 let geoFetch = (url, opts) => fetch(url, opts);
 function _setGeoFetch(f) { geoFetch = f; }
 
-async function geocodificar(direccion) {
-  if (!GEO_ACTIVO) return null;
-  const q = String(direccion || '').trim();
-  if (q.length < 8) return null;
-  const clave = q.toLowerCase();
-  if (geoCache.has(clave)) return geoCache.get(clave);
-  // Nominatim pide máximo una consulta por segundo
-  const espera = Math.max(0, 1100 - (Date.now() - geoUltima));
-  if (espera) await new Promise((r) => setTimeout(r, espera));
-  geoUltima = Date.now();
-  try {
-    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q='
-      + encodeURIComponent(`${q}, ${GEO_REGION}`);
-    const r = await geoFetch(url, { headers: { 'User-Agent': GEO_UA, 'Accept-Language': 'es' } });
-    if (!r || !r.ok) throw new Error('respuesta ' + (r && r.status));
-    const j = await r.json();
-    const p = Array.isArray(j) && j[0];
-    if (!p || !p.lat || !p.lon) { geoCache.set(clave, null); return null; }
-    const out = { lat: +p.lat, lng: +p.lon, precision: p.type || null, etiqueta: p.display_name || null };
-    if (!isFinite(out.lat) || !isFinite(out.lng)) { geoCache.set(clave, null); return null; }
-    geoCache.set(clave, out);
-    if (geoCache.size > 2000) geoCache.clear();
-    return out;
-  } catch (err) {
-    console.error('[geo] no se pudo ubicar "' + q + '":', err && err.message);
-    return null;
-  }
+// Arma varias formas de preguntar, de la más precisa a la más general.
+// Dos correcciones que importan:
+//  - Si la calle YA trae el número (se captura "Morelos 325" y luego 325 otra
+//    vez), no se repite.
+//  - La región de respaldo solo se agrega si la dirección no nombra ya su
+//    pueblo o estado. Pegarle "Morelos" a una dirección de Juchitepec, que
+//    está en el Estado de México, hace que la consulta se contradiga sola.
+function construirConsultas(cliente, region = GEO_REGION) {
+  const t = (v) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ');
+  const calle = t(cliente.calle), numero = t(cliente.numero), colonia = t(cliente.colonia);
+  // ¿La calle ya termina con ese número?
+  const calleNum = numero && new RegExp('(^|\\s)' + numero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$').test(calle)
+    ? calle : [calle, numero].filter(Boolean).join(' ');
+  const base = [calleNum, colonia].filter(Boolean).join(', ');
+  const salida = [];
+  const agregar = (q, aprox) => { const x = t(q); if (x.length >= 8 && !salida.some((s2) => s2.q === x)) salida.push({ q: x, aproximado: !!aprox }); };
+  // 1) Tal cual se capturó. La búsqueda ya está limitada a México, así que si
+  //    la colonia nombra su pueblo esto basta y es lo más fiel.
+  agregar(`${base}, México`);
+  // 2) Con la región de respaldo, por si la dirección no dice de qué pueblo es.
+  //    OJO: la región NO se deduce del nombre de la calle. Una calle llamada
+  //    "Morelos" en Juchitepec no está en el estado de Morelos.
+  if (region) agregar(`${base}, ${region}`);
+  // 3) Sin el número, que es lo que más falla en los mapas de pueblo.
+  if (calle) { agregar(`${calle}, ${colonia}, México`); if (region) agregar(`${calle}, ${colonia}, ${region}`); }
+  // 4) Último recurso: el centro de la colonia o el pueblo.
+  if (colonia) { agregar(`${colonia}, México`, true); if (region) agregar(`${colonia}, ${region}`, true); }
+  return salida;
 }
 
-// Ubica la dirección de un pedido y la guarda. No bloquea la respuesta: si
-// tarda o falla, el pedido ya se creó igual.
-async function ubicarDomicilio(row, folio) {
+async function consultarNominatim(q) {
+  const espera = Math.max(0, 1100 - (Date.now() - geoUltima));  // Nominatim: 1 por segundo
+  if (espera) await new Promise((r) => setTimeout(r, espera));
+  geoUltima = Date.now();
+  const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=' + encodeURIComponent(q);
+  const r = await geoFetch(url, { headers: { 'User-Agent': GEO_UA, 'Accept-Language': 'es' } });
+  if (!r || !r.ok) throw new Error('respuesta ' + (r && r.status));
+  const j = await r.json();
+  const p = Array.isArray(j) && j[0];
+  if (!p || !p.lat || !p.lon) return null;
+  const lat = +p.lat, lng = +p.lon;
+  if (!isFinite(lat) || !isFinite(lng)) return null;
+  return { lat, lng, precision: p.type || null, etiqueta: p.display_name || null };
+}
+
+// Acepta un texto suelto o un cliente con sus campos. Devuelve además CON QUÉ
+// consulta lo encontró, para poder explicarlo después.
+async function geocodificar(entrada, { detalle = false } = {}) {
+  if (!GEO_ACTIVO) return detalle ? { punto: null, intentos: [], motivo: 'geocodificador apagado' } : null;
+  const consultas = typeof entrada === 'string'
+    ? [{ q: String(entrada).trim() + (/(m[ée]xico)$/i.test(entrada) ? '' : `, ${GEO_REGION}`), aproximado: false }]
+    : construirConsultas(entrada || {});
+  const intentos = [];
+  for (const c of consultas) {
+    if (c.q.length < 8) continue;
+    const clave = c.q.toLowerCase();
+    if (geoCache.has(clave)) {
+      const cacheado = geoCache.get(clave);
+      intentos.push({ q: c.q, resultado: cacheado ? 'en caché' : 'sin resultado (caché)', aproximado: c.aproximado });
+      if (cacheado) {
+        const out = Object.assign({}, cacheado, { aproximado: c.aproximado, consulta: c.q });
+        return detalle ? { punto: out, intentos } : out;
+      }
+      continue;
+    }
+    try {
+      const p = await consultarNominatim(c.q);
+      geoCache.set(clave, p);
+      if (geoCache.size > 2000) geoCache.clear();
+      intentos.push({ q: c.q, resultado: p ? (p.etiqueta || 'encontrado') : 'sin resultado', aproximado: c.aproximado });
+      if (p) {
+        const out = Object.assign({}, p, { aproximado: c.aproximado, consulta: c.q });
+        return detalle ? { punto: out, intentos } : out;
+      }
+    } catch (err) {
+      intentos.push({ q: c.q, resultado: 'error: ' + (err && err.message), aproximado: c.aproximado });
+      console.error('[geo] falló "' + c.q + '":', err && err.message);
+    }
+  }
+  return detalle ? { punto: null, intentos } : null;
+}
+
+// Distancia a partir de la cual un punto guardado y la dirección escrita ya no
+// pueden ser el mismo domicilio. Si discrepan tanto, uno de los dos está mal y
+// el sistema NO debe elegir en silencio: se lo marca a caja.
+const KM_DISCREPANCIA = 3;
+
+// Ubica la dirección del pedido. Siempre compara contra lo que ya estaba
+// guardado, porque un punto aprendido en una entrega falsa se ve igual de
+// legítimo que uno bueno. No bloquea la respuesta del pedido.
+async function ubicarDomicilio(row, folio, { forzar = false, usar = null } = {}) {
   try {
-    await als.run({ row, rol: 'sistema', username: 'geo', sucursalId: null }, async () => {
+    return await als.run({ row, rol: 'sistema', username: 'geo', sucursalId: null }, async () => {
       const e0 = await readState();
       const p0 = e0 && e0.pedidos[folio];
-      if (!p0 || !p0.cliente) return;
-      // Si ya tiene coordenadas aprendidas por GPS, no se tocan: son mejores.
-      if (p0.reparto && p0.reparto.destino && p0.reparto.destino.fuente === 'gps') return;
+      if (!p0 || !p0.cliente) return null;
       const c = p0.cliente;
-      const dir = [c.calle, c.numero, c.colonia].filter(Boolean).join(' ');
-      const punto = await geocodificar(dir);
-      if (!punto) return;
-      await withState((e) => {
+      const previo = (p0.reparto && p0.reparto.destino) || null;
+
+      // Caja decidió quedarse con el punto guardado: se limpia la duda y ya.
+      if (usar === 'guardado' && previo) {
+        return withState((e) => {
+          const p = e.pedidos[folio];
+          if (p && p.reparto && p.reparto.destino) { delete p.reparto.destino.dudoso; p.reparto.destino.verificado = true; }
+          const cli = (e.clientes || {})[M.llaveTel(c.telefono)];
+          if (cli) cli.verificado = true;
+          return p.reparto.destino;
+        });
+      }
+
+      const punto = await geocodificar(c);
+      if (!punto) return previo;
+
+      return withState((e) => {
         const p = e.pedidos[folio];
-        if (!p || !p.reparto) return;
-        if (p.reparto.destino && p.reparto.destino.fuente === 'gps') return;
-        p.reparto.destino = { lat: punto.lat, lng: punto.lng, fuente: 'direccion' };
+        if (!p || !p.reparto) return null;
+        const guardado = p.reparto.destino;
         const cli = (e.clientes || {})[M.llaveTel(c.telefono)];
-        if (cli && (cli.lat == null || cli.fuente !== 'gps')) {
-          cli.lat = punto.lat; cli.lng = punto.lng; cli.fuente = 'direccion'; cli.ubicadoEn = new Date().toISOString();
+        const ponerDireccion = () => {
+          p.reparto.destino = { lat: punto.lat, lng: punto.lng, fuente: 'direccion', aproximado: !!punto.aproximado, consulta: punto.consulta || null, verificado: forzar || usar === 'direccion' };
+          if (cli) { cli.lat = punto.lat; cli.lng = punto.lng; cli.fuente = 'direccion'; cli.verificado = !!(forzar || usar === 'direccion'); cli.ubicadoEn = new Date().toISOString(); }
+          return p.reparto.destino;
+        };
+        if (forzar || usar === 'direccion' || !guardado) return ponerDireccion();
+        // Ya había un punto: se contrasta con la dirección escrita
+        const dif = M.distanciaKm(guardado, punto);
+        if (dif != null && dif > KM_DISCREPANCIA) {
+          if (guardado.verificado) { guardado.dudoso = null; return guardado; }  // ya lo revisó un humano
+          guardado.dudoso = { lat: punto.lat, lng: punto.lng, km: dif, etiqueta: punto.etiqueta || null };
+          return guardado;
         }
+        if (guardado.dudoso) delete guardado.dudoso;   // coinciden: se despeja
+        return guardado;
       });
     });
-  } catch (err) { console.error('[geo] ubicarDomicilio:', err && err.message); }
+  } catch (err) { console.error('[geo] ubicarDomicilio:', err && err.message); return null; }
 }
 
 // Reintento manual desde caja, por si la dirección se corrigió.
+// Por qué el sistema cree lo que cree sobre este domicilio. Sirve para dejar
+// de adivinar: muestra la dirección capturada, las consultas que se hicieron,
+// lo que contestó el geocodificador y qué punto quedó guardado.
+app.get('/api/pedidos/:folio/diagnostico-ubicacion', puedeCaja, wrap(async (req, res) => {
+  const e = await readState();
+  const p = e.pedidos[req.params.folio];
+  if (!p) throw bad('Pedido inexistente', 404);
+  if (!M.esDomicilio(p)) throw bad('El pedido no es a domicilio');
+  const c = p.cliente || {};
+  const r = p.reparto || {};
+  const suc = e.sucursales[p.sucursalId] || {};
+  const moto = r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
+  const dx = await geocodificar(c, { detalle: true });
+  const guardado = r.destino || null;
+  res.json({
+    folio: p.folio,
+    capturado: { nombre: c.nombre, calle: c.calle, numero: c.numero, colonia: c.colonia, referencias: c.referencias },
+    geocodificador: { activo: GEO_ACTIVO, region: GEO_REGION },
+    consultas: construirConsultas(c),
+    intentos: (dx && dx.intentos) || [],
+    encontrado: (dx && dx.punto) || null,
+    guardado,
+    fuenteGuardada: guardado && guardado.fuente,
+    sucursal: suc.coordenadas || null,
+    motoAhora: moto ? { lat: moto.lat, lng: moto.lng, ts: moto.ts } : null,
+    distancias: {
+      motoADomicilio: moto && guardado ? M.distanciaKm(moto, guardado) : null,
+      sucursalADomicilio: suc.coordenadas && guardado ? M.distanciaKm(suc.coordenadas, guardado) : null,
+      guardadoVsDireccion: guardado && dx && dx.punto ? M.distanciaKm(guardado, dx.punto) : null,
+    },
+    estimado: M.estimarLlegada(e, p, { ubicacion: moto, promedioMin: M.promedioEnRuta(e, p.sucursalId) }),
+  });
+}));
+
 app.post('/api/pedidos/:folio/ubicar', puedeCaja, wrap(async (req, res) => {
+  const { forzar = false, usar = null } = req.body || {};
   const row = ctx().row;
-  await ubicarDomicilio(row, req.params.folio);
+  await ubicarDomicilio(row, req.params.folio, { forzar, usar });
   const e = await readState();
   const p = e.pedidos[req.params.folio];
   if (!p) throw bad('Pedido inexistente', 404);
@@ -2227,4 +2346,5 @@ module.exports._setGeoFetch = _setGeoFetch;
 module.exports._setMapsFetch = _setMapsFetch;
 module.exports._resolverLigaMaps = resolverLigaMaps;
 module.exports._leerCoordenadas = leerCoordenadas;
+module.exports._construirConsultas = construirConsultas;
 module.exports._geocodificar = geocodificar;
