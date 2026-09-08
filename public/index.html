@@ -3084,6 +3084,11 @@ async function vAjustes(){
       ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>Respaldo <span class="small">la única copia que no depende de la base de datos</span></h3>
+    <div class="small" style="color:var(--muted);margin-bottom:10px">Descarga un archivo con todo: menú, pedidos, clientes, gastos y personal. Guárdalo fuera del servidor. El sistema además deja una copia automática cada vez que cierras turno.</div>
+    <button class="btn dark" id="btnRespaldo">↓ Descargar respaldo ahora</button>
+    <div id="listaRespaldos" style="margin-top:12px"></div>
+  </div>
   <div class="panel" style="margin-top:16px"><h3>Menú QR / pedido en línea <span class="small">el cliente escanea, ve el menú y manda su pedido (sin comisión)</span></h3>
     <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Pega un QR por sucursal en las mesas o en la entrada. El pedido llega a <b>Caja</b> como cuenta por cobrar (marcada 🔲 QR); ahí lo confirmas y cobras. El pago es en caja.</div>
     <table><thead><tr><th>Sucursal</th><th>Enlace</th><th></th></tr></thead><tbody>
@@ -3109,6 +3114,8 @@ async function vAjustes(){
   $('#logoFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>700000){toast('La imagen es muy pesada (máx ~700KB)');return;}const rd=new FileReader();rd.onload=()=>{logoData=rd.result;$('#logoPrev').src=logoData;$('#logoPrev').style.display='';$('#logoEmpty').style.display='none';};rd.readAsDataURL(f);};
   $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
   $('#addUser').onclick=modalNuevoUsuario;
+  if($('#btnRespaldo'))$('#btnRespaldo').onclick=descargarRespaldo;
+  pintarRespaldos();
   document.querySelectorAll('[data-du]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Eliminar usuario '+b.dataset.du+'?'))return;try{await API.del('/api/usuarios/'+encodeURIComponent(b.dataset.du));toast('Usuario eliminado');vAjustes();}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-com]').forEach(inp=>inp.onchange=async()=>{try{await API.patch('/api/canales/'+inp.dataset.com,{comisionPct:+inp.value||0});app.canales=await API.get('/api/canales');toast('Comisión actualizada');}catch(e){toast(e.message);}});
   document.querySelectorAll('[data-togglecanal]').forEach(b=>b.onclick=async()=>{try{await API.patch('/api/canales/'+b.dataset.togglecanal,{activo:b.dataset.act!=='true'});app.canales=await API.get('/api/canales');vAjustes();}catch(e){toast(e.message);}});
@@ -3132,6 +3139,32 @@ function modalNuevoCanal(){
     <div class="modal-foot"><button class="btn-ghost" id="caCancel">Cancelar</button><button class="btn-primary" id="caOk">Crear</button></div>`;
   ov.classList.add('show');$('#caCancel').onclick=closeModal;
   $('#caOk').onclick=async()=>{const n=$('#caNom').value.trim();if(!n){toast('Falta nombre');return;}try{await API.post('/api/canales',{nombre:n,comisionPct:+$('#caCom').value||0});app.canales=await API.get('/api/canales');closeModal();toast('Canal creado');vAjustes();}catch(e){toast(e.message);}};
+}
+// El respaldo se baja al equipo del dueño: si la base se pierde o se corrompe,
+// es lo único que queda fuera del servidor.
+async function descargarRespaldo(){
+  const b=$('#btnRespaldo');const txt=b.textContent;
+  b.disabled=true;b.textContent='Preparando…';
+  try{
+    const r=await fetch('/api/admin/respaldo',{headers:{Authorization:'Bearer '+API.token}});
+    if(!r.ok)throw new Error('No se pudo generar el respaldo');
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=`respaldo_${((app.tenant&&app.tenant.nombre)||'restaurante').replace(/[^a-zA-Z0-9]+/g,'_')}_${fechaHoy()}.json`;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+    toast(`Respaldo descargado (${Math.round(blob.size/1024)} KB) · guárdalo fuera del servidor`,{tipo:'ok',ms:6000});
+  }catch(e){toast(e.message);}
+  b.disabled=false;b.textContent=txt;
+}
+async function pintarRespaldos(){
+  const c=$('#listaRespaldos');if(!c)return;
+  let l;try{l=await API.get('/api/admin/respaldos');}catch{c.innerHTML='';return;}
+  if(!l.length){c.innerHTML='<div class="small" style="color:var(--muted)">Copias automáticas: aún no hay. Se crea una al cerrar el turno.</div>';return;}
+  c.innerHTML=`<div class="small" style="font-weight:700;margin-bottom:4px">Copias automáticas en el servidor (últimas 5)</div>
+    <table><tbody>${l.map(x=>`<tr><td>${new Date(x.ts).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td>
+      <td class="small">${x.motivo}</td><td class="num">${x.pedidos} pedidos</td><td class="num">${x.tamanoKB} KB</td></tr>`).join('')}</tbody></table>`;
 }
 function modalNuevoUsuario(){
   modal.innerHTML=`<h3>Nuevo usuario</h3><div class="sub">El nombre de usuario debe ser único</div>
