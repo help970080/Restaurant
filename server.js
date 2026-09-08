@@ -1,2350 +1,769 @@
 'use strict';
 // ============================================================================
-//  server.js — API de ComandaPro
+//  model.js — Lógica pura del dominio (menú, pedido, caja, inventario)
+//  Sin Express, sin DB, sin DOM. Solo funciones que reciben/devuelven datos.
+//  El server llama a estas funciones sobre el documento JSONB del tenant.
 // ============================================================================
 
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const bcrypt = require('bcryptjs');
-const db = require('./db');
-const M = require('./model');
-const { als, firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache } = require('./context');
-const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
+const crypto = require('crypto');
+const uid = (p) => p + '_' + crypto.randomBytes(4).toString('hex');
+const r2 = (n) => Math.round((+n) * 100) / 100;
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '4mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-// PUBLIC_URL es la misma que ya usa pagos_qr para Mercado Pago.
-const PUBLIC_BASE = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
-const urlSeguimiento = (row, token) => `${PUBLIC_BASE}/t/${row}/${token}`;
-
-// Aviso automatico al cliente. Si SEGUIMIENTO_WEBHOOK_URL apunta a un servicio
-// de mensajeria (el bot de WhatsApp, un proveedor, lo que sea), se le manda el
-// link ahi. Sin la variable no truena: caja lo envia con el boton de la vista
-// Reparto. Nunca bloquea la respuesta del pedido.
-function avisarCliente({ telefono, nombre, negocio, folio, url }) {
-  const hook = process.env.SEGUIMIENTO_WEBHOOK_URL;
-  if (!hook || !telefono || !url) return;
-  const mensaje = `Hola ${nombre || ''}, ${negocio || 'tu pedido'} ya recibió tu orden ${folio}. Sigue tu pedido en vivo aquí: ${url}`.trim();
-  fetch(hook, {
-    method: 'POST',
-    headers: Object.assign({ 'Content-Type': 'application/json' },
-      process.env.SEGUIMIENTO_WEBHOOK_TOKEN ? { Authorization: 'Bearer ' + process.env.SEGUIMIENTO_WEBHOOK_TOKEN } : {}),
-    body: JSON.stringify({ telefono, mensaje, url, folio }),
-  }).catch((err) => console.error('[seguimiento] no se pudo avisar:', err && err.message));
+// ---- Documento de estado inicial de un tenant ------------------------------
+function estadoInicial(meta = {}) {
+  return {
+    meta: { nombre: meta.nombre || 'Restaurante', creado: new Date().toISOString(), version: 1 },
+    config: { moneda: 'MXN', zonaHoraria: 'America/Mexico_City', logo: null, fiscal: {} },
+    sucursales: {},
+    menu: { categorias: {}, gruposModificadores: {}, productos: {} },
+    insumos: {},
+    promociones: {},
+    empleados: {},
+    asistencias: [],
+    reservas: [],
+    cancelaciones: [],
+    pedidos: {},
+    mesas: {},
+    caja: { turnos: {} },
+    conteos: [],
+    liquidaciones: [],
+    clientes: {},
+    proveedores: {},
+    gastos: [],
+    secuencias: { pedido: {}, gasto: {} },
+  };
 }
 
-const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
-  if (!err.status || err.status >= 500) console.error(err);
-  res.status(err.status || 500).json({ error: err.message || 'Error interno' });
+// ---- Canales de venta / delivery (México) -----------------------------------
+function canalesDefault() {
+  return {
+    local:    { id: 'local',    nombre: 'Mostrador',          comisionPct: 0, activo: true, esApp: false },
+    whatsapp: { id: 'whatsapp', nombre: 'WhatsApp / Teléfono', comisionPct: 0, activo: true, esApp: false },
+    qr:       { id: 'qr',       nombre: 'Menú QR',            comisionPct: 0, activo: true, esApp: false },
+  };
+}
+const crearCanal = ({ nombre, comisionPct = 0, esApp = true }) => ({ id: uid('canal'), nombre, comisionPct: r2(comisionPct), activo: true, esApp });
+
+// ---- RH / Empleados ---------------------------------------------------------
+const crearEmpleado = ({ nombre, puesto = '', sucursalId = null, salarioBase = 0, comisionPct = 0, cumple = '', ingreso = '', telefono = '', username = '', pin = '', rfc = '', domicilio = '' }) => ({
+  id: uid('emp'), nombre, puesto, sucursalId, salarioBase: r2(salarioBase), comisionPct: r2(comisionPct),
+  cumple, ingreso: ingreso || new Date().toISOString().slice(0, 10), telefono, username, pin: String(pin || ''), rfc, domicilio,
+  activo: true, fechaBaja: null, creado: new Date().toISOString(),
 });
-const bad = (msg, status = 400) => { const e = new Error(msg); e.status = status; return e; };
 
-const arranque = Date.now();
-async function salud() {
-  const t = Date.now();
-  let base = 'ok', ms = null;
-  try { await db.loadSys(); ms = Date.now() - t; } catch (e) { base = 'error: ' + (e && e.message); }
-  return { ok: base === 'ok', ts: Date.now(), version: 'v0.9.22',
-    encendidoMin: Math.round((Date.now() - arranque) / 60000),
-    base, baseMs: ms, memoriaMB: Math.round(process.memoryUsage().heapUsed / 1048576) };
+const crearReserva = ({ sucursalId = null, nombre, telefono = '', personas = 2, fecha, hora, mesaId = null, notas = '', creadoPor = '' }) => ({
+  id: uid('res'), sucursalId, nombre: String(nombre || '').trim(), telefono, personas: Math.max(1, +personas || 1),
+  fecha, hora, mesaId: mesaId || null, notas, estado: 'pendiente', creado: new Date().toISOString(), creadoPor,
+});
+const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0 }) => ({ id: uid('promo'), nombre, tipo, valor, activo: true });
+
+// Receta agregada de un combo: suma las recetas de sus productos componentes
+function recetaDeCombo(e, componentes = []) {
+  const acc = {};
+  for (const pid of componentes) {
+    const p = e.menu.productos[pid];
+    if (!p) continue;
+    for (const r of p.receta) acc[r.insumoId] = r2((acc[r.insumoId] || 0) + r.cantidad);
+  }
+  return Object.entries(acc).map(([insumoId, cantidad]) => ({ insumoId, cantidad }));
 }
-app.get('/health', wrap(async (req, res) => res.json(await salud())));
-app.get('/api/health', wrap(async (req, res) => res.json(await salud())));
 
-// ---------------------------------------------------------------------------
-//  AUTH
-// ---------------------------------------------------------------------------
-// bcrypt.compareSync bloquea el proceso ~100 ms por intento. Con un solo
-// proceso, alguien probando contraseñas congelaba la caja del restaurante.
-const compararClave = (clave, hash) => new Promise((ok) => bcrypt.compare(clave, hash, (err, r) => ok(!err && r)));
-// Freno de intentos por usuario+IP. En memoria: se limpia solo al reiniciar.
-const intentos = new Map();
-const ESPERAS = [0, 0, 0, 0, 0, 2000, 5000, 10000]; // el freno entra hasta el 6º fallo, tope 10 s
-function frenoLogin(llave) {
-  const x = intentos.get(llave);
-  if (!x) return 0;
-  const espera = ESPERAS[Math.min(x.fallos, ESPERAS.length - 1)];
-  const falta = x.ultimo + espera - Date.now();
-  return falta > 0 ? Math.ceil(falta / 1000) : 0;
+// ---- Menú -------------------------------------------------------------------
+const crearCategoria = ({ nombre, orden = 0 }) => ({ id: uid('cat'), nombre, orden, visible: true });
+const crearOpcion = ({ nombre, precioDelta = 0, porDefecto = false }) => ({ id: uid('opt'), nombre, precioDelta, porDefecto, activo: true });
+const crearGrupo = ({ nombre, tipo = 'unico', obligatorio = false, max = null, opciones = [] }) => ({ id: uid('grp'), nombre, tipo, obligatorio, max, opciones });
+const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], descripcion = '', estacion = 'Cocina', icono = '' }) =>
+  ({ id: uid('prod'), categoriaId, nombre, descripcion, precioBase, gruposIds, destino, estacion, icono, receta, activo: true, disponible: true });
+const crearInsumo = ({ nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 }) => ({ id: uid('ins'), nombre, unidad, stock, costoUnitario, stockMin });
+const crearMesa = ({ nombre, sucursalId }) => ({ id: uid('mesa'), nombre, sucursalId, estado: 'libre', pedidoFolio: null });
+
+// ---- Folio por sucursal -----------------------------------------------------
+function folioPedido(e, sucId, codigo = 'SUC') {
+  e.secuencias.pedido[sucId] = (e.secuencias.pedido[sucId] || 0) + 1;
+  return `P-${codigo}-${String(e.secuencias.pedido[sucId]).padStart(4, '0')}`;
 }
-function anotarFallo(llave) {
-  const x = intentos.get(llave) || { fallos: 0, ultimo: 0 };
-  x.fallos++; x.ultimo = Date.now();
-  intentos.set(llave, x);
-  if (intentos.size > 5000) intentos.clear(); // no crecer sin límite
-}
-setInterval(() => {
-  const corte = Date.now() - 30 * 60000;
-  for (const [k, v] of intentos) if (v.ultimo < corte) intentos.delete(k);
-}, 10 * 60000).unref();
 
-app.post('/api/auth/login', wrap(async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) throw bad('Faltan credenciales');
-  const llave = String(username).toLowerCase() + '|' + (req.headers['x-forwarded-for'] || req.ip || '');
-  const espera = frenoLogin(llave);
-  if (espera) throw bad(`Demasiados intentos. Espera ${espera} segundo(s).`, 429);
-  const sys = await db.loadSys();
-  const u = sys.usuarios[username];
-  if (!u || !(await compararClave(password, u.passHash))) { anotarFallo(llave); throw bad('Usuario o contraseña incorrectos', 401); }
-  intentos.delete(llave);
-  if (u.rol !== 'superadmin' && sys.tenants[u.row] && sys.tenants[u.row].activo === false) throw bad('Esta cuenta está suspendida. Contacta al proveedor.', 403);
-  const token = firmarToken({ row: u.row, rol: u.rol, username, sucursalId: u.sucursalId || null });
-  if (u.rol === 'superadmin') return res.json({ token, tenant: { nombre: 'Super Admin', logo: null, rol: 'superadmin' } });
-  const tdoc = await db.loadState(u.row);
-  res.json({ token, tenant: { nombre: tdoc ? tdoc.meta.nombre : '', logo: (tdoc && tdoc.config && tdoc.config.logo) || null, rol: u.rol } });
-}));
-
-// ---------------------------------------------------------------------------
-//  PROVISIÓN DE TENANT  (protegido por SETUP_TOKEN, no por JWT)
-// ---------------------------------------------------------------------------
-app.post('/api/admin/provision', wrap(async (req, res) => {
-  const setup = process.env.SETUP_TOKEN;
-  if (!setup) throw bad('SETUP_TOKEN no configurado', 500);
-  if (req.headers['x-setup-token'] !== setup) throw bad('No autorizado', 401);
-  const { nombre = 'Jefe Pizzas', adminUser, adminPass, plantilla = 'restaurante' } = req.body || {};
-  if (!adminUser || !adminPass) throw bad('Falta adminUser/adminPass');
-  const sys = await db.loadSys();
-  if (sys.usuarios[adminUser]) throw bad('Ese usuario ya existe', 409);
-  const row = sys.nextRow || 1;
-  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
-  await db.insertState(row, doc);
-  invalidarCache(row);
-  sys.tenants[row] = { nombre };
-  sys.usuarios[adminUser] = { row, rol: 'admin', passHash: bcrypt.hashSync(adminPass, 10) };
-  sys.nextRow = row + 1;
-  await db.saveSys(sys);
-  res.json({ ok: true, row, nombre, plantilla, sucursales: Object.values(doc.sucursales).map((s) => ({ id: s.id, nombre: s.nombre, codigo: s.codigo })) });
-}));
-
-// Crear el SUPER ADMIN (protegido por SETUP_TOKEN). No pertenece a ningún restaurante.
-app.post('/api/super/provision', wrap(async (req, res) => {
-  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
-  const { username, password } = req.body || {};
-  if (!username || !password) throw bad('Falta usuario o contraseña');
-  const sys = await db.loadSys();
-  if (sys.usuarios[username]) throw bad('Ese usuario ya existe', 409);
-  sys.usuarios[username] = { row: 0, rol: 'superadmin', passHash: bcrypt.hashSync(password, 10) };
-  await db.saveSys(sys);
-  res.json({ ok: true, username });
-}));
-
-// ---------------------------------------------------------------------------
-//  RECARGAR EL MENÚ DE UN TENANT YA CREADO  (protegido por SETUP_TOKEN)
-//  El catálogo de seed.js solo se aplica al provisionar. Este endpoint vuelve
-//  a plantarlo sobre un tenant existente sin tocar su row, sus usuarios, sus
-//  sucursales, sus mesas, su caja ni su historial de pedidos.
-//
-//  Es seguro para los pedidos viejos porque cada línea guarda su propio
-//  snapshot de nombre, precio, estación y modificadores: no consultan el menú.
-//  Aun así conviene correrlo sin pedidos abiertos, para que el descuento de
-//  inventario de esos pedidos encuentre sus recetas.
-// ---------------------------------------------------------------------------
-app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
-  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
-  const { row, plantilla = 'neveria', confirmar, conservarInsumos = false } = req.body || {};
-  if (row == null) throw bad('Falta row');
-  if (confirmar !== 'RECARGAR') throw bad("Falta confirmar:'RECARGAR' (reemplaza el menú completo)");
-
-  const est = await db.loadState(Number(row));
-  if (!est) throw bad('Ese restaurante no existe', 404);
-
-  const abiertos = Object.values(est.pedidos || {}).filter((p) => p.estado === 'abierto').length;
-  const doc = plantilla === 'neveria' ? buildHawaiianDoc(est.meta.nombre) : buildTenantDoc(est.meta.nombre);
-
-  const antes = {
-    categorias: Object.keys(est.menu.categorias).length,
-    productos: Object.keys(est.menu.productos).length,
-    insumos: Object.keys(est.insumos).length,
+// ---- Línea del pedido (resuelve modificadores y snapshot de precio) ---------
+//  prod: producto del menú.  modsElegidos: [{ grupoId, opcionId }]
+function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '' } = {}) {
+  const modificadores = [];
+  for (const sel of modsElegidos) {
+    const g = e.menu.gruposModificadores[sel.grupoId];
+    if (!g) continue;
+    const o = g.opciones.find((x) => x.id === sel.opcionId);
+    if (!o) continue;
+    modificadores.push({ grupoId: g.id, grupoNombre: g.nombre, opcionId: o.id, opcionNombre: o.nombre, precioDelta: o.precioDelta });
+  }
+  const deltas = modificadores.reduce((s, m) => s + (m.precioDelta || 0), 0);
+  const precioUnitario = r2(prod.precioBase + deltas);
+  return {
+    id: uid('ln'),
+    productoId: prod.id,
+    nombre: prod.nombre,            // SNAPSHOT
+    destino: prod.destino,
+    estacion: prod.estacion || 'Cocina', // SNAPSHOT — estación de cocina para ruteo del KDS
+    cantidad,
+    precioUnitario,                 // SNAPSHOT
+    modificadores,                  // SNAPSHOT
+    notas,
+    cocina: prod.destino === 'cocina' ? 'pendiente' : null, // pendiente -> enviado -> servido
+    importe: r2(precioUnitario * cantidad),
   };
-
-  // Solo se reemplaza el catálogo. Todo lo demás del tenant queda intacto.
-  est.menu = doc.menu;
-  if (!conservarInsumos) est.insumos = doc.insumos;
-  if (doc.config && doc.config.tema) est.config.tema = doc.config.tema;
-  est.meta.menuRecargado = new Date().toISOString();
-
-  await db.saveState(Number(row), est);
-  invalidarCache(Number(row));
-
-  res.json({
-    ok: true, row: Number(row), nombre: est.meta.nombre, plantilla,
-    antes,
-    ahora: {
-      categorias: Object.keys(est.menu.categorias).length,
-      productos: Object.keys(est.menu.productos).length,
-      insumos: Object.keys(est.insumos).length,
-    },
-    conservado: { sucursales: Object.keys(est.sucursales).length, mesas: Object.keys(est.mesas).length, pedidos: Object.keys(est.pedidos).length },
-    pedidosAbiertos: abiertos,
-  });
-}));
-
-// A partir de aquí, todo requiere JWT y corre dentro del contexto del tenant
-app.use('/api', auth);
-
-// Solo administradores
-function soloAdmin(req, res, next) {
-  const r = ctx().rol;
-  if (r !== 'admin' && r !== 'gerente') return res.status(403).json({ error: 'Solo administradores o gerentes' });
-  next();
-}
-function puedeCaja(req, res, next) {
-  const r = ctx().rol;
-  if (!['admin', 'gerente', 'cajero'].includes(r)) return res.status(403).json({ error: 'Solo caja (administrador, gerente o cajero) puede cobrar o manejar el turno' });
-  next();
-}
-function soloSuper(req, res, next) {
-  if (ctx().rol !== 'superadmin') return res.status(403).json({ error: 'Solo super admin' });
-  next();
 }
 
-// ---------------------------------------------------------------------------
-//  SUPER ADMIN — gestiona restaurantes (tenants)
-// ---------------------------------------------------------------------------
-app.get('/api/super/tenants', soloSuper, wrap(async (req, res) => {
-  const sys = await db.loadSys();
-  const out = [];
-  for (const [row, t] of Object.entries(sys.tenants)) {
-    const usuarios = Object.values(sys.usuarios).filter((u) => u.row === +row).length;
-    let sucursales = 0, productos = 0;
-    try { const doc = await db.loadState(+row); if (doc) { sucursales = Object.keys(doc.sucursales).length; productos = Object.keys(doc.menu.productos || {}).length; } } catch {}
-    out.push({ row: +row, nombre: t.nombre, usuarios, sucursales, productos, activo: t.activo !== false, creado: t.creado || null });
-  }
-  res.json(out);
-}));
-app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
-  const b = req.body || {};
-  const nombre = (b.nombre || '').trim();
-  const adminUser = (b.adminUser || b.adminUsuario || '').trim();
-  let adminPass = b.adminPass || b.adminPassword || '';
-  const adminNombre = (b.adminNombre || 'Administrador').trim();
-  const plantilla = b.plantilla === 'neveria' ? 'neveria' : 'restaurante'; // catalogo inicial del tenant
-  if (!nombre || !adminUser) throw bad('Falta nombre del restaurante o usuario admin');
-  if (!adminPass) adminPass = Math.random().toString(36).slice(2, 8) + Math.floor(10 + Math.random() * 89);
-  const sys = await db.loadSys();
-  if (sys.usuarios[adminUser]) throw bad('Ese usuario admin ya existe', 409);
-  const row = sys.nextRow || 1;
-  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
-  await db.insertState(row, doc);
-  invalidarCache(row);
-  sys.tenants[row] = { nombre, activo: true, creado: new Date().toISOString() };
-  sys.usuarios[adminUser] = { row, rol: 'admin', nombre: adminNombre, passHash: bcrypt.hashSync(adminPass, 10) };
-  sys.nextRow = row + 1;
-  await db.saveSys(sys);
-  res.json({ ok: true, row, nombre, plantilla, adminUsuario: adminUser, adminPassword: adminPass });
-}));
-// Suspender / reactivar un restaurante
-app.patch('/api/super/tenants/:row', soloSuper, wrap(async (req, res) => {
-  const row = +req.params.row;
-  const { activo } = req.body || {};
-  const sys = await db.loadSys();
-  if (!sys.tenants[row]) throw bad('Restaurante inexistente', 404);
-  sys.tenants[row].activo = activo !== false;
-  await db.saveSys(sys);
-  res.json({ ok: true, row, activo: sys.tenants[row].activo });
-}));
-// Entrar como soporte: token del admin del restaurante
-app.post('/api/super/enter/:row', soloSuper, wrap(async (req, res) => {
-  const row = +req.params.row;
-  const sys = await db.loadSys();
-  if (!sys.tenants[row]) throw bad('Restaurante inexistente', 404);
-  const entry = Object.entries(sys.usuarios).find(([, u]) => u.row === row && u.rol === 'admin') || Object.entries(sys.usuarios).find(([, u]) => u.row === row);
-  if (!entry) throw bad('Ese restaurante no tiene usuarios', 404);
-  const [username, u] = entry;
-  const token = firmarToken({ row, rol: u.rol, username, sucursalId: u.sucursalId || null });
-  const doc = await db.loadState(row);
-  res.json({ token, tenant: { nombre: doc ? doc.meta.nombre : sys.tenants[row].nombre, logo: (doc && doc.config && doc.config.logo) || null, rol: u.rol } });
-}));
-
-// ---------------------------------------------------------------------------
-//  IDENTIDAD
-// ---------------------------------------------------------------------------
-app.get('/api/me', wrap(async (req, res) => {
-  const c = ctx();
-  if (c.rol === 'superadmin') return res.json({ username: c.username, rol: 'superadmin', sucursalId: null, tenant: { nombre: 'Super Admin', logo: null } });
-  const e = await readState();
-  res.json({ username: c.username, rol: c.rol, sucursalId: c.sucursalId, row: c.row, tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, fiscal: (e.config && e.config.fiscal) || {}, zonaHoraria: tzTenant(e) } });
-}));
-
-// ---------------------------------------------------------------------------
-//  USUARIOS (admin) — viven en la fila SYS
-// ---------------------------------------------------------------------------
-app.get('/api/usuarios', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const sys = await db.loadSys();
-  const arr = Object.entries(sys.usuarios).filter(([, d]) => d.row === c.row).map(([u, d]) => ({ username: u, rol: d.rol, sucursalId: d.sucursalId || null }));
-  res.json(arr);
-}));
-app.post('/api/usuarios', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const { username, password, rol = 'cajero', sucursalId = null } = req.body || {};
-  if (!username || !password) throw bad('Falta usuario o contraseña');
-  const sys = await db.loadSys();
-  if (sys.usuarios[username]) throw bad('Ese usuario ya existe (debe ser único)', 409);
-  sys.usuarios[username] = { row: c.row, rol, passHash: bcrypt.hashSync(password, 10), sucursalId };
-  await db.saveSys(sys);
-  res.json({ username, rol, sucursalId });
-}));
-app.patch('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const u = req.params.username; const { password, rol, sucursalId } = req.body || {};
-  const sys = await db.loadSys(); const d = sys.usuarios[u];
-  if (!d || d.row !== c.row) throw bad('Usuario inexistente', 404);
-  if (password) d.passHash = bcrypt.hashSync(password, 10);
-  if (rol) d.rol = rol;
-  if (sucursalId !== undefined) d.sucursalId = sucursalId;
-  await db.saveSys(sys);
-  res.json({ ok: true });
-}));
-app.delete('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
-  const c = ctx(); const u = req.params.username;
-  if (u === c.username) throw bad('No puedes eliminar tu propio usuario');
-  const sys = await db.loadSys(); const d = sys.usuarios[u];
-  if (!d || d.row !== c.row) throw bad('Usuario inexistente', 404);
-  delete sys.usuarios[u]; await db.saveSys(sys);
-  res.json({ ok: true });
-}));
-
-// ---------------------------------------------------------------------------
-//  CONFIGURACIÓN / MARCA (logo + nombre)
-// ---------------------------------------------------------------------------
-app.get('/api/config', wrap(async (req, res) => {
-  const e = await readState();
-  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda, fiscal: e.config.fiscal || {} });
-}));
-app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
-  const { nombre, logo, fiscal } = req.body || {};
-  const out = await withState((e) => {
-    if (nombre) e.meta.nombre = nombre;
-    if (logo !== undefined) e.config.logo = logo;
-    if (fiscal && typeof fiscal === 'object') e.config.fiscal = { ...(e.config.fiscal || {}), ...fiscal };
-    return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {} };
-  });
-  res.json(out);
-}));
-
-// ---------------------------------------------------------------------------
-//  PROMOCIONES
-// ---------------------------------------------------------------------------
-app.get('/api/promociones', wrap(async (req, res) => {
-  const e = await readState();
-  res.json(Object.values(e.promociones || {}));
-}));
-app.post('/api/promociones', soloAdmin, wrap(async (req, res) => {
-  const { nombre, tipo = 'porcentaje', valor } = req.body || {};
-  if (!nombre || valor == null) throw bad('Falta nombre o valor');
-  const p = await withState((e) => { if (!e.promociones) e.promociones = {}; const pr = M.crearPromocion({ nombre, tipo, valor }); e.promociones[pr.id] = pr; return pr; });
-  res.json(p);
-}));
-app.patch('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
-  const patch = req.body || {};
-  const p = await withState((e) => {
-    const pr = (e.promociones || {})[req.params.id];
-    if (!pr) throw bad('Promoción inexistente', 404);
-    for (const k of ['nombre', 'tipo', 'valor', 'activo']) if (k in patch) pr[k] = patch[k];
-    return pr;
-  });
-  res.json(p);
-}));
-app.delete('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
-  await withState((e) => { if (e.promociones) delete e.promociones[req.params.id]; });
-  res.json({ ok: true });
-}));
-
-// ---------------------------------------------------------------------------
-//  RH / PERSONAL  (admin)
-// ---------------------------------------------------------------------------
-app.get('/api/rh/empleados', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  res.json(Object.values(e.empleados || {}));
-}));
-app.post('/api/rh/empleados', soloAdmin, wrap(async (req, res) => {
-  const b = req.body || {};
-  if (!b.nombre) throw bad('Falta nombre');
-  const emp = await withState((e) => { if (!e.empleados) e.empleados = {}; const x = M.crearEmpleado(b); e.empleados[x.id] = x; return x; });
-  res.json(emp);
-}));
-app.patch('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
-  const b = req.body || {};
-  const emp = await withState((e) => {
-    const x = (e.empleados || {})[req.params.id];
-    if (!x) throw bad('Empleado inexistente', 404);
-    for (const k of ['nombre', 'puesto', 'sucursalId', 'cumple', 'ingreso', 'telefono', 'username', 'pin', 'rfc', 'domicilio']) if (k in b) x[k] = b[k];
-    if ('salarioBase' in b) x.salarioBase = M.r2(+b.salarioBase);
-    if ('comisionPct' in b) x.comisionPct = M.r2(+b.comisionPct);
-    if ('activo' in b) { x.activo = !!b.activo; x.fechaBaja = b.activo ? null : new Date().toISOString().slice(0, 10); }
-    return x;
-  });
-  res.json(emp);
-}));
-app.delete('/api/rh/empleados/:id', soloAdmin, wrap(async (req, res) => {
-  await withState((e) => { if (e.empleados) delete e.empleados[req.params.id]; });
-  res.json({ ok: true });
-}));
-app.get('/api/rh/resumen', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const empleados = Object.values(e.empleados || {});
-  const activos = empleados.filter((x) => x.activo);
-  const hoy = new Date();
-  // Cumpleaños próximos (31 días)
-  const cumples = [];
-  for (const x of activos) {
-    if (!x.cumple) continue;
-    const c = String(x.cumple).trim();
-    let mes, dia;
-    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(c)) { const d = new Date(c.slice(0, 10) + 'T00:00:00'); mes = d.getMonth() + 1; dia = d.getDate(); }
-    else if (/^\d{1,2}[/-]\d{1,2}$/.test(c)) { const [a, b] = c.split(/[/-]/).map(Number); dia = a; mes = b; } // DD/MM
-    else continue;
-    if (!mes || !dia) continue;
-    let prox = new Date(hoy.getFullYear(), mes - 1, dia);
-    if (prox < new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) prox = new Date(hoy.getFullYear() + 1, mes - 1, dia);
-    const dias = Math.round((prox - new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) / 86400000);
-    if (dias <= 31) cumples.push({ nombre: x.nombre, puesto: x.puesto, fecha: `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}`, dias });
-  }
-  cumples.sort((a, b) => a.dias - b.dias);
-  // Ranking de vendedores (por usuario que cobró) + ranking por sucursal
-  const cobrados = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado');
-  const porVend = {}, porSuc = {};
-  for (const p of cobrados) {
-    const u = p.creadoPor || 'sistema';
-    porVend[u] = porVend[u] || { ventas: 0, pedidos: 0 };
-    porVend[u].ventas = M.r2(porVend[u].ventas + p.total); porVend[u].pedidos++;
-    const s = p.sucursalId;
-    porSuc[s] = porSuc[s] || { ventas: 0, pedidos: 0 };
-    porSuc[s].ventas = M.r2(porSuc[s].ventas + p.total); porSuc[s].pedidos++;
-  }
-  const empByUser = {}; empleados.forEach((x) => { if (x.username) empByUser[x.username] = x; });
-  const vendedores = Object.entries(porVend).map(([usuario, d]) => {
-    const emp = empByUser[usuario];
-    const comisionPct = emp ? emp.comisionPct : 0;
-    return { usuario, nombre: emp ? emp.nombre : usuario, ventas: d.ventas, pedidos: d.pedidos, comisionPct, comisionEstimada: M.r2(d.ventas * comisionPct / 100) };
-  }).sort((a, b) => b.ventas - a.ventas);
-  const sucursales = Object.entries(porSuc).map(([sid, d]) => ({ sucursalId: sid, nombre: (e.sucursales[sid] || {}).nombre || sid, ventas: d.ventas, pedidos: d.pedidos })).sort((a, b) => b.ventas - a.ventas);
-  // Rotación
-  const bajas = empleados.filter((x) => !x.activo);
-  const bajas90 = bajas.filter((x) => x.fechaBaja && (hoy - new Date(x.fechaBaja)) / 86400000 <= 90).length;
-  const antig = activos.filter((x) => x.ingreso).map((x) => (hoy - new Date(x.ingreso)) / 86400000 / 30.44);
-  const antiguedadPromMeses = antig.length ? M.r2(antig.reduce((s, v) => s + v, 0) / antig.length) : 0;
-  const tasaRotacion = (activos.length + bajas90) ? M.r2(bajas90 / (activos.length + bajas90) * 100) : 0;
-  // Nómina
-  const nominaBase = M.r2(activos.reduce((s, x) => s + x.salarioBase, 0));
-  const comisionesEstimadas = M.r2(vendedores.reduce((s, v) => s + v.comisionEstimada, 0));
-  res.json({
-    activos: activos.length, totalEmpleados: empleados.length,
-    cumples, vendedores, sucursales,
-    rotacion: { activos: activos.length, bajas90, antiguedadPromMeses, tasaRotacion },
-    nomina: { base: nominaBase, comisionesEstimadas, total: M.r2(nominaBase + comisionesEstimadas) },
-  });
-}));
-
-// ---------------------------------------------------------------------------
-//  ASISTENCIA / CHECADOR
-// ---------------------------------------------------------------------------
-// Lista para el kiosco (cualquier usuario autenticado del restaurante)
-app.get('/api/asistencia/empleados', wrap(async (req, res) => {
-  const e = await readState();
-  const abiertas = {};
-  for (const a of (e.asistencias || [])) if (!a.salida && !abiertas[a.empleadoId]) abiertas[a.empleadoId] = a.entrada;
-  res.json(Object.values(e.empleados || {}).filter((x) => x.activo).map((x) => ({
-    id: x.id, nombre: x.nombre, puesto: x.puesto, requierePin: !!x.pin,
-    trabajando: !!abiertas[x.id], desde: abiertas[x.id] || null,
-  })));
-}));
-// Checar entrada/salida (toggle). Cualquier usuario autenticado (kiosco en sucursal).
-app.post('/api/asistencia/checar', wrap(async (req, res) => {
-  const { empleadoId, pin = '', sucursalId = null } = req.body || {};
-  const out = await withState((e) => {
-    if (!e.asistencias) e.asistencias = [];
-    const emp = (e.empleados || {})[empleadoId];
-    if (!emp || !emp.activo) throw bad('Empleado inexistente', 404);
-    if (emp.pin && String(emp.pin) !== String(pin)) throw bad('PIN incorrecto');
-    const now = new Date().toISOString();
-    const abierto = e.asistencias.find((a) => a.empleadoId === empleadoId && !a.salida);
-    if (abierto) {
-      abierto.salida = now;
-      abierto.horas = M.r2((new Date(now) - new Date(abierto.entrada)) / 3600000);
-      return { accion: 'salida', nombre: emp.nombre, horas: abierto.horas, hora: now };
-    }
-    const rec = { id: M.uid('asis'), empleadoId, nombre: emp.nombre, puesto: emp.puesto, sucursalId: sucursalId || emp.sucursalId || null, entrada: now, salida: null, horas: 0, fecha: now.slice(0, 10) };
-    e.asistencias.unshift(rec);
-    if (e.asistencias.length > 3000) e.asistencias = e.asistencias.slice(0, 3000);
-    return { accion: 'entrada', nombre: emp.nombre, hora: now };
-  });
-  res.json(out);
-}));
-// Reporte (admin / gerente)
-app.get('/api/asistencia', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const all = e.asistencias || [];
-  const sn = (id) => (e.sucursales[id] || {}).nombre || '';
-  const ahora = new Date();
-  const activos = all.filter((a) => !a.salida).map((a) => ({ ...a, sucursal: sn(a.sucursalId), horasParcial: M.r2((ahora - new Date(a.entrada)) / 3600000) }));
-  const hoy = new Date().toISOString().slice(0, 10);
-  const delDia = all.filter((a) => a.fecha === hoy).map((a) => ({ ...a, sucursal: sn(a.sucursalId) }));
-  const recientes = all.slice(0, 60).map((a) => ({ ...a, sucursal: sn(a.sucursalId) }));
-  res.json({ activos, hoy: delDia, recientes });
-}));
-
-// ---------------------------------------------------------------------------
-//  CANALES DE VENTA (mostrador, WhatsApp/telefono, QR). Reparto 100% propio:
-//  no hay plataformas externas ni comisiones de terceros en este modelo.
-// ---------------------------------------------------------------------------
-async function ensureCanales() {
-  return withState((e) => {
-    if (!e.config.canales || !Object.keys(e.config.canales).length) e.config.canales = M.canalesDefault();
-    // Migracion: este restaurante reparte con motos propias. Se retiran los
-    // canales de plataformas externas, pero NO se tocan los pedidos historicos
-    // que ya los referencian (el reporte los resuelve por canalId).
-    for (const id of ['didi', 'rappi', 'uber']) delete e.config.canales[id];
-    for (const [id, ch] of Object.entries(e.config.canales)) if (ch && ch.esApp) delete e.config.canales[id];
-    for (const [id, ch] of Object.entries(M.canalesDefault())) if (!e.config.canales[id]) e.config.canales[id] = ch;
-    return e.config.canales;
-  });
-}
-app.get('/api/canales', wrap(async (req, res) => {
-  const canales = await ensureCanales();
-  res.json(Object.values(canales));
-}));
-app.post('/api/canales', soloAdmin, wrap(async (req, res) => {
-  const { nombre, comisionPct = 0 } = req.body || {};
-  if (!nombre) throw bad('Falta nombre');
-  if (+comisionPct > 0) throw bad('Este restaurante opera con reparto propio: no se dan de alta canales con comisión');
-  const ch = await withState((e) => {
-    if (!e.config.canales) e.config.canales = M.canalesDefault();
-    const c = M.crearCanal({ nombre, comisionPct: 0, esApp: false });
-    e.config.canales[c.id] = c; return c;
-  });
-  res.json(ch);
-}));
-app.patch('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
-  const patch = req.body || {};
-  const ch = await withState((e) => {
-    const c = (e.config.canales || {})[req.params.id];
-    if (!c) throw bad('Canal inexistente', 404);
-    if (patch.nombre != null) c.nombre = patch.nombre;
-    if (patch.comisionPct != null) {
-      if (+patch.comisionPct > 0) throw bad('Reparto propio: la comisión de canal debe ser 0');
-      c.comisionPct = 0;
-    }
-    if (patch.activo != null) c.activo = !!patch.activo;
-    return c;
-  });
-  res.json(ch);
-}));
-app.delete('/api/canales/:id', soloAdmin, wrap(async (req, res) => {
-  if (req.params.id === 'local') throw bad('No se puede eliminar el canal local');
-  await withState((e) => { if (e.config.canales) delete e.config.canales[req.params.id]; });
-  res.json({ ok: true });
-}));
-
-// ---------------------------------------------------------------------------
-//  MENÚ
-// ---------------------------------------------------------------------------
-app.get('/api/menu', wrap(async (req, res) => {
-  const e = await readState();
-  res.json({ categorias: e.menu.categorias, gruposModificadores: e.menu.gruposModificadores, productos: e.menu.productos });
-}));
-app.post('/api/menu/categorias', soloAdmin, wrap(async (req, res) => {
-  const { nombre, orden = 0 } = req.body || {};
-  if (!nombre) throw bad('Falta nombre');
-  const c = await withState((e) => { const c = M.crearCategoria({ nombre, orden }); e.menu.categorias[c.id] = c; return c; });
-  res.json(c);
-}));
-app.post('/api/menu/grupos', soloAdmin, wrap(async (req, res) => {
-  const { nombre, tipo, obligatorio, max, opciones = [] } = req.body || {};
-  if (!nombre) throw bad('Falta nombre');
-  const g = await withState((e) => {
-    const grp = M.crearGrupo({ nombre, tipo, obligatorio, max, opciones: opciones.map((o) => M.crearOpcion(o)) });
-    e.menu.gruposModificadores[grp.id] = grp; return grp;
-  });
-  res.json(g);
-}));
-// Editar un grupo de modificadores (tamaños, orilla…). El precio final de una
-// linea es precioBase del producto + el precioDelta de la opcion elegida, asi
-// que aqui es donde se ajusta lo que cuesta una Mediana, Grande o Familiar.
-app.patch('/api/menu/grupos/:id', soloAdmin, wrap(async (req, res) => {
-  const { nombre, tipo, obligatorio, max, opciones } = req.body || {};
-  const g = await withState((e) => {
-    const grp = e.menu.gruposModificadores[req.params.id];
-    if (!grp) throw bad('Grupo inexistente', 404);
-    if (nombre != null && String(nombre).trim()) grp.nombre = String(nombre).trim();
-    if (tipo != null) grp.tipo = tipo === 'multiple' ? 'multiple' : 'unico';
-    if (obligatorio != null) grp.obligatorio = !!obligatorio;
-    if (max !== undefined) grp.max = max == null || max === '' ? null : Math.max(1, parseInt(max, 10) || 1);
-    if (Array.isArray(opciones)) {
-      const out = [];
-      for (const o of opciones) {
-        const prev = o && o.id ? grp.opciones.find((x) => x.id === o.id) : null;
-        if (prev) {
-          if (o.nombre != null && String(o.nombre).trim()) prev.nombre = String(o.nombre).trim();
-          if (o.precioDelta != null) prev.precioDelta = M.r2(+o.precioDelta || 0);
-          if (o.porDefecto != null) prev.porDefecto = !!o.porDefecto;
-          if (o.activo != null) prev.activo = !!o.activo;
-          out.push(prev);
-        } else if (o && String(o.nombre || '').trim()) {
-          out.push(M.crearOpcion({
-            nombre: String(o.nombre).trim(),
-            precioDelta: M.r2(+o.precioDelta || 0),
-            porDefecto: !!o.porDefecto,
-          }));
-        }
-      }
-      if (!out.length) throw bad('El grupo necesita al menos una opción');
-      // Las lineas ya cobradas guardan su propia copia del modificador, asi que
-      // quitar una opcion aqui no altera tickets ni reportes historicos.
-      grp.opciones = out;
-    }
-    return grp;
-  });
-  res.json(g);
-}));
-
-app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
-  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '', estacion = 'Cocina' } = req.body || {};
-  if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
-  const p = await withState((e) => {
-    if (!e.menu.categorias[categoriaId]) throw bad('Categoría inexistente');
-    let finalReceta = receta, esCombo = false;
-    if (componentes && componentes.length) { finalReceta = M.recetaDeCombo(e, componentes); esCombo = true; }
-    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta, descripcion, estacion });
-    if (esCombo) { prod.esCombo = true; prod.componentes = componentes; }
-    if (foto) prod.foto = foto;
-    e.menu.productos[prod.id] = prod; return prod;
-  });
-  res.json(p);
-}));
-app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
-  const { id } = req.params;
-  const patch = req.body || {};
-  const p = await withState((e) => {
-    const prod = e.menu.productos[id];
-    if (!prod) throw bad('Producto inexistente', 404);
-    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion', 'estacion']) if (k in patch) prod[k] = patch[k];
-    return prod;
-  });
-  res.json(p);
-}));
-
-app.get('/api/sucursales', wrap(async (req, res) => { const e = await readState(); res.json(Object.values(e.sucursales)); }));
-
-// Acepta "18.9145, -98.9760" o cualquier liga de Google Maps pegada tal cual.
-function leerCoordenadas(txt) {
-  const t = String(txt || '').trim();
-  if (!t) return null;
-  const patrones = [
-    /@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,            // .../@18.91,-98.97,17z
-    /[?&#]q(?:uery)?=(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)/, // ?q=lat,lng
-    /!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/,        // formato interno de Maps
-    /[?&]ll=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,      // ?ll=lat,lng
-    /(-?\d{1,3}\.\d{3,})\s*[,;\s]\s*(-?\d{1,3}\.\d{3,})/,  // pegado a mano
-  ];
-  for (const p of patrones) {
-    const m = t.match(p);
-    if (!m) continue;
-    const lat = +m[1], lng = +m[2];
-    if (isFinite(lat) && isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) return { lat, lng };
-  }
-  return null;
+function recalcularPedido(p) {
+  p.subtotal = r2(p.lineas.reduce((s, l) => s + l.importe, 0));
+  let d = 0;
+  if (p.descuento) d = p.descuento.tipo === 'porcentaje' ? p.subtotal * (p.descuento.valor / 100) : p.descuento.valor;
+  p.total = r2(p.subtotal + (p.costoEnvio || 0) - d); // la propina NO entra al total del consumo
+  return p;
 }
 
-const esLigaMaps = (t) => /^https?:\/\/\S+$/i.test(String(t || '').trim())
-  && /(google\.[a-z.]+\/maps|maps\.app\.goo\.gl|goo\.gl\/maps|share\.google)/i.test(t);
-
-// Las ligas cortas para compartir no traen coordenadas: hay que seguir el
-// redirect hasta la URL larga, que sí las trae. El servidor sí puede hacerlo.
-let mapsFetch = (url, opts) => fetch(url, opts);
-function _setMapsFetch(f) { mapsFetch = f; }
-async function resolverLigaMaps(liga) {
-  const directo = leerCoordenadas(liga);
-  if (directo) return directo;
-  if (!esLigaMaps(liga)) return null;
-  let url = String(liga).trim();
-  try {
-    for (let salto = 0; salto < 5; salto++) {
-      const r = await mapsFetch(url, {
-        redirect: 'manual',
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept-Language': 'es-MX' },
-      });
-      const sig = r.headers && (r.headers.get('location') || r.headers.get('Location'));
-      if (sig) {
-        url = new URL(sig, url).toString();
-        const c = leerCoordenadas(url);
-        if (c) return c;
-        continue;
-      }
-      const cuerpo = await r.text();
-      return leerCoordenadas(cuerpo.slice(0, 200000)) || leerCoordenadas(r.url || url);
-    }
-    return leerCoordenadas(url);
-  } catch (err) {
-    console.error('[maps] no se pudo resolver la liga:', err && err.message);
-    return null;
-  }
-}
-
-// La dirección del local es fija: se captura una vez y se acabaron las dudas.
-app.patch('/api/sucursales/:id', soloAdmin, wrap(async (req, res) => {
-  const { nombre, direccion, coordenadas, telefono } = req.body || {};
-  // Si pegan una liga (incluso corta), se resuelve ANTES de tocar el estado.
-  let coordsResueltas = null;
-  if (coordenadas !== undefined && coordenadas !== null && coordenadas !== '') {
-    const crudo = typeof coordenadas === 'string' ? coordenadas : `${coordenadas.lat}, ${coordenadas.lng}`;
-    coordsResueltas = await resolverLigaMaps(crudo);
-  }
-  const suc = await withState((e) => {
-    const x = e.sucursales[req.params.id];
-    if (!x) throw bad('Sucursal inexistente', 404);
-    if (nombre != null && String(nombre).trim()) x.nombre = String(nombre).trim();
-    if (telefono != null) x.telefono = String(telefono).replace(/[^\d+]/g, '');
-    if (direccion != null) x.direccion = String(direccion).trim();
-    if (coordenadas !== undefined) {
-      if (coordenadas === null || coordenadas === '') { x.coordenadas = null; x.coordFuente = null; }
-      else {
-        if (!coordsResueltas) throw bad('No pude leer esas coordenadas. Pega "18.9145, -98.9760" o la liga de Google Maps.');
-        x.coordenadas = coordsResueltas; x.coordFuente = 'manual';
-      }
-    }
-    return x;
-  });
-  res.json(suc);
-}));
-
-// Busca las coordenadas del local a partir de su dirección escrita.
-app.post('/api/sucursales/:id/ubicar', soloAdmin, wrap(async (req, res) => {
-  const e0 = await readState();
-  const suc0 = e0.sucursales[req.params.id];
-  if (!suc0) throw bad('Sucursal inexistente', 404);
-  const dir = String((req.body || {}).direccion || suc0.direccion || '').trim();
-  if (!dir) throw bad('Primero captura la dirección de la sucursal');
-  const punto = await geocodificar(dir);
-  if (!punto) throw bad('No se encontró esa dirección. Pega las coordenadas desde Google Maps.', 404);
-  const suc = await withState((e) => {
-    const x = e.sucursales[req.params.id];
-    x.direccion = dir;
-    x.coordenadas = { lat: punto.lat, lng: punto.lng };
-    x.coordFuente = 'direccion';
-    return x;
-  });
-  res.json({ sucursal: suc, etiqueta: punto.etiqueta || null });
-}));
-
-// ---------------------------------------------------------------------------
-//  CAJA
-// ---------------------------------------------------------------------------
-app.post('/api/caja/abrir', puedeCaja, wrap(async (req, res) => {
-  const { sucursalId, fondoInicial = 0 } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const t = await withState((e, c) => {
-    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
-    if (M.turnoAbierto(e, sucursalId)) throw bad('Ya hay un turno abierto en esa sucursal', 409);
-    return M.abrirTurno(e, { sucursalId, usuario: c.username, fondoInicial });
-  });
-  res.json(t);
-}));
-app.get('/api/caja/turno-actual', wrap(async (req, res) => {
-  const e = await readState();
-  const sucursalId = req.query.sucursalId;
-  res.json(M.turnoAbierto(e, sucursalId) || null);
-}));
-app.post('/api/caja/movimiento', puedeCaja, wrap(async (req, res) => {
-  const { sucursalId, tipo, monto, motivo } = req.body || {};
-  if (!['entrada', 'salida'].includes(tipo)) throw bad('tipo debe ser entrada o salida');
-  if (!(+monto > 0)) throw bad('Monto inválido');
-  const t = await withState((e, c) => {
-    const turno = M.turnoAbierto(e, sucursalId);
-    if (!turno) throw bad('No hay turno abierto');
-    return M.registrarMovimiento(turno, { tipo, monto: M.r2(+monto), motivo: motivo || (tipo === 'entrada' ? 'Entrada de efectivo' : 'Retiro de efectivo'), usuario: c.username });
-  });
-  res.json(t);
-}));
-app.post('/api/caja/cerrar', puedeCaja, wrap(async (req, res) => {
-  const { turnoId, conteoEfectivo, forzar = false } = req.body || {};
-  if (turnoId == null || conteoEfectivo == null) throw bad('Falta turnoId o conteoEfectivo');
-  const t = await withState((e, c) => {
-    const turno = e.caja.turnos[turnoId];
-    if (!turno) throw bad('Turno inexistente', 404);
-    if (turno.estado === 'cerrado') throw bad('El turno ya está cerrado', 409);
-    // Reparto propio: si una moto no ha liquidado, ese efectivo no esta en el
-    // cajon y el corte saldria falseado. Se bloquea salvo cierre forzado.
-    const pend = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && p.sucursalId === turno.sucursalId);
-    if (pend.length && !forzar) {
-      const monto = M.r2(pend.reduce((s2, p) => s2 + M.efectivoDePedido(p), 0));
-      const quienes = [...new Set(pend.map((p) => p.reparto.repartidorNombre || '?'))].join(', ');
-      throw bad(`Hay ${pend.length} entrega(s) sin liquidar por $${monto} (${quienes}). Liquida en /api/reparto/liquidar o cierra con forzar:true`, 409);
-    }
-    const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.sucursalId === turno.sucursalId);
-    const out = M.cerrarTurno(turno, { usuario: c.username, conteoEfectivo });
-    out.avisosReparto = { sinLiquidar: pend.length, enRuta: enRuta.length, forzado: !!forzar };
-    return out;
-  });
-  // Cerrar turno es el momento natural para dejar una copia del día.
-  const row = ctx().row;
-  readState().then((e) => guardarSnapshot(row, e, 'cierre de turno')).catch(() => {});
-  res.json(t);
-}));
-app.get('/api/caja/cortes', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const arr = Object.values(e.caja.turnos).filter((t) => t.estado === 'cerrado' && (!sucursalId || t.sucursalId === sucursalId))
-    .sort((a, b) => new Date(b.cerrado) - new Date(a.cerrado))
-    .map((t) => ({ id: t.id, cerrado: t.cerrado, esperado: t.esperado, conteo: t.conteo, diferencia: t.diferencia, resultado: t.resultado }));
-  res.json(arr);
-}));
-
-// ---------------------------------------------------------------------------
-//  PEDIDOS
-// ---------------------------------------------------------------------------
-app.post('/api/pedidos', wrap(async (req, res) => {
-  const { sucursalId, tipoServicio = 'mostrador', mesaId = null, cliente = null, canalId = 'local' } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  let negocio = '';
-  const ped = await withState((e, c) => {
-    const suc = e.sucursales[sucursalId];
-    if (!suc) throw bad('Sucursal inexistente');
-    negocio = (e.meta && e.meta.nombre) || '';
-    if (tipoServicio === 'domicilio') {
-      // El reparto es propio: sin direccion y telefono no sale la moto.
-      const entrega = M.normalizarEntrega(cliente);
-      const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente: entrega, usuario: c.username, canalId });
-      // Directorio: la próxima vez basta el teléfono para llenar la dirección.
-      const dir = M.upsertCliente(e, entrega, { sumarPedido: true });
-      // Si ya sabemos dónde vive (aprendido al entregarle antes), se reusa.
-      if (dir && dir.lat != null) p.reparto.destino = { lat: dir.lat, lng: dir.lng, fuente: dir.fuente || 'gps' };
-      return p;
-    }
-    if (tipoServicio === 'mesa') {
-      const mesa = e.mesas[mesaId];
-      if (!mesa) throw bad('Mesa inexistente');
-      if (mesa.pedidoFolio && e.pedidos[mesa.pedidoFolio] && e.pedidos[mesa.pedidoFolio].estado === 'abierto')
-        return e.pedidos[mesa.pedidoFolio]; // ya tiene cuenta abierta
-      const p = M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, mesaId, cliente, usuario: c.username, canalId: 'local' });
-      mesa.estado = 'ocupada'; mesa.pedidoFolio = p.folio;
-      return p;
-    }
-    return M.crearPedido(e, { sucursalId, codigo: suc.codigo, tipoServicio, cliente, usuario: c.username, canalId });
-  });
-  // Siempre se contrasta contra la dirección escrita, aunque ya haya un punto
-  // guardado: así se detecta un domicilio aprendido mal. En segundo plano.
-  if (M.esDomicilio(ped)) {
-    const row = ctx().row;
-    setImmediate(() => ubicarDomicilio(row, ped.folio));
-  }
-  if (M.esDomicilio(ped) && ped.seguimiento) {
-    avisarCliente({
-      telefono: (ped.cliente && ped.cliente.telefono) || null,
-      nombre: (ped.cliente && ped.cliente.nombre) || '',
-      negocio, folio: ped.folio,
-      url: urlSeguimiento(ctx().row, ped.seguimiento.token),
-    });
-  }
-  res.json(ped);
-}));
-
-app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const { productoId, cantidad = 1, modsElegidos = [], notas = '' } = req.body || {};
-  const ped = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (p.estado !== 'abierto') throw bad('El pedido ya está cerrado');
-    const prod = e.menu.productos[productoId];
-    if (!prod) throw bad('Producto inexistente');
-    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas }));
-    p.actualizado = new Date().toISOString();
-    return M.recalcularPedido(p);
-  });
-  res.json(ped);
-}));
-
-app.delete('/api/pedidos/:folio/lineas/:lineaId', wrap(async (req, res) => {
-  const { folio, lineaId } = req.params;
-  const ped = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    p.lineas = p.lineas.filter((l) => l.id !== lineaId);
-    return M.recalcularPedido(p);
-  });
-  res.json(ped);
-}));
-
-app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const { costoEnvio, propina, descuento, cliente, canalId } = req.body || {};
-  const ped = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (costoEnvio != null) p.costoEnvio = costoEnvio;
-    if (propina != null) p.propina = propina;
-    if (descuento !== undefined) p.descuento = descuento;
-    if (cliente !== undefined) {
-      p.cliente = p.tipoServicio === 'domicilio' ? M.normalizarEntrega(cliente) : cliente;
-      if (p.tipoServicio === 'domicilio') {
-        const d = M.upsertCliente(e, p.cliente);
-        if (d && d.lat != null && p.reparto) p.reparto.destino = { lat: d.lat, lng: d.lng };
-      }
-    }
-    if (canalId !== undefined) p.canalId = canalId;
-    return M.recalcularPedido(p);
-  });
-  res.json(ped);
-}));
-
-app.post('/api/pedidos/:folio/comanda', wrap(async (req, res) => {
-  const { folio } = req.params;
-  const out = await withState((e) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    const enviadas = M.mandarComanda(p);
-    return { folio, enviadas, pedido: p };
-  });
-  res.json(out);
-}));
-
-app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
-  const { folio } = req.params;
-  const { pagos = [], recibido = 0, propina = null } = req.body || {};
-  if (!pagos.length) throw bad('Faltan pagos');
-  const out = await withState((e, c) => {
-    const p = e.pedidos[folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (p.estado === 'cobrado') throw bad('El pedido ya está cobrado', 409);
-    if (!p.lineas.length) throw bad('El pedido no tiene productos');
-    // Domicilio: si ya se asigno moto, el cobro va por POST /api/reparto/:folio/entregado
-    // (el efectivo lo trae el repartidor y entra al turno hasta que liquida).
-    if (M.esDomicilio(p) && p.reparto && p.reparto.estado !== 'por_asignar')
-      throw bad('Pedido en reparto: cóbralo con /api/reparto/' + folio + '/entregado', 409);
-    M.recalcularPedido(p);
-    const sumPagos = M.r2(pagos.reduce((s, x) => s + x.monto, 0));
-    if (sumPagos < p.total) throw bad(`El pago (${sumPagos}) no cubre el total (${p.total})`);
-    const turno = M.turnoAbierto(e, p.sucursalId);
-    if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
-    p.turnoId = turno.id;
-    M.mandarComanda(p); // dispara a cocina lo que falte (mostrador) o ronda final (mesa)
-    M.registrarPago(p, { pagos, recibido, propina });
-    M.registrarVentaEnTurno(turno, p);
-    M.descontarInventario(e, p);
-    if (p.tipoServicio === 'mesa' && p.mesaId && e.mesas[p.mesaId]) {
-      e.mesas[p.mesaId].estado = 'libre';
-      e.mesas[p.mesaId].pedidoFolio = null;
-    }
-    // Domicilio pagado por adelantado en caja: el dinero ya esta en el cajon,
-    // el repartidor no carga efectivo de este folio.
-    if (M.esDomicilio(p) && p.reparto) { p.reparto.liquidado = true; p.reparto.prepagado = true; }
-    return p;
-  });
-  res.json(out);
-}));
-
-app.get('/api/pedidos', wrap(async (req, res) => {
-  const e = await readState();
-  const { estado, sucursalId } = req.query;
-  let arr = Object.values(e.pedidos);
-  if (sucursalId) arr = arr.filter((p) => p.sucursalId === sucursalId);
-  if (estado) arr = arr.filter((p) => p.estado === estado);
-  res.json(arr);
-}));
-app.get('/api/pedidos/:folio', wrap(async (req, res) => {
-  const e = await readState();
-  const p = e.pedidos[req.params.folio];
-  if (!p) throw bad('Pedido inexistente', 404);
-  res.json(p);
-}));
-
-app.get('/api/ventas/recientes', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, limit = 30 } = req.query;
-  let arr = Object.values(e.pedidos).filter((p) => p.estado === 'cobrado');
-  if (sucursalId) arr = arr.filter((p) => p.sucursalId === sucursalId);
-  arr.sort((a, b) => new Date(b.actualizado) - new Date(a.actualizado));
-  res.json(arr.slice(0, +limit));
-}));
-
-// ---------------------------------------------------------------------------
-//  COCINA (KDS)
-// ---------------------------------------------------------------------------
-app.get('/api/cocina', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, estacion } = req.query;
-  // `estacion` elige la pantalla (Barra, Creperia, Cocina...). Sin el parametro, devuelve todas.
-  const esDeEstacion = (l) => !estacion || (l.estacion || 'Cocina') === estacion;
-  const arr = Object.values(e.pedidos)
-    .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado' && esDeEstacion(l)))
-    .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
-    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
-  res.json(arr);
-}));
-app.post('/api/cocina/:folio/listo', wrap(async (req, res) => {
-  const out = await withState((e) => { const p = e.pedidos[req.params.folio]; if (!p) throw bad('Pedido inexistente', 404); p._kdsListo = true; p.tiemposCocina.listo = new Date().toISOString(); return { ok: true }; });
-  res.json(out);
-}));
-app.post('/api/cocina/:folio/entregar', wrap(async (req, res) => {
-  const out = await withState((e) => {
-    const p = e.pedidos[req.params.folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    for (const l of p.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
-    p._kdsListo = false;
-    return { ok: true };
-  });
-  res.json(out);
-}));
-
-// ---------------------------------------------------------------------------
-//  REPARTO PROPIO (motos de la casa)
-//  Flujo: crear pedido domicilio -> comanda -> asignar moto -> salida ->
-//         entregado (el repartidor cobra en la puerta) -> liquidar en caja.
-//  El efectivo NO entra al turno al entregar: entra cuando la moto liquida.
-// ---------------------------------------------------------------------------
-const repartoDe = (p) => (p.reparto || (p.reparto = M.nuevoReparto()));
-// Un domicilio ya despachado se cobra en Reparto, no en la lista de caja.
-const enReparto = (p) => M.esDomicilio(p) && p.reparto && p.reparto.estado !== 'por_asignar';
-// El usuario con el que se entra al sistema y la ficha de Personal son dos
-// registros distintos; se ligan con empleado.username. Sin esa liga, un
-// repartidor puede entrar pero el sistema no sabe quién es.
-function empleadoDeCtx(e, c) {
-  if (!c || !c.username) return null;
-  return Object.values(e.empleados || {}).find((x) => x.username === c.username) || null;
-}
-const esRolRepartidor = (c) => c && c.rol === 'repartidor';
-
-// Catálogo de repartidores (empleados activos con puesto de repartidor) + su carga
-app.get('/api/reparto/repartidores', wrap(async (req, res) => {
-  const e = await readState();
-  const c = ctx();
-  const { sucursalId } = req.query;
-  const peds = Object.values(e.pedidos);
-  const yo = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
-  const lista = yo ? M.repartidoresDe(e, sucursalId).filter((x) => x.id === yo.id) : M.repartidoresDe(e, sucursalId);
-  const out = lista.map((emp) => {
-    const suyos = peds.filter((p) => p.reparto && p.reparto.repartidorId === emp.id);
-    const ruta = suyos.filter(M.enRuta);
-    const pend = suyos.filter(M.porLiquidar);
-    const califs = peds.map((p) => p.reparto && p.reparto.calificacion).filter((x) => x && x.repartidorId === emp.id);
-    const prom = califs.length ? M.r2(califs.reduce((t, x) => t + x.estrellas, 0) / califs.length) : null;
-    return {
-      id: emp.id, nombre: emp.nombre, puesto: emp.puesto, telefono: emp.telefono,
-      sucursalId: emp.sucursalId,
-      // Sin usuario ligado no puede entrar al sistema ni compartir su GPS
-      username: emp.username || null,
-      ubicacion: M.ubicacionViva(e, emp.id),
-      estrellas: prom, calificaciones: califs.length,
-      enRuta: ruta.length, foliosEnRuta: ruta.map((p) => p.folio),
-      porLiquidar: pend.length,
-      efectivoPendiente: M.r2(pend.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
-    };
-  }).sort((a, b) => a.nombre.localeCompare(b.nombre));
-  res.json(out);
-}));
-
-// Tablero de despacho
-app.get('/api/reparto', wrap(async (req, res) => {
-  const e = await readState();
-  const c = ctx();
-  const { sucursalId } = req.query;
-  const yo = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
-  if (esRolRepartidor(c) && !yo) throw bad('Tu usuario no está ligado a una ficha de Personal. Pide que te la creen con tu usuario.', 409);
-  const miFicha = yo || empleadoDeCtx(e, c);
-  const puedeGps = !!(miFicha && M.esRepartidor(miFicha));
-  let dom = Object.values(e.pedidos)
-    .filter((p) => M.esDomicilio(p) && p.estado !== 'cancelado' && (!sucursalId || p.sucursalId === sucursalId));
-  if (yo) dom = dom.filter((p) => p.reparto && p.reparto.repartidorId === yo.id);
-  const prom = M.promedioEnRuta(e, sucursalId);
-  const vista = (p) => {
-    const r = p.reparto || {};
-    const moto = r.estado === 'en_ruta' && r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
-    const dist = moto && r.destino ? M.distanciaKm(moto, r.destino) : null;
-    const eta = M.estimarLlegada(e, p, { ubicacion: moto, promedioMin: prom });
-    const etaMin = eta.min;
-    return {
-      folio: p.folio, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
-      creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
-      items: p.lineas.reduce((t, l) => t + l.cantidad, 0),
-      cliente: p.cliente || null,
-      reparto: r,
-      efectivo: M.efectivoDePedido(p),
-      tiempos: M.tiemposReparto(p),
-      // Para que caja vea el avance sin abrir nada más
-      moto, destino: r.destino || null, distanciaKm: dist, etaMin, etaBase: eta.base,
-      destinoDudoso: (r.destino && r.destino.dudoso) || null,
-      destinoFuente: (r.destino && r.destino.fuente) || null,
-      rastro: moto && moto.rastro ? moto.rastro : null,
-      promedioMin: prom,
-      seguimiento: p.seguimiento ? p.seguimiento.token : null,
-    };
+// ---- Crear pedido -----------------------------------------------------------
+function crearPedido(e, { sucursalId, codigo, tipoServicio = 'mostrador', mesaId = null, cliente = null, usuario = 'sistema', turnoId = null, canalId = 'local' }) {
+  const folio = folioPedido(e, sucursalId, codigo);
+  const ped = {
+    folio, sucursalId, tipoServicio, mesaId, canalId,
+    estado: 'abierto',              // abierto -> cobrado | cancelado
+    cliente, lineas: [], subtotal: 0, costoEnvio: 0, descuento: null, propina: 0, total: 0,
+    pago: null, turnoId, creadoPor: usuario,
+    creado: new Date().toISOString(), actualizado: new Date().toISOString(),
+    tiemposCocina: { recibido: null, listo: null },
+    // Reparto propio (solo tipoServicio 'domicilio'). null en mostrador/mesa.
+    reparto: tipoServicio === 'domicilio' ? nuevoReparto() : null,
+    // Liga publica de seguimiento para el cliente. Token aleatorio, no el folio.
+    seguimiento: tipoServicio === 'domicilio' ? { token: tokenSeguimiento(), creado: new Date().toISOString(), avisado: null } : null,
   };
-  const abiertos = dom.filter((p) => p.estado === 'abierto');
-  const sucCoord = (e.config && e.config.coordenadas) || null;
-  res.json({
-    promedioMin: prom,
-    sucursal: sucCoord,
-    soyRepartidor: !!yo,
-    // Solo quien tiene ficha de repartidor ve el interruptor de ubicación.
-    puedeGps,
-    // La cola por asignar es decisión de caja; el repartidor no la ve.
-    porAsignar: yo ? [] : abiertos.filter((p) => !p.reparto || p.reparto.estado === 'por_asignar').map(vista),
-    asignados:  abiertos.filter((p) => p.reparto && p.reparto.estado === 'asignado').map(vista),
-    enRuta:     dom.filter(M.enRuta).map(vista),
-    porLiquidar: dom.filter(M.porLiquidar).map(vista),
-  });
-}));
+  e.pedidos[folio] = ped;
+  return ped;
+}
 
-// Asignar moto. De paso dispara a cocina lo que siga pendiente.
-app.post('/api/reparto/:folio/asignar', puedeCaja, wrap(async (req, res) => {
-  const { repartidorId } = req.body || {};
-  if (!repartidorId) throw bad('Falta repartidorId');
-  const p = await withState((e) => {
-    const ped = e.pedidos[req.params.folio];
-    if (!ped) throw bad('Pedido inexistente', 404);
-    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
-    if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
-    repartoDe(ped);
-    M.asignarReparto(e, ped, repartidorId);
-    M.mandarComanda(ped);
-    return ped;
-  });
-  res.json(p);
-}));
+// ---- Mandar a cocina (rondas de mesa o disparo en mostrador) ----------------
+function mandarComanda(ped) {
+  let envio = 0;
+  for (const l of ped.lineas) if (l.cocina === 'pendiente') { l.cocina = 'enviado'; envio++; }
+  if (envio && !ped.tiemposCocina.recibido) ped.tiemposCocina.recibido = new Date().toISOString();
+  ped.actualizado = new Date().toISOString();
+  return envio;
+}
 
-// La moto sale del local
-app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
-  const p = await withState((e) => {
-    const ped = e.pedidos[req.params.folio];
-    if (!ped) throw bad('Pedido inexistente', 404);
-    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
-    if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
-    M.recalcularPedido(ped);
-    const r = M.marcarSalida(e, ped);
-    for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
-    // Si caja marca "salió", la moto está en la sucursal: el origen es la
-    // dirección fija del local, no una lectura de GPS que puede fallar o venir
-    // de una prueba hecha desde otro lugar.
-    const suc = e.sucursales[ped.sucursalId] || {};
-    if (suc.coordenadas) {
-      ped.reparto.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
-    } else {
-      // Sin dirección capturada todavía: se toma el GPS como aproximación y se
-      // propone como ubicación del local.
-      const uo = M.ubicacionViva(e, ped.reparto.repartidorId, 6);
-      if (uo) {
-        ped.reparto.origen = { lat: uo.lat, lng: uo.lng, fuente: 'gps' };
-        const s2 = e.sucursales[ped.sucursalId];
-        if (s2 && !s2.coordenadas) { s2.coordenadas = { lat: uo.lat, lng: uo.lng }; s2.coordFuente = 'gps'; }
-      }
-    }
-    return r;
-  });
-  res.json(p);
-}));
+// ---- REPARTO PROPIO (motos de la casa) --------------------------------------
+//  Ciclo: por_asignar -> asignado -> en_ruta -> entregado
+//  El repartidor cobra en la puerta; el efectivo NO entra al turno hasta que
+//  liquida al volver (reparto.liquidado). Por eso entregar y liquidar son dos
+//  pasos distintos: mientras uno esta en falso, el dinero esta con la moto.
+const tokenSeguimiento = () => crypto.randomBytes(9).toString('hex');
+const nuevoReparto = () => ({
+  estado: 'por_asignar',
+  repartidorId: null, repartidorNombre: null,
+  asignado: null, salida: null, entregado: null,
+  liquidado: false, liquidacionId: null,
+  intentos: 0, ultimoFallo: null,
+  calificacion: null,
+  destino: null,   // coords reales del domicilio, aprendidas al entregar
+});
 
-// Entregado: el repartidor cobró en la puerta. Cierra el pedido, descuenta
-// inventario y deja el efectivo marcado como pendiente de liquidar.
-app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
-  const { pagos = [], recibido = 0, propina = null } = req.body || {};
-  if (!pagos.length) throw bad('Faltan pagos');
-  for (const x of pagos) {
-    if (!x || !x.metodo) throw bad('Cada pago necesita metodo');
-    if (!(+x.monto > 0)) throw bad('Monto de pago inválido');
-  }
-  const p = await withState((e, c) => {
-    const ped = e.pedidos[req.params.folio];
-    if (!ped) throw bad('Pedido inexistente', 404);
-    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
-    if (ped.estado === 'cobrado') throw bad('El pedido ya está cobrado', 409);
-    if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
-    if (!ped.lineas.length) throw bad('El pedido no tiene productos');
-    const r = repartoDe(ped);
-    if (!r.repartidorId) throw bad('El pedido no tiene repartidor asignado', 409);
-    M.recalcularPedido(ped);
-    const sumPagos = M.r2(pagos.reduce((t, x) => t + (+x.monto), 0));
-    if (sumPagos < ped.total) throw bad(`El pago (${sumPagos}) no cubre el total (${ped.total})`);
-    M.mandarComanda(ped);
-    M.registrarPago(ped, { pagos, recibido, propina });
-    M.descontarInventario(e, ped);
-    M.marcarEntregado(ped);
-    for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido'; // por si no se marcó la salida
-    ped.entregadoPor = (c || {}).username || null;
-    // El repartidor está parado en la puerta del cliente: esa es la mejor
-    // coordenada del domicilio que vamos a conseguir. Se guarda en el
-    // directorio para que el próximo pedido ya sepa a dónde va.
-    const u = M.ubicacionViva(e, r.repartidorId, 6);
-    const suc0 = e.sucursales[ped.sucursalId] || {};
-    // Solo se aprende el domicilio si la moto DE VERDAD se alejó del local.
-    if (u && M.destinoCreible(u, suc0.coordenadas || ped.reparto.origen)) {
-      ped.reparto.destino = { lat: u.lat, lng: u.lng, fuente: 'gps' };
-      M.upsertCliente(e, ped.cliente || {}, { lat: u.lat, lng: u.lng, fuente: 'gps' });
-    }
-    // Con origen, destino y minutos reales se calibra la velocidad de reparto.
-    M.aprenderVelocidad(e, ped);
-    return ped;
-  });
-  res.json(p);
-}));
-
-// Entrega fallida: vuelve a la cola de despacho
-app.post('/api/reparto/:folio/fallido', puedeCaja, wrap(async (req, res) => {
-  const { motivo = '' } = req.body || {};
-  const p = await withState((e) => {
-    const ped = e.pedidos[req.params.folio];
-    if (!ped) throw bad('Pedido inexistente', 404);
-    if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
-    return M.marcarFallido(ped, motivo);
-  });
-  res.json(p);
-}));
-
-// La moto reporta su posicion. Solo se guarda la ultima; no hay recorrido.
-app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
-  const { lat, lng, precision = null, empleadoId = null } = req.body || {};
-  const out = await withState((e, c) => {
-    // Un repartidor solo puede reportar la suya; caja/gerente puede reportar por otro.
-    let emp = null;
-    if (empleadoId && ['admin', 'gerente', 'cajero'].includes(c.rol)) emp = (e.empleados || {})[empleadoId];
-    else emp = Object.values(e.empleados || {}).find((x) => x.username && x.username === c.username);
-    if (!emp) throw bad('No se encontró tu ficha de empleado. Pide que te den de alta en Personal con tu usuario.', 404);
-    if (!M.esRepartidor(emp)) throw bad('Tu puesto no es de repartidor', 403);
-    const u = M.guardarUbicacion(e, emp.id, { lat, lng, precision });
-    const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.reparto.repartidorId === emp.id).length;
-    return { ok: true, ts: u.ts, enRuta };
-  });
-  res.json(out);
-}));
-
-// Directorio de clientes: al teclear el teléfono, el POS llena lo demás.
-app.get('/api/clientes', puedeCaja, wrap(async (req, res) => {
-  const e = await readState();
-  const { q = '', telefono = '' } = req.query;
-  if (telefono) {
-    const c = (e.clientes || {})[M.llaveTel(telefono)];
-    return res.json(c || null);
-  }
-  res.json(M.buscarClientes(e, q));
-}));
-
-// Liga de seguimiento para mandarle al cliente. Genera el token si el pedido es
-// anterior a esta versión.
-app.get('/api/pedidos/:folio/seguimiento', wrap(async (req, res) => {
-  const c = ctx();
-  const out = await withState((e) => {
-    const p = e.pedidos[req.params.folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (!M.esDomicilio(p)) throw bad('El pedido no es a domicilio');
-    if (!p.seguimiento || !p.seguimiento.token) p.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
-    return { folio: p.folio, token: p.seguimiento.token, telefono: (p.cliente && p.cliente.telefono) || null, nombre: (p.cliente && p.cliente.nombre) || '', negocio: (e.meta && e.meta.nombre) || '' };
-  });
-  out.url = urlSeguimiento(c.row, out.token);
-  res.json(out);
-}));
-
-// Liquidación: la moto entrega el efectivo y esas ventas entran al turno de caja.
-app.post('/api/reparto/liquidar', puedeCaja, wrap(async (req, res) => {
-  const { repartidorId, sucursalId, conteoEfectivo = null } = req.body || {};
-  if (!repartidorId) throw bad('Falta repartidorId');
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const out = await withState((e, c) => {
-    if (!e.liquidaciones) e.liquidaciones = [];
-    const emp = (e.empleados || {})[repartidorId];
-    if (!emp) throw bad('Repartidor inexistente', 404);
-    const turno = M.turnoAbierto(e, sucursalId);
-    if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
-    const peds = Object.values(e.pedidos)
-      .filter((p) => M.porLiquidar(p) && p.sucursalId === sucursalId && p.reparto.repartidorId === repartidorId)
-      .sort((a, b) => new Date(a.reparto.entregado) - new Date(b.reparto.entregado));
-    if (!peds.length) throw bad('Ese repartidor no tiene entregas pendientes de liquidar', 409);
-    const efectivoEsperado = M.r2(peds.reduce((t, p) => t + M.efectivoDePedido(p), 0));
-    const liq = M.crearLiquidacion({
-      repartidorId, repartidorNombre: emp.nombre, sucursalId, turnoId: turno.id,
-      folios: peds.map((p) => p.folio), efectivoEsperado, conteoEfectivo,
-      usuario: (c || {}).username || null,
-    });
-    for (const p of peds) {
-      p.turnoId = turno.id;
-      M.registrarVentaEnTurno(turno, p);
-      p.reparto.liquidado = true;
-      p.reparto.liquidacionId = liq.id;
-      p.actualizado = new Date().toISOString();
-    }
-    // Un faltante/sobrante de la moto se registra en caja para que el corte cuadre.
-    if (liq.diferencia !== 0) {
-      M.registrarMovimiento(turno, {
-        tipo: liq.diferencia < 0 ? 'salida' : 'entrada',
-        monto: Math.abs(liq.diferencia),
-        motivo: `${liq.diferencia < 0 ? 'Faltante' : 'Sobrante'} liquidación ${emp.nombre} (${liq.id})`,
-        usuario: (c || {}).username || null,
-      });
-    }
-    e.liquidaciones.unshift(liq);
-    if (e.liquidaciones.length > 2000) e.liquidaciones = e.liquidaciones.slice(0, 2000);
-    return liq;
-  });
-  res.json(out);
-}));
-
-app.get('/api/reparto/liquidaciones', puedeCaja, wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, repartidorId, limit = 50 } = req.query;
-  let arr = (e.liquidaciones || []).slice();
-  if (sucursalId) arr = arr.filter((l) => l.sucursalId === sucursalId);
-  if (repartidorId) arr = arr.filter((l) => l.repartidorId === repartidorId);
-  res.json(arr.slice(0, +limit));
-}));
-
-// Desempeño de reparto en un rango
-app.get('/api/reparto/reporte', wrap(async (req, res) => {
-  const e = await readState();
-  const c = ctx();
-  const { sucursalId, desde, hasta } = req.query;
-  const mio = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
-  if (esRolRepartidor(c) && !mio) throw bad('Tu usuario no está ligado a una ficha de Personal.', 409);
-  if (!mio && !['admin', 'gerente', 'cajero'].includes(c.rol)) throw bad('Sin permiso', 403);
-  const tz = tzTenant(e);
-  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
-  const dentro = (iso) => {
-    if (!iso) return false;
-    const d = diaLocal(iso, tz);
-    return (!d1 || d >= d1) && (!d2 || d <= d2);
+// Normaliza y valida la direccion de entrega. Lanza si faltan datos minimos.
+function normalizarEntrega(cliente) {
+  const c = cliente || {};
+  const t = (v) => String(v == null ? '' : v).trim();
+  const out = {
+    nombre: t(c.nombre), telefono: t(c.telefono).replace(/[^\d+]/g, ''),
+    calle: t(c.calle), numero: t(c.numero), colonia: t(c.colonia),
+    referencias: t(c.referencias), notas: t(c.notas),
   };
-  const peds = Object.values(e.pedidos).filter((p) =>
-    M.esDomicilio(p) && p.reparto && p.reparto.estado === 'entregado' &&
-    (!sucursalId || p.sucursalId === sucursalId) && dentro(p.reparto.entregado) &&
-    (!mio || p.reparto.repartidorId === mio.id));
-  const porRep = {};
-  let sumRuta = 0, nRuta = 0;
-  for (const p of peds) {
-    const r = p.reparto;
-    const k = r.repartidorId || 'sin_asignar';
-    porRep[k] = porRep[k] || { repartidorId: k, nombre: r.repartidorNombre || '(sin asignar)', entregas: 0, piezas: 0, venta: 0, propinas: 0, minutos: 0, conTiempo: 0, fallidos: 0, estrellas: 0, califs: 0 };
-    if (r.calificacion) { porRep[k].estrellas += r.calificacion.estrellas; porRep[k].califs++; }
-    porRep[k].entregas++;
-    porRep[k].piezas += (p.lineas || []).reduce((t, l) => t + l.cantidad, 0);
-    porRep[k].venta = M.r2(porRep[k].venta + p.total);
-    porRep[k].propinas = M.r2((porRep[k].propinas || 0) + ((p.propina && p.propina.monto) || 0));
-    porRep[k].fallidos += r.intentos || 0;
-    const t = M.tiemposReparto(p);
-    if (t.enRuta != null) { porRep[k].minutos = M.r2(porRep[k].minutos + t.enRuta); porRep[k].conTiempo++; sumRuta += t.enRuta; nRuta++; }
-  }
-  const repartidores = Object.values(porRep).map((x) => ({
-    ...x, minutosPromedio: x.conTiempo ? M.r2(x.minutos / x.conTiempo) : null,
-    ticketPromedio: x.entregas ? M.r2(x.venta / x.entregas) : 0,
-    calificacion: x.califs ? M.r2(x.estrellas / x.califs) : null,
-  })).sort((a, b) => b.entregas - a.entregas);
-  const comentarios = peds.filter((p) => p.reparto.calificacion && p.reparto.calificacion.comentario)
-    .sort((a, b) => new Date(b.reparto.calificacion.fecha) - new Date(a.reparto.calificacion.fecha))
-    .slice(0, 25)
-    .map((p) => ({ folio: p.folio, repartidor: p.reparto.repartidorNombre, estrellas: p.reparto.calificacion.estrellas, comentario: p.reparto.calificacion.comentario, fecha: p.reparto.calificacion.fecha }));
-  const pendientes = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && (!sucursalId || p.sucursalId === sucursalId)
-    && (!mio || p.reparto.repartidorId === mio.id));
-  // Serie por día para ver la tendencia de la semana o del mes
-  const porDia = {};
-  for (const p of peds) {
-    const d = diaLocal(p.reparto.entregado, tz);
-    porDia[d] = porDia[d] || { dia: d, entregas: 0, piezas: 0, venta: 0 };
-    porDia[d].entregas++;
-    porDia[d].piezas += (p.lineas || []).reduce((t, l) => t + l.cantidad, 0);
-    porDia[d].venta = M.r2(porDia[d].venta + p.total);
-  }
-  res.json({
-    entregas: peds.length,
-    piezas: peds.reduce((t, p) => t + (p.lineas || []).reduce((u, l) => u + l.cantidad, 0), 0),
-    venta: M.r2(peds.reduce((t, p) => t + p.total, 0)),
-    propinas: M.r2(peds.reduce((t, p) => t + ((p.propina && p.propina.monto) || 0), 0)),
-    soloMias: !!mio,
-    porDia: Object.values(porDia).sort((a, b) => a.dia.localeCompare(b.dia)),
-    minutosPromedioEnRuta: nRuta ? M.r2(sumRuta / nRuta) : null,
-    repartidores, comentarios,
-    efectivoSinLiquidar: M.r2(pendientes.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
-    foliosSinLiquidar: pendientes.map((p) => p.folio),
-  });
-}));
-
-// ---------------------------------------------------------------------------
-//  GEOCODIFICACIÓN — convertir la dirección escrita en coordenadas
-//  Sin esto, el domicilio solo se conoce después de la primera entrega. Con
-//  esto, el primer pedido de un cliente nuevo ya calcula distancia y tiempo.
-//  Usa Nominatim (OpenStreetMap): gratis, sin llave, máximo 1 consulta por
-//  segundo. Se apaga con GEOCODER=off.
-// ---------------------------------------------------------------------------
-const GEO_ACTIVO = (process.env.GEOCODER || 'nominatim') !== 'off';
-const GEO_REGION = process.env.GEO_REGION || 'Morelos, México';
-const GEO_UA = `ComandaPro/1.0 (${process.env.GEO_EMAIL || 'soporte@legaxi.com'})`;
-const geoCache = new Map();
-let geoUltima = 0;
-// Inyectable para pruebas
-let geoFetch = (url, opts) => fetch(url, opts);
-function _setGeoFetch(f) { geoFetch = f; }
-
-// Arma varias formas de preguntar, de la más precisa a la más general.
-// Dos correcciones que importan:
-//  - Si la calle YA trae el número (se captura "Morelos 325" y luego 325 otra
-//    vez), no se repite.
-//  - La región de respaldo solo se agrega si la dirección no nombra ya su
-//    pueblo o estado. Pegarle "Morelos" a una dirección de Juchitepec, que
-//    está en el Estado de México, hace que la consulta se contradiga sola.
-function construirConsultas(cliente, region = GEO_REGION) {
-  const t = (v) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ');
-  const calle = t(cliente.calle), numero = t(cliente.numero), colonia = t(cliente.colonia);
-  // ¿La calle ya termina con ese número?
-  const calleNum = numero && new RegExp('(^|\\s)' + numero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$').test(calle)
-    ? calle : [calle, numero].filter(Boolean).join(' ');
-  const base = [calleNum, colonia].filter(Boolean).join(', ');
-  const salida = [];
-  const agregar = (q, aprox) => { const x = t(q); if (x.length >= 8 && !salida.some((s2) => s2.q === x)) salida.push({ q: x, aproximado: !!aprox }); };
-  // 1) Tal cual se capturó. La búsqueda ya está limitada a México, así que si
-  //    la colonia nombra su pueblo esto basta y es lo más fiel.
-  agregar(`${base}, México`);
-  // 2) Con la región de respaldo, por si la dirección no dice de qué pueblo es.
-  //    OJO: la región NO se deduce del nombre de la calle. Una calle llamada
-  //    "Morelos" en Juchitepec no está en el estado de Morelos.
-  if (region) agregar(`${base}, ${region}`);
-  // 3) Sin el número, que es lo que más falla en los mapas de pueblo.
-  if (calle) { agregar(`${calle}, ${colonia}, México`); if (region) agregar(`${calle}, ${colonia}, ${region}`); }
-  // 4) Último recurso: el centro de la colonia o el pueblo.
-  if (colonia) { agregar(`${colonia}, México`, true); if (region) agregar(`${colonia}, ${region}`, true); }
-  return salida;
+  const faltan = [];
+  if (!out.nombre) faltan.push('nombre');
+  if (out.telefono.replace(/\D/g, '').length < 10) faltan.push('telefono (10 digitos)');
+  if (!out.calle) faltan.push('calle');
+  if (!out.numero) faltan.push('numero');
+  if (!out.colonia) faltan.push('colonia');
+  if (faltan.length) { const e = new Error('Faltan datos de entrega: ' + faltan.join(', ')); e.status = 400; throw e; }
+  out.direccion = `${out.calle} ${out.numero}, ${out.colonia}`;
+  return out;
 }
 
-async function consultarNominatim(q) {
-  const espera = Math.max(0, 1100 - (Date.now() - geoUltima));  // Nominatim: 1 por segundo
-  if (espera) await new Promise((r) => setTimeout(r, espera));
-  geoUltima = Date.now();
-  const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=' + encodeURIComponent(q);
-  const r = await geoFetch(url, { headers: { 'User-Agent': GEO_UA, 'Accept-Language': 'es' } });
-  if (!r || !r.ok) throw new Error('respuesta ' + (r && r.status));
-  const j = await r.json();
-  const p = Array.isArray(j) && j[0];
-  if (!p || !p.lat || !p.lon) return null;
-  const lat = +p.lat, lng = +p.lon;
-  if (!isFinite(lat) || !isFinite(lng)) return null;
-  return { lat, lng, precision: p.type || null, etiqueta: p.display_name || null };
+const esRepartidor = (emp) => !!emp && emp.activo !== false && /repartidor|motoriz|moto\b/i.test(String(emp.puesto || ''));
+function repartidoresDe(e, sucursalId) {
+  return Object.values(e.empleados || {})
+    .filter((x) => esRepartidor(x) && (!sucursalId || !x.sucursalId || x.sucursalId === sucursalId));
+}
+const esDomicilio = (p) => p.tipoServicio === 'domicilio';
+// Pedido que ya salio y aun no se entrega
+const enRuta = (p) => esDomicilio(p) && p.reparto && p.reparto.estado === 'en_ruta';
+// Entregado y cobrado, pero el efectivo todavia no llega a caja
+const porLiquidar = (p) => esDomicilio(p) && p.reparto && p.reparto.estado === 'entregado' && !p.reparto.liquidado && p.estado === 'cobrado';
+// Efectivo (venta + propina en efectivo) que trae el repartidor encima
+function efectivoDePedido(p) {
+  if (!p.pago) return 0;
+  const v = p.pago.pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
+  const pr = p.propina && p.propina.metodo === 'efectivo' ? p.propina.monto : 0;
+  return r2(v + pr);
 }
 
-// Acepta un texto suelto o un cliente con sus campos. Devuelve además CON QUÉ
-// consulta lo encontró, para poder explicarlo después.
-async function geocodificar(entrada, { detalle = false } = {}) {
-  if (!GEO_ACTIVO) return detalle ? { punto: null, intentos: [], motivo: 'geocodificador apagado' } : null;
-  const consultas = typeof entrada === 'string'
-    ? [{ q: String(entrada).trim() + (/(m[ée]xico)$/i.test(entrada) ? '' : `, ${GEO_REGION}`), aproximado: false }]
-    : construirConsultas(entrada || {});
-  const intentos = [];
-  for (const c of consultas) {
-    if (c.q.length < 8) continue;
-    const clave = c.q.toLowerCase();
-    if (geoCache.has(clave)) {
-      const cacheado = geoCache.get(clave);
-      intentos.push({ q: c.q, resultado: cacheado ? 'en caché' : 'sin resultado (caché)', aproximado: c.aproximado });
-      if (cacheado) {
-        const out = Object.assign({}, cacheado, { aproximado: c.aproximado, consulta: c.q });
-        return detalle ? { punto: out, intentos } : out;
-      }
-      continue;
+function asignarReparto(e, p, empleadoId) {
+  const emp = (e.empleados || {})[empleadoId];
+  if (!esRepartidor(emp)) { const x = new Error('El empleado no esta activo o no tiene puesto de repartidor'); x.status = 400; throw x; }
+  const r = p.reparto || (p.reparto = nuevoReparto());
+  if (r.estado === 'entregado') { const x = new Error('El pedido ya fue entregado'); x.status = 409; throw x; }
+  r.repartidorId = emp.id; r.repartidorNombre = emp.nombre;
+  r.estado = 'asignado'; r.asignado = new Date().toISOString();
+  p.actualizado = r.asignado;
+  return p;
+}
+
+function marcarSalida(e, p) {
+  const r = p.reparto;
+  if (!r || !r.repartidorId) { const x = new Error('El pedido no tiene repartidor asignado'); x.status = 409; throw x; }
+  if (r.estado === 'entregado') { const x = new Error('El pedido ya fue entregado'); x.status = 409; throw x; }
+  if (!p.lineas.length) { const x = new Error('El pedido no tiene productos'); x.status = 400; throw x; }
+  r.estado = 'en_ruta'; r.salida = new Date().toISOString();
+  p.actualizado = r.salida;
+  return p;
+}
+
+// Entrega + cobro en la puerta. Cierra el pedido pero deja el efectivo pendiente.
+function marcarEntregado(p) {
+  const r = p.reparto;
+  if (!r) { const x = new Error('El pedido no es de reparto'); x.status = 400; throw x; }
+  r.estado = 'entregado'; r.entregado = new Date().toISOString();
+  p.actualizado = r.entregado;
+  return p;
+}
+
+// Intento fallido: regresa el pedido a la cola para reasignar.
+function marcarFallido(p, motivo = '') {
+  const r = p.reparto;
+  if (!r) { const x = new Error('El pedido no es de reparto'); x.status = 400; throw x; }
+  if (r.estado === 'entregado') { const x = new Error('El pedido ya fue entregado'); x.status = 409; throw x; }
+  r.intentos = (r.intentos || 0) + 1;
+  r.ultimoFallo = { motivo: motivo || '(sin motivo)', fecha: new Date().toISOString(), repartidorId: r.repartidorId };
+  r.estado = 'por_asignar'; r.repartidorId = null; r.repartidorNombre = null; r.asignado = null; r.salida = null;
+  p.actualizado = new Date().toISOString();
+  return p;
+}
+
+// Minutos de cocina->puerta y de salida->entrega
+function tiemposReparto(p) {
+  const r = p.reparto || {};
+  const min = (a, b) => (a && b ? r2((new Date(b) - new Date(a)) / 60000) : null);
+  return {
+    preparacion: min(p.creado, p.tiemposCocina && p.tiemposCocina.listo),
+    enRuta: min(r.salida, r.entregado),
+    total: min(p.creado, r.entregado),
+  };
+}
+
+// Liquidacion: el repartidor entrega el efectivo y esos pedidos entran al turno.
+function crearLiquidacion({ repartidorId, repartidorNombre, sucursalId, turnoId, folios, efectivoEsperado, conteoEfectivo, usuario }) {
+  const esperado = r2(efectivoEsperado);
+  const contado = conteoEfectivo == null ? esperado : r2(conteoEfectivo);
+  const dif = r2(contado - esperado);
+  return {
+    id: uid('liq'), repartidorId, repartidorNombre, sucursalId, turnoId,
+    folios: folios.slice(), pedidos: folios.length,
+    efectivoEsperado: esperado, conteoEfectivo: contado, diferencia: dif,
+    resultado: dif === 0 ? 'cuadrado' : (dif < 0 ? 'faltante' : 'sobrante'),
+    usuario, fecha: new Date().toISOString(),
+  };
+}
+
+// Ubicacion viva de cada repartidor. Se sobrescribe: no se guarda recorrido.
+function guardarUbicacion(e, empleadoId, { lat, lng, precision = null }) {
+  if (!e.repartoUbicaciones) e.repartoUbicaciones = {};
+  const la = +lat, ln = +lng;
+  if (!isFinite(la) || !isFinite(ln) || la < -90 || la > 90 || ln < -180 || ln > 180) {
+    const x = new Error('Coordenadas inválidas'); x.status = 400; throw x;
+  }
+  const ahora = new Date().toISOString();
+  const prev = e.repartoUbicaciones[empleadoId] || {};
+  const corte = Date.now() - 40 * 60000;
+  const rastro = (prev.rastro || []).filter((p) => new Date(p.ts).getTime() > corte);
+  rastro.push({ lat: la, lng: ln, ts: ahora });
+  while (rastro.length > 20) rastro.shift();
+  e.repartoUbicaciones[empleadoId] = {
+    lat: la, lng: ln, precision: precision == null ? null : +precision, ts: ahora, rastro,
+  };
+  return e.repartoUbicaciones[empleadoId];
+}
+// Una posicion vieja miente mas de lo que informa: se descarta a los 4 minutos.
+function ubicacionViva(e, empleadoId, maxMin = 4) {
+  const u = (e.repartoUbicaciones || {})[empleadoId];
+  if (!u) return null;
+  return (Date.now() - new Date(u.ts).getTime()) / 60000 <= maxMin ? u : null;
+}
+
+// Minutos promedio salida->entrega de la sucursal, para dar un ETA con datos
+// propios en vez de una promesa inventada. null si aun no hay historial.
+function promedioEnRuta(e, sucursalId, minMuestras = 3) {
+  const ms = [];
+  for (const p of Object.values(e.pedidos)) {
+    if (p.tipoServicio !== 'domicilio' || !p.reparto) continue;
+    if (sucursalId && p.sucursalId !== sucursalId) continue;
+    const t = tiemposReparto(p).enRuta;
+    if (t != null && t > 0 && t < 180) ms.push(t);
+  }
+  if (ms.length < minMuestras) return null;
+  ms.sort((a, b) => a - b);
+  return Math.round(ms[Math.floor(ms.length / 2)]); // mediana: aguanta el pedido raro
+}
+
+// ---- Estimación de llegada --------------------------------------------------
+//  El cálculo viejo era "promedio histórico menos lo transcurrido". Con pocas
+//  entregas, o si alguna se marcó entregada de inmediato, la mediana queda en
+//  dos minutos y el cliente ve "menos de 1 min" con la moto todavía lejos.
+//  Ahora, cuando conocemos dónde va la moto y dónde vive el cliente, se estima
+//  por distancia real. La velocidad se aprende de las propias entregas.
+// Si "entregado" se marca sin salir del local, la posición de la moto no es el
+// domicilio del cliente: es el local. Guardarla convierte al sistema en un
+// mentiroso confiado ("a 0 m" con el cliente a 28 km).
+const MIN_KM_ENTREGA = 0.15;
+function destinoCreible(destino, referencia) {
+  if (!destino || destino.lat == null) return false;
+  if (!referencia || referencia.lat == null) return true;   // sin con qué comparar, se acepta
+  const d = distanciaKm(destino, referencia);
+  return d == null || d >= MIN_KM_ENTREGA;
+}
+
+const KM_MIN_DEFAULT = 0.25;   // 15 km/h en línea recta ≈ 20 km/h de calle
+const KM_MIN_MIN = 0.08;       // topes de cordura por si un dato sale raro
+const KM_MIN_MAX = 0.9;
+
+function velocidadReparto(e) {
+  const v = (e.config && e.config.velocidadReparto) || null;
+  if (!v || !(v.muestras >= 3) || !(v.kmMin > 0)) return { kmMin: KM_MIN_DEFAULT, muestras: (v && v.muestras) || 0, aprendida: false };
+  const kmMin = Math.min(Math.max(v.kmMin, KM_MIN_MIN), KM_MIN_MAX);
+  return { kmMin, muestras: v.muestras, aprendida: true };
+}
+
+// Al entregar sabemos de dónde salió, a dónde llegó y cuánto tardó: con eso se
+// va calibrando la velocidad real del negocio (promedio móvil).
+function aprenderVelocidad(e, p) {
+  const r = p.reparto || {};
+  if (!r.origen || !r.destino || !r.salida || !r.entregado) return null;
+  const km = distanciaKm(r.origen, r.destino);
+  const min = (new Date(r.entregado) - new Date(r.salida)) / 60000;
+  if (!(km >= MIN_KM_ENTREGA) || !(min > 0.5) || min > 120) return null;   // datos absurdos fuera
+  const kmMin = km / min;
+  if (kmMin < KM_MIN_MIN || kmMin > KM_MIN_MAX) return null;
+  if (!e.config.velocidadReparto) e.config.velocidadReparto = { kmMin: KM_MIN_DEFAULT, muestras: 0 };
+  const v = e.config.velocidadReparto;
+  const n = Math.min(v.muestras + 1, 40);                        // se adapta si cambia la operación
+  v.kmMin = r2(((v.kmMin * (n - 1)) + kmMin) / n);
+  v.muestras = n;
+  v.actualizado = new Date().toISOString();
+  return v;
+}
+
+//  Devuelve { min, base, distanciaKm }. base: 'gps' | 'historial' | null
+function estimarLlegada(e, p, { ubicacion = null, promedioMin = null } = {}) {
+  const r = p.reparto || {};
+  if (r.estado !== 'en_ruta' || !r.salida) return { min: null, base: null, distanciaKm: null };
+  const transcurrido = Math.round((Date.now() - new Date(r.salida).getTime()) / 60000);
+  // Defensa para datos ya guardados mal: un domicilio que cae encima del local
+  // no es un domicilio, es un "entregado" marcado sin salir.
+  const suc = (e.sucursales || {})[p.sucursalId] || {};
+  const destinoOK = destinoCreible(r.destino, suc.coordenadas || r.origen);
+  // 1) Con posición viva y domicilio ubicado: distancia real
+  if (ubicacion && r.destino && destinoOK) {
+    const km = distanciaKm(ubicacion, r.destino);
+    if (km != null) {
+      const { kmMin } = velocidadReparto(e);
+      return { min: Math.max(0, Math.round(km / kmMin)), base: 'gps', distanciaKm: km };
     }
-    try {
-      const p = await consultarNominatim(c.q);
-      geoCache.set(clave, p);
-      if (geoCache.size > 2000) geoCache.clear();
-      intentos.push({ q: c.q, resultado: p ? (p.etiqueta || 'encontrado') : 'sin resultado', aproximado: c.aproximado });
-      if (p) {
-        const out = Object.assign({}, p, { aproximado: c.aproximado, consulta: c.q });
-        return detalle ? { punto: out, intentos } : out;
-      }
-    } catch (err) {
-      intentos.push({ q: c.q, resultado: 'error: ' + (err && err.message), aproximado: c.aproximado });
-      console.error('[geo] falló "' + c.q + '":', err && err.message);
-    }
   }
-  return detalle ? { punto: null, intentos } : null;
+  // 2) Sin GPS o sin domicilio ubicado: el promedio, pero sin prometer de más.
+  //    Con menos de 5 entregas de historial la mediana no es confiable.
+  const v = (e.config && e.config.velocidadReparto) || {};
+  if (promedioMin != null && v.muestras >= 5) {
+    return { min: Math.max(0, promedioMin - transcurrido), base: 'historial', distanciaKm: null };
+  }
+  return { min: null, base: null, distanciaKm: null };
 }
 
-// Distancia a partir de la cual un punto guardado y la dirección escrita ya no
-// pueden ser el mismo domicilio. Si discrepan tanto, uno de los dos está mal y
-// el sistema NO debe elegir en silencio: se lo marca a caja.
-const KM_DISCREPANCIA = 3;
-
-// Ubica la dirección del pedido. Siempre compara contra lo que ya estaba
-// guardado, porque un punto aprendido en una entrega falsa se ve igual de
-// legítimo que uno bueno. No bloquea la respuesta del pedido.
-async function ubicarDomicilio(row, folio, { forzar = false, usar = null } = {}) {
-  try {
-    return await als.run({ row, rol: 'sistema', username: 'geo', sucursalId: null }, async () => {
-      const e0 = await readState();
-      const p0 = e0 && e0.pedidos[folio];
-      if (!p0 || !p0.cliente) return null;
-      const c = p0.cliente;
-      const previo = (p0.reparto && p0.reparto.destino) || null;
-
-      // Caja decidió quedarse con el punto guardado: se limpia la duda y ya.
-      if (usar === 'guardado' && previo) {
-        return withState((e) => {
-          const p = e.pedidos[folio];
-          if (p && p.reparto && p.reparto.destino) { delete p.reparto.destino.dudoso; p.reparto.destino.verificado = true; }
-          const cli = (e.clientes || {})[M.llaveTel(c.telefono)];
-          if (cli) cli.verificado = true;
-          return p.reparto.destino;
-        });
-      }
-
-      const punto = await geocodificar(c);
-      if (!punto) return previo;
-
-      return withState((e) => {
-        const p = e.pedidos[folio];
-        if (!p || !p.reparto) return null;
-        const guardado = p.reparto.destino;
-        const cli = (e.clientes || {})[M.llaveTel(c.telefono)];
-        const ponerDireccion = () => {
-          p.reparto.destino = { lat: punto.lat, lng: punto.lng, fuente: 'direccion', aproximado: !!punto.aproximado, consulta: punto.consulta || null, verificado: forzar || usar === 'direccion' };
-          if (cli) { cli.lat = punto.lat; cli.lng = punto.lng; cli.fuente = 'direccion'; cli.verificado = !!(forzar || usar === 'direccion'); cli.ubicadoEn = new Date().toISOString(); }
-          return p.reparto.destino;
-        };
-        if (forzar || usar === 'direccion' || !guardado) return ponerDireccion();
-        // Ya había un punto: se contrasta con la dirección escrita
-        const dif = M.distanciaKm(guardado, punto);
-        if (dif != null && dif > KM_DISCREPANCIA) {
-          if (guardado.verificado) { guardado.dudoso = null; return guardado; }  // ya lo revisó un humano
-          guardado.dudoso = { lat: punto.lat, lng: punto.lng, km: dif, etiqueta: punto.etiqueta || null };
-          return guardado;
-        }
-        if (guardado.dudoso) delete guardado.dudoso;   // coinciden: se despeja
-        return guardado;
-      });
-    });
-  } catch (err) { console.error('[geo] ubicarDomicilio:', err && err.message); return null; }
+// Paso del cliente: 0 recibido · 1 en preparacion · 2 listo · 3 en camino · 4 entregado
+function pasoCliente(p) {
+  const r = p.reparto || {};
+  if (r.estado === 'entregado') return 4;
+  if (r.estado === 'en_ruta') return 3;
+  if (p._kdsListo) return 2;
+  if (p.tiemposCocina && p.tiemposCocina.recibido) return 1;
+  return 0;
 }
 
-// Reintento manual desde caja, por si la dirección se corrigió.
-// Por qué el sistema cree lo que cree sobre este domicilio. Sirve para dejar
-// de adivinar: muestra la dirección capturada, las consultas que se hicieron,
-// lo que contestó el geocodificador y qué punto quedó guardado.
-app.get('/api/pedidos/:folio/diagnostico-ubicacion', puedeCaja, wrap(async (req, res) => {
-  const e = await readState();
-  const p = e.pedidos[req.params.folio];
-  if (!p) throw bad('Pedido inexistente', 404);
-  if (!M.esDomicilio(p)) throw bad('El pedido no es a domicilio');
-  const c = p.cliente || {};
+// Lo unico que ve el cliente. Sin telefono ni direccion propios, sin totales de
+// otros pedidos y sin nada del resto de la operacion.
+function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = null, etaBase = null, distanciaKm: distEta = null } = {}) {
   const r = p.reparto || {};
   const suc = e.sucursales[p.sucursalId] || {};
-  const moto = r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
-  const dx = await geocodificar(c, { detalle: true });
-  const guardado = r.destino || null;
-  res.json({
+  return {
     folio: p.folio,
-    capturado: { nombre: c.nombre, calle: c.calle, numero: c.numero, colonia: c.colonia, referencias: c.referencias },
-    geocodificador: { activo: GEO_ACTIVO, region: GEO_REGION },
-    consultas: construirConsultas(c),
-    intentos: (dx && dx.intentos) || [],
-    encontrado: (dx && dx.punto) || null,
-    guardado,
-    fuenteGuardada: guardado && guardado.fuente,
-    sucursal: suc.coordenadas || null,
-    motoAhora: moto ? { lat: moto.lat, lng: moto.lng, ts: moto.ts } : null,
-    distancias: {
-      motoADomicilio: moto && guardado ? M.distanciaKm(moto, guardado) : null,
-      sucursalADomicilio: suc.coordenadas && guardado ? M.distanciaKm(suc.coordenadas, guardado) : null,
-      guardadoVsDireccion: guardado && dx && dx.punto ? M.distanciaKm(guardado, dx.punto) : null,
-    },
-    estimado: M.estimarLlegada(e, p, { ubicacion: moto, promedioMin: M.promedioEnRuta(e, p.sucursalId) }),
-  });
-}));
-
-app.post('/api/pedidos/:folio/ubicar', puedeCaja, wrap(async (req, res) => {
-  const { forzar = false, usar = null } = req.body || {};
-  const row = ctx().row;
-  await ubicarDomicilio(row, req.params.folio, { forzar, usar });
-  const e = await readState();
-  const p = e.pedidos[req.params.folio];
-  if (!p) throw bad('Pedido inexistente', 404);
-  res.json({ folio: p.folio, destino: (p.reparto && p.reparto.destino) || null });
-}));
-
-// ---------------------------------------------------------------------------
-//  AVISOS — un solo latido para toda la app
-//  Devuelve folios, no conteos: el panel compara contra lo que ya tenía y sabe
-//  qué es NUEVO. Con puros números no se distingue "entró uno y salió otro".
-// ---------------------------------------------------------------------------
-app.get('/api/avisos', wrap(async (req, res) => {
-  const e = await readState();
-  const c = ctx();
-  const { sucursalId } = req.query;
-  const mio = esRolRepartidor(c) ? empleadoDeCtx(e, c) : null;
-  const deSuc = (p) => !sucursalId || p.sucursalId === sucursalId;
-  const peds = Object.values(e.pedidos).filter((p) => deSuc(p) && p.estado !== 'cancelado');
-
-  // Cocina
-  const enCocina = [], listos = [];
-  for (const p of peds) {
-    if (p.estado === 'cobrado') continue;
-    if (p.reparto && ['en_ruta', 'entregado'].includes(p.reparto.estado)) continue;
-    const ls = p.lineas.filter((l) => l.cocina === 'enviado');
-    if (ls.length) enCocina.push(p.folio);
-    else if (p.tiemposCocina && p.tiemposCocina.listo && p.lineas.some((l) => l.cocina === 'servido') === false) listos.push(p.folio);
-  }
-
-  // Reparto (el repartidor solo ve lo suyo)
-  const dom = peds.filter((p) => M.esDomicilio(p) && (!mio || (p.reparto && p.reparto.repartidorId === mio.id)));
-  const prom = M.promedioEnRuta(e, sucursalId);
-  const limite = Math.max(25, Math.round((prom || 22) * 1.5));
-  const tardios = dom.filter((p) => M.enRuta(p) && p.reparto.salida
-    && (Date.now() - new Date(p.reparto.salida).getTime()) / 60000 >= limite).map((p) => p.folio);
-  const porLiquidar = dom.filter(M.porLiquidar);
-
-  const turno = sucursalId ? M.turnoAbierto(e, sucursalId) : null;
-  res.json({
-    ts: new Date().toISOString(),
-    cocina: { pendientes: enCocina, listos },
-    reparto: {
-      porAsignar: mio ? [] : dom.filter((p) => p.estado === 'abierto' && (!p.reparto || p.reparto.estado === 'por_asignar')).map((p) => p.folio),
-      asignados: dom.filter((p) => p.reparto && p.reparto.estado === 'asignado').map((p) => p.folio),
-      enRuta: dom.filter(M.enRuta).map((p) => p.folio),
-      porLiquidar: porLiquidar.map((p) => p.folio),
-      entregados: dom.filter((p) => p.reparto && p.reparto.estado === 'entregado').map((p) => p.folio),
-      tardios,
-      efectivoPendiente: M.r2(porLiquidar.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
-      promedioMin: prom,
-    },
-    caja: {
-      turnoAbierto: !!turno,
-      // Mesas se cobran en Mesas y domicilios en Reparto (los cobra la moto).
-      porCobrar: mio ? [] : peds.filter((p) => p.estado === 'abierto' && p.tipoServicio === 'mostrador' && p.lineas.length).map((p) => p.folio),
-      mesasConCuenta: mio ? 0 : Object.values(e.mesas || {}).filter((m) => (!sucursalId || m.sucursalId === sucursalId) && m.estado === 'cuenta').length,
-    },
-  });
-}));
-
-// ---------------------------------------------------------------------------
-//  GASTOS Y COMPRAS
-//  Un gasto en efectivo sale del cajón: se registra como movimiento del turno
-//  para que el corte cuadre. Uno con tarjeta o transferencia no toca la caja
-//  pero sí el estado de resultados.
-// ---------------------------------------------------------------------------
-app.get('/api/gastos/categorias', wrap(async (req, res) => {
-  res.json(Object.entries(M.CATEGORIAS_GASTO).map(([id, c]) => ({ id, nombre: c.nombre, inventario: !!c.inventario })));
-}));
-
-app.get('/api/proveedores', wrap(async (req, res) => {
-  const e = await readState();
-  res.json(Object.values(e.proveedores || {}).filter((p) => p.activo !== false).sort((a, b) => a.nombre.localeCompare(b.nombre)));
-}));
-
-app.post('/api/proveedores', puedeCaja, wrap(async (req, res) => {
-  const { nombre } = req.body || {};
-  if (!String(nombre || '').trim()) throw bad('Falta el nombre del proveedor');
-  const p = await withState((e) => {
-    if (!e.proveedores) e.proveedores = {};
-    const ya = Object.values(e.proveedores).find((x) => x.nombre.toLowerCase() === String(nombre).trim().toLowerCase());
-    if (ya) return ya; // no duplicar al capturar rápido
-    const x = M.crearProveedor(req.body || {});
-    e.proveedores[x.id] = x;
-    return x;
-  });
-  res.json(p);
-}));
-
-app.patch('/api/proveedores/:id', soloAdmin, wrap(async (req, res) => {
-  const p = await withState((e) => {
-    const x = (e.proveedores || {})[req.params.id];
-    if (!x) throw bad('Proveedor inexistente', 404);
-    for (const k of ['nombre', 'telefono', 'contacto', 'notas', 'activo']) if (req.body[k] !== undefined) x[k] = req.body[k];
-    return x;
-  });
-  res.json(p);
-}));
-
-app.get('/api/gastos', wrap(async (req, res) => {
-  const e = await readState();
-  const { desde, hasta, sucursalId, categoria, limit = 100 } = req.query;
-  const tz = tzTenant(e);
-  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
-  const dentro = (g) => {
-    if (sucursalId && g.sucursalId !== sucursalId) return false;
-    if (categoria && g.categoria !== categoria) return false;
-    const d = diaLocal(g.fecha, tz);
-    return (!d1 || d >= d1) && (!d2 || d <= d2);
+    negocio: (e.meta && e.meta.nombre) || '',
+    sucursal: suc.nombre || '',
+    cliente: (p.cliente && p.cliente.nombre) || '',
+    paso: pasoCliente(p),
+    cancelado: p.estado === 'cancelado',
+    creado: p.creado,
+    salida: r.salida || null,
+    entregado: r.entregado || null,
+    etaMin, etaBase, distanciaKm: distEta,
+    repartidor: repartidor ? { nombre: repartidor.nombre, telefono: repartidor.telefono || null } : null,
+    repartidorNombre: r.repartidorNombre || null,
+    calificacion: r.calificacion ? { estrellas: r.calificacion.estrellas } : null,
+    puedeCalificar: r.estado === 'entregado' && !r.calificacion,
+    moto: ubicacion ? { lat: ubicacion.lat, lng: ubicacion.lng, ts: ubicacion.ts } : null,
+    items: (p.lineas || []).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: (l.modificadores || []).map((m) => m.opcionNombre) })),
+    total: p.total,
   };
-  const lista = (e.gastos || []).filter(dentro);
-  res.json({
-    resumen: M.resumirGastos(e.gastos || [], { desde: d1, hasta: d2, sucursalId, tz: tzTenant(e) }),
-    gastos: lista.slice(0, +limit),
-  });
-}));
-
-app.post('/api/gastos', puedeCaja, wrap(async (req, res) => {
-  const { sucursalId, categoria = 'otros', lineas = [], metodoPago = 'efectivo' } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  if (!['efectivo', 'tarjeta', 'transferencia', 'credito'].includes(metodoPago)) throw bad('Método de pago inválido');
-  const out = await withState((e, c) => {
-    const suc = e.sucursales[sucursalId];
-    if (!suc) throw bad('Sucursal inexistente');
-    const turno = M.turnoAbierto(e, sucursalId);
-    // Solo el efectivo exige turno: es lo único que sale físicamente del cajón.
-    if (metodoPago === 'efectivo' && !turno) throw bad('Abre el turno de caja para registrar un gasto en efectivo', 409);
-    // Si llega solo el nombre, se busca o se crea: así no quedan gastos
-    // huérfanos ni proveedores duplicados por diferencias de mayúsculas.
-    let provId = req.body.proveedorId || null;
-    const provNom = String(req.body.proveedorNombre || '').trim();
-    if (!provId && provNom) {
-      if (!e.proveedores) e.proveedores = {};
-      const ya = Object.values(e.proveedores).find((x) => x.nombre.toLowerCase() === provNom.toLowerCase());
-      if (ya) provId = ya.id;
-      else { const np = M.crearProveedor({ nombre: provNom }); e.proveedores[np.id] = np; provId = np.id; }
-    }
-    const g = M.crearGasto(e, Object.assign({}, req.body, {
-      proveedorId: provId,
-      codigo: suc.codigo, turnoId: metodoPago === 'efectivo' && turno ? turno.id : null,
-      usuario: c.username, lineas, categoria,
-    }));
-    let insumos = [];
-    if (g.inventario) insumos = M.aplicarCompraInsumos(e, g, 1);
-    if (metodoPago === 'efectivo' && turno) {
-      M.registrarMovimiento(turno, {
-        tipo: 'salida', monto: g.total,
-        motivo: `${(M.CATEGORIAS_GASTO[g.categoria] || {}).nombre || g.categoria}${g.proveedor ? ' · ' + g.proveedor : ''} (${g.folio})`,
-        usuario: c.username,
-      });
-      g.movimientoId = turno.movimientos[turno.movimientos.length - 1].id;
-    }
-    return { gasto: g, insumos };
-  });
-  res.json(out);
-}));
-
-app.post('/api/gastos/:id/cancelar', soloAdmin, wrap(async (req, res) => {
-  const out = await withState((e, c) => {
-    const g = (e.gastos || []).find((x) => x.id === req.params.id);
-    if (!g) throw bad('Gasto inexistente', 404);
-    if (g.estado === 'cancelado') throw bad('El gasto ya está cancelado', 409);
-    let devuelto = null;
-    if (g.movimientoId) {
-      // El dinero ya salió del cajón: se repone con una entrada en el turno
-      // abierto, para no alterar un corte que ya se cerró.
-      const turno = M.turnoAbierto(e, g.sucursalId);
-      if (!turno) throw bad('Abre el turno de caja: hay que reponer el efectivo de este gasto', 409);
-      M.registrarMovimiento(turno, { tipo: 'entrada', monto: g.total, motivo: `Cancelación de ${g.folio}`, usuario: c.username });
-      devuelto = turno.id;
-    }
-    if (g.inventario) M.aplicarCompraInsumos(e, g, -1);
-    g.estado = 'cancelado';
-    g.canceladoPor = c.username;
-    g.cancelado = new Date().toISOString();
-    g.motivoCancelacion = String((req.body || {}).motivo || '').trim();
-    return { gasto: g, efectivoRepuestoEn: devuelto };
-  });
-  res.json(out);
-}));
-
-// ---------------------------------------------------------------------------
-//  INVENTARIO
-// ---------------------------------------------------------------------------
-app.get('/api/inventario', wrap(async (req, res) => {
-  const e = await readState();
-  const insumos = Object.values(e.insumos).map((i) => ({ ...i, bajo: i.stock <= i.stockMin, valor: M.r2(i.stock * i.costoUnitario) }));
-  const foodCost = Object.values(e.menu.productos).filter((p) => p.receta.length).map((p) => ({ id: p.id, nombre: p.nombre, costo: M.costoReceta(e, p), precio: p.precioBase, foodCostPct: M.foodCostPct(e, p) }));
-  const valuacion = M.r2(insumos.reduce((s, i) => s + i.valor, 0));
-  res.json({ insumos, foodCost, valuacion });
-}));
-// Conteo físico: compara teórico vs físico, calcula merma en $ y ajusta el stock
-app.post('/api/inventario/conteo', soloAdmin, wrap(async (req, res) => {
-  const { conteos = [] } = req.body || {};
-  if (!conteos.length) throw bad('No hay conteos');
-  const out = await withState((e, c) => {
-    if (!e.conteos) e.conteos = [];
-    const lineas = []; let mermaTotal = 0;
-    for (const ct of conteos) {
-      const i = e.insumos[ct.insumoId];
-      if (!i || ct.fisico == null) continue;
-      const teorico = i.stock, fisico = M.r2(ct.fisico);
-      const diff = M.r2(fisico - teorico);
-      const valor = M.r2((teorico - fisico) * i.costoUnitario); // positivo = merma (pérdida)
-      lineas.push({ insumoId: i.id, nombre: i.nombre, teorico, fisico, diff, valor });
-      mermaTotal = M.r2(mermaTotal + valor);
-      i.stock = fisico; // ajustar a lo contado
-    }
-    const audit = { id: M.uid('aud'), fecha: new Date().toISOString(), usuario: c.username, mermaTotal, lineas };
-    e.conteos.unshift(audit);
-    if (e.conteos.length > 60) e.conteos = e.conteos.slice(0, 60);
-    return audit;
-  });
-  res.json(out);
-}));
-app.get('/api/inventario/auditorias', wrap(async (req, res) => {
-  const e = await readState();
-  res.json((e.conteos || []).slice(0, 20));
-}));
-app.post('/api/inventario/insumos', soloAdmin, wrap(async (req, res) => {
-  const { nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 } = req.body || {};
-  if (!nombre || !unidad) throw bad('Falta nombre o unidad');
-  const i = await withState((e) => { const ins = M.crearInsumo({ nombre, unidad, stock, costoUnitario, stockMin }); e.insumos[ins.id] = ins; return ins; });
-  res.json(i);
-}));
-app.patch('/api/inventario/insumos/:id', soloAdmin, wrap(async (req, res) => {
-  const patch = req.body || {};
-  const i = await withState((e) => {
-    const ins = e.insumos[req.params.id];
-    if (!ins) throw bad('Insumo inexistente', 404);
-    if (patch.nombre != null) ins.nombre = patch.nombre;
-    if (patch.unidad != null) ins.unidad = patch.unidad;
-    if (patch.stock != null) ins.stock = M.r2(+patch.stock);
-    if (patch.stockMin != null) ins.stockMin = M.r2(+patch.stockMin);
-    if (patch.costoUnitario != null) ins.costoUnitario = M.r2(+patch.costoUnitario);
-    return ins;
-  });
-  res.json(i);
-}));
-app.delete('/api/inventario/insumos/:id', soloAdmin, wrap(async (req, res) => {
-  await withState((e) => {
-    const usado = Object.values(e.menu.productos).some((p) => (p.receta || []).some((r) => r.insumoId === req.params.id));
-    if (usado) throw bad('Ese insumo está en la receta de un producto. Quítalo de la receta primero.');
-    delete e.insumos[req.params.id];
-  });
-  res.json({ ok: true });
-}));
-app.post('/api/inventario/insumos/:id/entrada', soloAdmin, wrap(async (req, res) => {
-  const { cantidad = 0 } = req.body || {};
-  const i = await withState((e) => { const ins = e.insumos[req.params.id]; if (!ins) throw bad('Insumo inexistente', 404); ins.stock = M.r2(ins.stock + cantidad); return ins; });
-  res.json(i);
-}));
-
-// Aplicar margen/food cost a TODOS los productos con receta (admin)
-// tipo='foodcost' -> precio = costoReceta / (valor/100) ; tipo='markup' -> precio = costoReceta * valor
-app.post('/api/menu/precios/aplicar', soloAdmin, wrap(async (req, res) => {
-  const { tipo = 'foodcost', valor, redondeo = 0 } = req.body || {};
-  if (!valor || valor <= 0) throw bad('Falta el valor');
-  const out = await withState((e) => {
-    let actualizados = 0, omitidos = 0;
-    const cambios = [];
-    for (const p of Object.values(e.menu.productos)) {
-      const costo = M.costoReceta(e, p);
-      if (!costo) { omitidos++; continue; }
-      let nuevo = tipo === 'markup' ? costo * valor : costo / (valor / 100);
-      if (redondeo > 0) nuevo = Math.ceil(nuevo / redondeo) * redondeo; else nuevo = M.r2(nuevo);
-      cambios.push({ nombre: p.nombre, antes: p.precioBase, despues: nuevo });
-      p.precioBase = nuevo; actualizados++;
-    }
-    return { actualizados, omitidos, cambios };
-  });
-  res.json(out);
-}));
-
-// ---------------------------------------------------------------------------
-//  MESAS
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-//  RESERVAS
-// ---------------------------------------------------------------------------
-app.get('/api/reservas', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, fecha } = req.query;
-  let arr = (e.reservas || []).filter((r) => (!sucursalId || r.sucursalId === sucursalId) && (!fecha || r.fecha === fecha));
-  arr = arr.map((r) => ({ ...r, mesaNombre: r.mesaId && e.mesas[r.mesaId] ? e.mesas[r.mesaId].nombre : null }));
-  arr.sort((a, b) => (a.fecha + (a.hora || '')).localeCompare(b.fecha + (b.hora || '')));
-  res.json(arr);
-}));
-app.post('/api/reservas', puedeCaja, wrap(async (req, res) => {
-  const { sucursalId, nombre, telefono, personas, fecha, hora, mesaId, notas } = req.body || {};
-  if (!nombre || !fecha || !hora) throw bad('Faltan nombre, fecha u hora');
-  const r = await withState((e, c) => {
-    if (!e.reservas) e.reservas = [];
-    if (mesaId && !e.mesas[mesaId]) throw bad('Mesa inexistente');
-    const nueva = M.crearReserva({ sucursalId: sucursalId || null, nombre, telefono, personas, fecha, hora, mesaId, notas, creadoPor: c.username });
-    e.reservas.unshift(nueva);
-    return nueva;
-  });
-  res.json(r);
-}));
-app.patch('/api/reservas/:id', puedeCaja, wrap(async (req, res) => {
-  const b = req.body || {};
-  const r = await withState((e) => {
-    const x = (e.reservas || []).find((z) => z.id === req.params.id);
-    if (!x) throw bad('Reserva inexistente', 404);
-    for (const k of ['nombre', 'telefono', 'personas', 'fecha', 'hora', 'mesaId', 'notas', 'estado']) if (k in b) x[k] = b[k];
-    if ('personas' in b) x.personas = Math.max(1, +b.personas || 1);
-    return x;
-  });
-  res.json(r);
-}));
-app.delete('/api/reservas/:id', puedeCaja, wrap(async (req, res) => {
-  await withState((e) => { e.reservas = (e.reservas || []).filter((z) => z.id !== req.params.id); return true; });
-  res.json({ ok: true });
-}));
-
-// ---------------------------------------------------------------------------
-//  RESERVAS placeholder end
-// ---------------------------------------------------------------------------
-app.get('/api/mesas', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId } = req.query;
-  const arr = Object.values(e.mesas).filter((m) => !sucursalId || m.sucursalId === sucursalId).map((m) => {
-    const p = m.pedidoFolio ? e.pedidos[m.pedidoFolio] : null;
-    return { ...m, total: p ? p.total : 0, items: p ? p.lineas.length : 0, abierto: p ? p.creado : null, atiende: p ? (p.atiende || null) : null };
-  });
-  res.json(arr);
-}));
-app.post('/api/mesas/:id/cuenta', wrap(async (req, res) => {
-  const m = await withState((e) => {
-    const mesa = e.mesas[req.params.id];
-    if (!mesa) throw bad('Mesa inexistente', 404);
-    const p = mesa.pedidoFolio ? e.pedidos[mesa.pedidoFolio] : null;
-    if (!p || !p.lineas.length) throw bad('La mesa no tiene productos; agrega algo antes de pedir la cuenta');
-    if (mesa.estado === 'ocupada') mesa.estado = 'cuenta';
-    return mesa;
-  });
-  res.json(m);
-}));
-// Liberar/anular una mesa (caja, gerente o admin): cancela la cuenta abierta sin cobrarla
-app.post('/api/mesas/:id/liberar', puedeCaja, wrap(async (req, res) => {
-  const { motivo = '' } = req.body || {};
-  const out = await withState((e, c) => {
-    const mesa = e.mesas[req.params.id];
-    if (!mesa) throw bad('Mesa inexistente', 404);
-    if (mesa.pedidoFolio && e.pedidos[mesa.pedidoFolio]) {
-      const p = e.pedidos[mesa.pedidoFolio];
-      if (p.estado === 'abierto') {
-        p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (c || {}).username || null; p.motivoCancelacion = motivo;
-        if (p.lineas.length) registrarCancelacion(e, p, mesa.nombre, motivo, c);
-      }
-    }
-    mesa.estado = 'libre'; mesa.pedidoFolio = null;
-    return mesa;
-  });
-  res.json(out);
-}));
-// Cancelar un pedido abierto de mostrador/domicilio (caja/gerente/admin) con motivo
-app.post('/api/pedidos/:folio/cancelar', puedeCaja, wrap(async (req, res) => {
-  const { motivo = '' } = req.body || {};
-  const out = await withState((e, c) => {
-    const p = e.pedidos[req.params.folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (p.estado === 'cobrado') throw bad('No se puede cancelar un pedido ya cobrado', 409);
-    if (p.estado === 'cancelado') return p;
-    if (M.enRuta(p)) throw bad('El pedido ya salió con el repartidor: márcalo fallido en /api/reparto/' + p.folio + '/fallido antes de cancelar', 409);
-    p.estado = 'cancelado'; p.canceladoEn = new Date().toISOString(); p.canceladoPor = (c || {}).username || null; p.motivoCancelacion = motivo;
-    if (p.tipoServicio === 'mesa' && p.mesaId && e.mesas[p.mesaId]) { e.mesas[p.mesaId].estado = 'libre'; e.mesas[p.mesaId].pedidoFolio = null; }
-    if (p.lineas.length) registrarCancelacion(e, p, p.tipoServicio === 'domicilio' ? 'Domicilio' : 'Mostrador', motivo, c);
-    return p;
-  });
-  res.json(out);
-}));
-function registrarCancelacion(e, p, etiqueta, motivo, c) {
-  if (!e.cancelaciones) e.cancelaciones = [];
-  e.cancelaciones.unshift({ id: M.uid('canc'), folio: p.folio, sucursalId: p.sucursalId, tipoServicio: p.tipoServicio, etiqueta, items: p.lineas.length, total: p.total, motivo: motivo || '(sin motivo)', usuario: (c || {}).username || null, fecha: new Date().toISOString() });
-  if (e.cancelaciones.length > 2000) e.cancelaciones = e.cancelaciones.slice(0, 2000);
 }
-app.get('/api/cancelaciones', puedeCaja, wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, desde, hasta } = req.query;
-  const d = desde ? new Date(desde).getTime() : null;
-  const h = hasta ? new Date(hasta).getTime() : null;
-  const arr = (e.cancelaciones || []).filter((x) => (!sucursalId || x.sucursalId === sucursalId)
-    && (d == null || new Date(x.fecha).getTime() >= d)
-    && (h == null || new Date(x.fecha).getTime() <= h));
-  res.json(arr.slice(0, 200));
-}));
-// Transferir/mover la cuenta de una mesa a otra mesa libre
-app.post('/api/pedidos/:folio/transferir', wrap(async (req, res) => {
-  const { mesaDestinoId } = req.body || {};
-  const out = await withState((e) => {
-    const p = e.pedidos[req.params.folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    if (p.estado !== 'abierto') throw bad('Solo se puede mover una cuenta abierta', 409);
-    if (p.tipoServicio !== 'mesa') throw bad('Solo aplica a cuentas de mesa');
-    const dest = e.mesas[mesaDestinoId];
-    if (!dest) throw bad('Mesa destino inexistente', 404);
-    if (dest.sucursalId !== p.sucursalId) throw bad('La mesa destino es de otra sucursal');
-    if (dest.estado !== 'libre') throw bad('La mesa destino está ocupada');
-    const orig = p.mesaId && e.mesas[p.mesaId] ? e.mesas[p.mesaId] : null;
-    const origEstado = orig ? orig.estado : 'ocupada';
-    if (orig) { orig.estado = 'libre'; orig.pedidoFolio = null; }
-    p.mesaId = dest.id; p.actualizado = new Date().toISOString();
-    dest.estado = origEstado === 'libre' ? 'ocupada' : origEstado;
-    dest.pedidoFolio = p.folio;
-    return { mesa: dest.id, pedido: p.folio };
-  });
-  res.json(out);
-}));
-// Juntar: pasar las líneas de la mesa origen a la mesa destino y liberar origen
-app.post('/api/mesas/:destinoId/juntar', wrap(async (req, res) => {
-  const { origenId } = req.body || {};
-  const out = await withState((e, c) => {
-    const dest = e.mesas[req.params.destinoId];
-    const orig = e.mesas[origenId];
-    if (!dest || !orig) throw bad('Mesa inexistente', 404);
-    if (dest.id === orig.id) throw bad('Elige dos mesas distintas');
-    if (dest.sucursalId !== orig.sucursalId) throw bad('Las mesas son de distinta sucursal');
-    const po = orig.pedidoFolio ? e.pedidos[orig.pedidoFolio] : null;
-    if (!po || !po.lineas.length) throw bad('La mesa origen no tiene cuenta');
-    let destino = dest.pedidoFolio ? e.pedidos[dest.pedidoFolio] : null;
-    if (destino && destino.estado !== 'abierto') destino = null;
-    if (!destino) {
-      destino = M.crearPedido(e, { sucursalId: dest.sucursalId, codigo: e.sucursales[dest.sucursalId].codigo, tipoServicio: 'mesa', mesaId: dest.id, usuario: (c || {}).username });
-      dest.pedidoFolio = destino.folio; dest.estado = 'ocupada';
-    }
-    const teniaEnviado = po.lineas.some((l) => l.cocina === 'enviado');
-    for (const l of po.lineas) destino.lineas.push(l);
-    if (teniaEnviado && !destino.tiemposCocina.recibido) destino.tiemposCocina.recibido = po.tiemposCocina.recibido || new Date().toISOString();
-    M.recalcularPedido(destino); destino.actualizado = new Date().toISOString();
-    po.lineas = []; po.estado = 'cancelado'; po.canceladoEn = new Date().toISOString(); po.motivoCancelacion = 'Juntada con ' + dest.nombre; M.recalcularPedido(po);
-    orig.estado = 'libre'; orig.pedidoFolio = null;
-    return { destino: destino.folio, mesa: dest.id };
-  });
-  res.json(out);
-}));
-// Cambiar de mesero / quien atiende la cuenta
-app.post('/api/pedidos/:folio/atiende', wrap(async (req, res) => {
-  const { atiende } = req.body || {};
-  const out = await withState((e) => {
-    const p = e.pedidos[req.params.folio];
-    if (!p) throw bad('Pedido inexistente', 404);
-    p.atiende = (atiende || '').trim() || null; p.actualizado = new Date().toISOString();
-    return p;
-  });
-  res.json(out);
-}));
-app.post('/api/mesas', wrap(async (req, res) => {
-  const { sucursalId, nombre } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const m = await withState((e) => {
-    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
-    const n = Object.values(e.mesas).filter((x) => x.sucursalId === sucursalId).length;
-    const mesa = M.crearMesa({ nombre: nombre || ('Mesa ' + (n + 1)), sucursalId });
-    e.mesas[mesa.id] = mesa; return mesa;
-  });
-  res.json(m);
-}));
-app.post('/api/mesas/bulk', wrap(async (req, res) => {
-  const { sucursalId, cantidad = 6 } = req.body || {};
-  if (!sucursalId) throw bad('Falta sucursalId');
-  const arr = await withState((e) => {
-    if (!e.sucursales[sucursalId]) throw bad('Sucursal inexistente');
-    const base = Object.values(e.mesas).filter((x) => x.sucursalId === sucursalId).length;
-    const out = [];
-    for (let i = 1; i <= cantidad; i++) { const m = M.crearMesa({ nombre: 'Mesa ' + (base + i), sucursalId }); e.mesas[m.id] = m; out.push(m); }
-    return out;
-  });
-  res.json(arr);
-}));
 
-// ---------------------------------------------------------------------------
-//  REPORTES
-// ---------------------------------------------------------------------------
-// --- Filtro de pedidos cobrados por sucursal y rango de fechas (para reportes) ---
-function _fechaPed(p) { return (p.pago && p.pago.timestamp) || p.actualizado || p.creado; }
-// Zona horaria del restaurante. Un pedido de las 9 de la noche en Morelos cae
-// al día siguiente en UTC: sin esto, la venta de la noche se contaba en el día
-// equivocado y el filtro "hasta" dejaba fuera el último día completo.
-const tzTenant = (e) => (e.config && e.config.zonaHoraria) || 'America/Mexico_City';
-function diaLocal(iso, tz) {
-  if (!iso) return '';
-  try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: tz }); }
-  catch { return String(iso).slice(0, 10); }
-}
-// desde/hasta pueden llegar como '2026-09-01' (vista Gastos) o como fecha-hora
-// ISO completa (los presets de Reportes mandan el instante exacto). Ambas se
-// reducen al DÍA del restaurante para comparar contra días, no contra textos.
-function diaParam(v, tz) {
-  const t = String(v || '').trim();
-  if (!t) return null;
-  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : diaLocal(t, tz);
-}
-function pedsCobrados(e, sucursalId, desde, hasta) {
-  const tz = tzTenant(e);
-  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
-  return Object.values(e.pedidos).filter((p) => {
-    if (p.estado !== 'cobrado') return false;
-    if (sucursalId && p.sucursalId !== sucursalId) return false;
-    if (!d1 && !d2) return true;
-    const d = diaLocal(_fechaPed(p), tz);
-    return (!d1 || d >= d1) && (!d2 || d <= d2);
+// ---- Directorio de clientes -------------------------------------------------
+//  Se llena solo con cada pedido a domicilio. La llave es el telefono a 10
+//  digitos, que es como los identifica quien contesta el telefono.
+const llaveTel = (t) => String(t == null ? '' : t).replace(/\D/g, '').slice(-10);
+
+function upsertCliente(e, entrega, extra = {}) {
+  if (!e.clientes) e.clientes = {};
+  const k = llaveTel(entrega && entrega.telefono);
+  if (k.length !== 10) return null;
+  const prev = e.clientes[k] || { telefono: k, pedidos: 0, creado: new Date().toISOString(), lat: null, lng: null };
+  const c = Object.assign(prev, {
+    nombre: entrega.nombre || prev.nombre || '',
+    calle: entrega.calle || prev.calle || '',
+    numero: entrega.numero || prev.numero || '',
+    colonia: entrega.colonia || prev.colonia || '',
+    referencias: entrega.referencias != null && entrega.referencias !== '' ? entrega.referencias : (prev.referencias || ''),
+    actualizado: new Date().toISOString(),
   });
-}
-app.get('/api/reportes/resumen', wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, desde, hasta } = req.query;
-  const peds = pedsCobrados(e, sucursalId, desde, hasta);
-  const venta = M.r2(peds.reduce((s, p) => s + p.total, 0));
-  const porProducto = {}; peds.forEach((p) => p.lineas.forEach((l) => { porProducto[l.nombre] = porProducto[l.nombre] || { q: 0, total: 0 }; porProducto[l.nombre].q += l.cantidad; porProducto[l.nombre].total = M.r2(porProducto[l.nombre].total + l.importe); }));
-  const porPago = { efectivo: 0, tarjeta: 0, transferencia: 0 }; peds.forEach((p) => p.pago && p.pago.pagos.forEach((x) => porPago[x.metodo] = M.r2((porPago[x.metodo] || 0) + x.monto)));
-  const porServicio = { mostrador: 0, domicilio: 0, mesa: 0 }; peds.forEach((p) => porServicio[p.tipoServicio] = M.r2(porServicio[p.tipoServicio] + p.total));
-  const propinas = M.r2(peds.reduce((s, p) => s + (p.propina ? p.propina.monto : 0), 0));
-  const porHora = Array.from({ length: 24 }, () => ({ venta: 0, pedidos: 0 }));
-  const porDia = Array.from({ length: 7 }, () => ({ venta: 0, pedidos: 0 }));
-  for (const p of peds) {
-    const d = new Date((p.pago && p.pago.timestamp) || p.actualizado || p.creado);
-    const h = d.getHours(); const wd = d.getDay();
-    porHora[h].venta = M.r2(porHora[h].venta + p.total); porHora[h].pedidos++;
-    porDia[wd].venta = M.r2(porDia[wd].venta + p.total); porDia[wd].pedidos++;
+  c.direccion = `${c.calle} ${c.numero}, ${c.colonia}`.trim();
+  // Las coords solo se pisan cuando llega una nueva medida real
+  if (extra.lat != null && extra.lng != null) {
+    c.lat = +extra.lat; c.lng = +extra.lng;
+    c.fuente = extra.fuente || 'gps';
+    if (extra.verificado != null) c.verificado = !!extra.verificado;
+    c.ubicadoEn = new Date().toISOString();
   }
-  res.json({ venta, pedidos: peds.length, ticketPromedio: peds.length ? M.r2(venta / peds.length) : 0, propinas, porProducto, porPago, porServicio, porHora, porDia });
-}));
-
-// Estado completo del restaurante: clientes con dirección, ventas, sueldos.
-// Solo administración, nunca un cajero, cocinero o repartidor.
-app.get('/api/estado', soloAdmin, wrap(async (req, res) => { res.json(await readState()); }));
-
-// Respaldo descargable. Es la única copia que NO depende de la base.
-app.get('/api/admin/respaldo', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const c = ctx();
-  const nombre = `respaldo_${(e.meta.nombre || 'restaurante').replace(/[^a-zA-Z0-9]+/g, '_')}_${new Date().toISOString().slice(0, 10)}.json`;
-  res.setHeader('Content-Disposition', `attachment; filename="${nombre}"`);
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.send(JSON.stringify({ version: 1, row: c.row, generado: new Date().toISOString(), estado: e }, null, 0));
-}));
-
-// Restauración: destruye el estado actual, por eso va con SETUP_TOKEN y no con
-// la sesión. Antes de pisar nada deja una copia de seguridad.
-app.post('/api/admin/restaurar', wrap(async (req, res) => {
-  if (!process.env.SETUP_TOKEN) throw bad('SETUP_TOKEN no configurado', 500);
-  if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
-  const { row, estado, confirmar } = req.body || {};
-  if (!row || !estado || !estado.meta) throw bad('Falta row o un estado válido');
-  if (confirmar !== 'REEMPLAZAR') throw bad('Manda confirmar:"REEMPLAZAR" para aceptar que se pisa el estado actual');
-  const actual = await db.loadState(Number(row));
-  if (actual) await guardarSnapshot(Number(row), actual, 'antes de restaurar');
-  await db.saveState(Number(row), estado);
-  invalidarCache(Number(row));
-  res.json({ ok: true, row: Number(row), nombre: estado.meta.nombre });
-}));
-
-// Instantáneas automáticas en una fila aparte de la misma tabla. Se guardan
-// las últimas 5: si un documento se corrompe, hay de dónde volver.
-const FILA_RESPALDO = (row) => 900000 + Number(row);
-async function guardarSnapshot(row, doc, motivo) {
-  try {
-    const id = FILA_RESPALDO(row);
-    let caja = await db.loadState(id);
-    if (!caja || !Array.isArray(caja.snapshots)) {
-      caja = { snapshots: [] };
-      await db.insertState(id, caja).catch(() => {});
-    }
-    caja.snapshots.unshift({ ts: new Date().toISOString(), motivo, estado: doc });
-    caja.snapshots = caja.snapshots.slice(0, 5);
-    await db.saveState(id, caja);
-    return true;
-  } catch (err) {
-    console.error('[respaldo] no se pudo guardar la instantánea:', err && err.message);
-    return false;
-  }
+  if (extra.sumarPedido) { c.pedidos = (c.pedidos || 0) + 1; c.ultimoPedido = new Date().toISOString(); }
+  e.clientes[k] = c;
+  return c;
 }
 
-// Qué se borraría y qué se conservaría. Sirve para que nadie apriete a ciegas.
-app.get('/api/admin/limpiar-pruebas', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  res.json({
-    restaurante: e.meta.nombre,
-    conteos: M.contarPruebas(e),
-    limpiadoAntes: e.meta.limpiado || null,
-    conserva: ['Menú, precios y modificadores', 'Sucursales y mesas', 'Usuarios y sus contraseñas', 'Marca, logo y datos fiscales', 'Insumos y sus costos', 'Promociones'],
-  });
-}));
+function buscarClientes(e, q, limite = 8) {
+  const t = String(q || '').trim().toLowerCase();
+  if (t.length < 3) return [];
+  const dig = t.replace(/\D/g, '');
+  return Object.values(e.clientes || {})
+    .filter((c) => (dig.length >= 3 && c.telefono.includes(dig))
+      || (c.nombre || '').toLowerCase().includes(t)
+      || (c.direccion || '').toLowerCase().includes(t))
+    .sort((a, b) => new Date(b.ultimoPedido || b.actualizado || 0) - new Date(a.ultimoPedido || a.actualizado || 0))
+    .slice(0, limite);
+}
 
-// Deja el sistema listo para operar de verdad. Antes de borrar nada guarda una
-// instantánea, para que un arrepentimiento tenga vuelta atrás.
-app.post('/api/admin/limpiar-pruebas', soloAdmin, wrap(async (req, res) => {
-  const { confirmar, opciones = {}, forzar = false } = req.body || {};
-  const c = ctx();
-  const previo = await readState();
-  if (!previo) throw bad('Sin estado', 404);
-  if (String(confirmar || '').trim() !== String(previo.meta.nombre || '').trim()) {
-    throw bad(`Para confirmar, escribe el nombre del restaurante tal cual: "${previo.meta.nombre}"`);
-  }
-  const abiertos = Object.values(previo.caja.turnos || {}).filter((t) => t.estado === 'abierto');
-  if (abiertos.length && !forzar) throw bad('Hay un turno de caja abierto. Ciérralo antes de limpiar (o manda forzar:true).', 409);
+// Distancia en linea recta (km). No es la ruta, pero para "¿ya mero llega?"
+// alcanza y no cuesta una llamada a ningun servicio de mapas.
+function distanciaKm(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return null;
+  const R = 6371, rad = (x) => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return r2(2 * R * Math.asin(Math.sqrt(h)));
+}
 
-  const respaldado = await guardarSnapshot(c.row, previo, 'antes de limpiar pruebas');
-  const out = await withState((e) => M.limpiarPruebas(e, opciones));
-  await ensureCanales();
-  res.json({ ok: true, respaldado, restaurante: previo.meta.nombre, ...out });
-}));
+// ---- Calificacion del repartidor -------------------------------------------
+function calificarReparto(p, { estrellas, comentario = '' }) {
+  const n = Math.round(+estrellas);
+  if (!(n >= 1 && n <= 5)) { const x = new Error('La calificación va de 1 a 5'); x.status = 400; throw x; }
+  if (!p.reparto || p.reparto.estado !== 'entregado') { const x = new Error('El pedido aún no se entrega'); x.status = 409; throw x; }
+  p.reparto.calificacion = {
+    estrellas: n,
+    comentario: String(comentario || '').trim().slice(0, 300),
+    fecha: new Date().toISOString(),
+    repartidorId: p.reparto.repartidorId,
+  };
+  return p.reparto.calificacion;
+}
 
-app.get('/api/admin/respaldos', soloAdmin, wrap(async (req, res) => {
-  const caja = await db.loadState(FILA_RESPALDO(ctx().row));
-  res.json(((caja && caja.snapshots) || []).map((s) => ({
-    ts: s.ts, motivo: s.motivo,
-    pedidos: Object.keys((s.estado && s.estado.pedidos) || {}).length,
-    tamanoKB: Math.round(JSON.stringify(s.estado || {}).length / 1024),
-  })));
-}));
+// ---- GASTOS Y COMPRAS -------------------------------------------------------
+//  Distinción que importa para no mentirle al estado de resultados:
+//  - Comprar insumos NO es gasto del periodo: es inventario. Se vuelve costo
+//    (COGS) cuando el producto se vende. Si se contara como gasto además del
+//    COGS, el mismo peso se restaría dos veces.
+//  - Gasolina, renta, reparaciones y demás sí son gasto operativo del periodo.
+const CATEGORIAS_GASTO = {
+  insumos:       { nombre: 'Insumos y mercancía', inventario: true },
+  gasolina:      { nombre: 'Gasolina y transporte' },
+  mantenimiento: { nombre: 'Mantenimiento y reparaciones' },
+  servicios:     { nombre: 'Servicios (luz, agua, gas)' },
+  renta:         { nombre: 'Renta' },
+  nomina:        { nombre: 'Nómina y honorarios' },
+  empaque:       { nombre: 'Empaques y desechables' },
+  limpieza:      { nombre: 'Limpieza' },
+  publicidad:    { nombre: 'Publicidad' },
+  otros:         { nombre: 'Otros' },
+};
+const esCompraInventario = (cat) => !!(CATEGORIAS_GASTO[cat] && CATEGORIAS_GASTO[cat].inventario);
 
-// ---------------------------------------------------------------------------
-//  REPORTE FINANCIERO (admin)  — COGS teórico, margen, food cost, rentabilidad
-// ---------------------------------------------------------------------------
-app.get('/api/reportes/financiero', soloAdmin, wrap(async (req, res) => {
-  const e = await readState();
-  const { sucursalId, desde, hasta } = req.query;
-  const peds = pedsCobrados(e, sucursalId, desde, hasta);
-  const canales = e.config.canales || M.canalesDefault();
-  let ingresos = 0, cogs = 0, descuentos = 0;
-  const porProd = {};
-  const porCanal = {};
-  for (const p of peds) {
-    ingresos = M.r2(ingresos + p.total);
-    const cid = p.canalId || 'local';
-    porCanal[cid] = porCanal[cid] || { ventas: 0, pedidos: 0 };
-    porCanal[cid].ventas = M.r2(porCanal[cid].ventas + p.total);
-    porCanal[cid].pedidos++;
-    if (p.descuento) {
-      const subt = p.lineas.reduce((s, l) => s + l.importe, 0);
-      const d = p.descuento.tipo === 'porcentaje' ? subt * p.descuento.valor / 100 : p.descuento.valor;
-      descuentos = M.r2(descuentos + d);
-    }
-    for (const l of p.lineas) {
-      const prod = e.menu.productos[l.productoId];
-      const costoLinea = prod ? M.r2(M.costoReceta(e, prod) * l.cantidad) : 0;
-      cogs = M.r2(cogs + costoLinea);
-      const k = l.nombre;
-      porProd[k] = porProd[k] || { unidades: 0, ingreso: 0, costo: 0 };
-      porProd[k].unidades += l.cantidad;
-      porProd[k].ingreso = M.r2(porProd[k].ingreso + l.importe);
-      porProd[k].costo = M.r2(porProd[k].costo + costoLinea);
-    }
-  }
-  const margenBruto = M.r2(ingresos - cogs);
-  const canalesOut = Object.entries(porCanal).map(([cid, d]) => {
-    const ch = canales[cid] || { nombre: cid, comisionPct: 0 };
-    const comision = M.r2(d.ventas * ch.comisionPct / 100);
-    const comisionConIVA = M.r2(comision * 1.16); // 16% IVA sobre la comisión
-    return { canalId: cid, nombre: ch.nombre, comisionPct: ch.comisionPct, ventas: d.ventas, pedidos: d.pedidos, comision: comisionConIVA, neto: M.r2(d.ventas - comisionConIVA) };
-  }).sort((a, b) => b.ventas - a.ventas);
-  // Reparto propio: no hay comision de plataformas. comisionTotal queda en 0
-  // salvo pedidos historicos previos a la migracion, que se conservan tal cual.
-  const comisionTotal = M.r2(canalesOut.reduce((s, c) => s + c.comision, 0));
-  const envios = M.r2(peds.reduce((s, p) => s + (p.costoEnvio || 0), 0));
-  const nominaBase = M.r2(Object.values(e.empleados || {}).filter((x) => x.activo).reduce((s, x) => s + x.salarioBase, 0));
-  // Gastos capturados en el mismo rango. Las compras de insumos NO se restan
-  // aquí: ya entran como COGS al venderse. Restarlas otra vez duplicaría el costo.
-  const gastos = M.resumirGastos(e.gastos || [], { desde: diaParam(desde, tzTenant(e)), hasta: diaParam(hasta, tzTenant(e)), sucursalId, tz: tzTenant(e) });
-  const utilidadOperativa = M.r2(margenBruto - comisionTotal - gastos.operativos);
-  const rentabilidad = Object.entries(porProd).map(([nombre, d]) => ({
-    nombre, unidades: d.unidades, ingreso: d.ingreso, costo: d.costo,
-    margen: M.r2(d.ingreso - d.costo), margenPct: d.ingreso ? M.r2((d.ingreso - d.costo) / d.ingreso * 100) : 0,
-  })).sort((a, b) => b.margen - a.margen);
-  res.json({
-    ingresos, cogs, margenBruto,
-    margenBrutoPct: ingresos ? M.r2(margenBruto / ingresos * 100) : 0,
-    foodCostPct: ingresos ? M.r2(cogs / ingresos * 100) : 0,
-    descuentos, pedidos: peds.length,
-    ticketPromedio: peds.length ? M.r2(ingresos / peds.length) : 0,
-    comisionTotal, ventaNeta: M.r2(ingresos - comisionTotal),
-    gastos,
-    utilidadOperativa,
-    utilidadPct: ingresos ? M.r2(utilidadOperativa / ingresos * 100) : 0,
-    // 'envios' se separa para que no infle el margen: no es venta de producto.
-    envios, ingresosProducto: M.r2(ingresos - envios),
-    foodCostPctProducto: (ingresos - envios) > 0 ? M.r2(cogs / (ingresos - envios) * 100) : 0,
-    nominaBase,
-    manoDeObraPct: ingresos ? M.r2(nominaBase / ingresos * 100) : 0,
-    primeCost: M.r2(cogs + nominaBase),
-    primeCostPct: ingresos ? M.r2((cogs + nominaBase) / ingresos * 100) : 0,
-    canales: canalesOut,
-    rentabilidad,
-  });
-}));
-
-// Fallback SPA: cualquier ruta que no sea /api sirve el frontend
-// ===========================================================================
-//  MENÚ QR PÚBLICO (sin login) — /qr/:row/:suc
-//  El cliente escanea, ve el menú y manda su pedido. Cae como cuenta abierta
-//  de mostrador (origen 'qr') que caja confirma y cobra. No se envía solo a
-//  cocina (control anti-abuso): caja/mesero lo revisa primero.
-// ===========================================================================
-const QR_PAGE = path.join(__dirname, 'public', 'qr.html');
-app.get('/qr/:row/:suc', (req, res) => res.sendFile(QR_PAGE));
-app.get('/qr/:row/:suc/menu', (req, res) => {
-  runPublic(req.params.row, async () => {
-    try {
-      const e = await readState();
-      if (!e) return res.status(404).json({ error: 'No disponible' });
-      const suc = e.sucursales[req.params.suc];
-      if (!suc) return res.status(404).json({ error: 'Sucursal no encontrada' });
-      const categorias = Object.values(e.menu.categorias).map((c) => ({ id: c.id, nombre: c.nombre, orden: c.orden || 0 })).sort((a, b) => a.orden - b.orden);
-      const productos = Object.values(e.menu.productos)
-        .filter((p) => p.activo && p.disponible !== false)
-        .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, estacion: p.estacion || 'Cocina', icono: p.icono || '', gruposIds: p.gruposIds || [], conOpciones: (p.gruposIds || []).length > 0 }));
-      // Solo los grupos que algun producto visible usa, para no exponer el menu completo.
-      const usados = new Set(productos.flatMap((p) => p.gruposIds));
-      const grupos = Object.values(e.menu.gruposModificadores)
-        .filter((g) => usados.has(g.id))
-        .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio, max: g.max || null,
-          opciones: (g.opciones || []).filter((o) => o.activo !== false).map((o) => ({ id: o.id, nombre: o.nombre, precioDelta: o.precioDelta || 0, porDefecto: !!o.porDefecto })) }));
-      res.json({ tenant: { nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, tema: (e.config && e.config.tema) || null }, sucursal: { id: suc.id, nombre: suc.nombre }, categorias, productos, grupos });
-    } catch (err) { res.status(500).json({ error: 'Error al cargar el menu' }); }
-  });
+const crearProveedor = ({ nombre, telefono = '', contacto = '', notas = '' }) => ({
+  id: uid('prov'), nombre: String(nombre || '').trim(), telefono: String(telefono || '').replace(/[^\d+]/g, ''),
+  contacto, notas, activo: true, creado: new Date().toISOString(),
 });
 
-// El POST /qr/:row/:suc/pedido, el webhook de Mercado Pago, el estado en vivo
-// y la conciliacion los aporta pagos_qr.js. Sustituye al flujo anterior de
-// "pide por QR y pasa a caja": ahora el pago es el filtro y, al confirmarse,
-// el pedido entra solo a las pantallas de produccion.
-require('./pagos_qr')(app, { db, M, readState, withState, runPublic, ctx });
-
-// ===========================================================================
-//  SEGUIMIENTO PÚBLICO DEL PEDIDO A DOMICILIO — /t/:row/:token
-//  Sin login. El token es aleatorio (el folio es secuencial y se adivinaría).
-//  Solo devuelve lo del propio pedido: nunca dirección ni teléfono del cliente.
-// ===========================================================================
-const SEGUIMIENTO_PAGE = path.join(__dirname, 'public', 'seguimiento.html');
-app.get('/t/:row/:token', (req, res) => res.sendFile(SEGUIMIENTO_PAGE));
-
-app.get('/t/:row/:token/estado', (req, res) => {
-  runPublic(Number(req.params.row), async () => {
-    try {
-      const e = await readState();
-      if (!e) return res.status(404).json({ error: 'No disponible' });
-      const tok = String(req.params.token || '');
-      const p = tok && Object.values(e.pedidos).find((x) => x.seguimiento && x.seguimiento.token === tok);
-      if (!p) return res.status(404).json({ error: 'Pedido no encontrado' });
-
-      const r = p.reparto || {};
-      const emp = r.repartidorId ? (e.empleados || {})[r.repartidorId] : null;
-      // El repartidor y su ubicación solo se muestran cuando ya va en camino.
-      const enCamino = r.estado === 'en_ruta';
-      const ubi = enCamino && r.repartidorId ? M.ubicacionViva(e, r.repartidorId) : null;
-      const eta = enCamino
-        ? M.estimarLlegada(e, p, { ubicacion: ubi, promedioMin: M.promedioEnRuta(e, p.sucursalId) })
-        : { min: null, base: null, distanciaKm: null };
-      res.json(M.vistaSeguimiento(e, p, {
-        repartidor: enCamino ? emp : null, ubicacion: ubi,
-        etaMin: eta.min, etaBase: eta.base, distanciaKm: eta.distanciaKm,
-      }));
-    } catch (err) {
-      console.error('[seguimiento]', err && err.message);
-      res.status(500).json({ error: 'Error al consultar el pedido' });
-    }
-  });
-});
-
-app.post('/t/:row/:token/calificar', express.json(), (req, res) => {
-  const { estrellas, comentario = '' } = req.body || {};
-  runPublic(Number(req.params.row), async () => {
-    try {
-      const out = await withState((e) => {
-        const tok = String(req.params.token || '');
-        const p = tok && Object.values(e.pedidos).find((x) => x.seguimiento && x.seguimiento.token === tok);
-        if (!p) throw bad('Pedido no encontrado', 404);
-        if (p.reparto && p.reparto.calificacion) return p.reparto.calificacion; // no se recalifica
-        return M.calificarReparto(p, { estrellas, comentario });
-      });
-      res.json({ ok: true, estrellas: out.estrellas });
-    } catch (err) {
-      res.status(err.status || 500).json({ error: err.message || 'No se pudo calificar' });
-    }
-  });
-});
-
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-// ---------------------------------------------------------------------------
-//  Arranque
-// ---------------------------------------------------------------------------
-const PORT = process.env.PORT || 3000;
-if (require.main === module) {
-  db.initDB().then(() => app.listen(PORT, () => console.log('ComandaPro API en puerto ' + PORT)))
-    .catch((err) => { console.error('No arrancó:', err); process.exit(1); });
+function folioGasto(e, sucId, codigo = 'SUC') {
+  if (!e.secuencias.gasto) e.secuencias.gasto = {};
+  e.secuencias.gasto[sucId] = (e.secuencias.gasto[sucId] || 0) + 1;
+  return `G-${codigo}-${String(e.secuencias.gasto[sucId]).padStart(4, '0')}`;
 }
 
-module.exports = app;
-module.exports._setGeoFetch = _setGeoFetch;
-module.exports._setMapsFetch = _setMapsFetch;
-module.exports._resolverLigaMaps = resolverLigaMaps;
-module.exports._leerCoordenadas = leerCoordenadas;
-module.exports._construirConsultas = construirConsultas;
-module.exports._geocodificar = geocodificar;
+// Cada línea: { descripcion, insumoId?, cantidad, precioUnitario }
+function normalizarLineasGasto(e, lineas = []) {
+  const out = [];
+  for (const l of lineas) {
+    const cant = +l.cantidad, pu = +l.precioUnitario;
+    const desc = String(l.descripcion || '').trim() || ((e.insumos[l.insumoId] || {}).nombre) || '';
+    if (!desc) { const x = new Error('Cada renglón necesita concepto'); x.status = 400; throw x; }
+    if (!(cant > 0)) { const x = new Error(`Cantidad inválida en "${desc}"`); x.status = 400; throw x; }
+    if (!(pu >= 0)) { const x = new Error(`Precio inválido en "${desc}"`); x.status = 400; throw x; }
+    const insumoId = l.insumoId && e.insumos[l.insumoId] ? l.insumoId : null;
+    out.push({ id: uid('gl'), descripcion: desc, insumoId, unidad: insumoId ? e.insumos[insumoId].unidad : (l.unidad || ''),
+      cantidad: r2(cant), precioUnitario: r2(pu), importe: r2(cant * pu) });
+  }
+  if (!out.length) { const x = new Error('El gasto necesita al menos un renglón'); x.status = 400; throw x; }
+  return out;
+}
+
+function crearGasto(e, { sucursalId, codigo = 'SUC', categoria = 'otros', proveedorId = null, proveedorNombre = '',
+  lineas = [], metodoPago = 'efectivo', folioFactura = '', notas = '', turnoId = null, usuario = 'sistema', fecha = null }) {
+  if (!CATEGORIAS_GASTO[categoria]) { const x = new Error('Categoría de gasto desconocida'); x.status = 400; throw x; }
+  const ls = normalizarLineasGasto(e, lineas);
+  if (!e.proveedores) e.proveedores = {};
+  const prov = proveedorId ? e.proveedores[proveedorId] : null;
+  const g = {
+    id: uid('gas'), folio: folioGasto(e, sucursalId, codigo), sucursalId, categoria,
+    proveedorId: prov ? prov.id : null,
+    proveedor: prov ? prov.nombre : String(proveedorNombre || '').trim(),
+    lineas: ls, total: r2(ls.reduce((t, l) => t + l.importe, 0)),
+    metodoPago, folioFactura: String(folioFactura || '').trim(), notas: String(notas || '').trim(),
+    inventario: esCompraInventario(categoria),
+    estado: 'activo', turnoId, movimientoId: null,
+    fecha: fecha || new Date().toISOString(), creadoPor: usuario,
+  };
+  if (!e.gastos) e.gastos = [];
+  e.gastos.unshift(g);
+  return g;
+}
+
+// Compra de insumos: sube el stock y recalcula el costo unitario con promedio
+// ponderado, para que el food cost deje de ser un número teórico.
+function aplicarCompraInsumos(e, gasto, signo = 1) {
+  const tocados = [];
+  for (const l of gasto.lineas) {
+    if (!l.insumoId) continue;
+    const ins = e.insumos[l.insumoId];
+    if (!ins) continue;
+    const cant = r2(l.cantidad * signo);
+    if (signo > 0) {
+      const stockPrev = Math.max(0, ins.stock || 0);
+      const valorPrev = stockPrev * (ins.costoUnitario || 0);
+      const nuevoStock = r2(stockPrev + cant);
+      if (nuevoStock > 0) ins.costoUnitario = r2((valorPrev + l.cantidad * l.precioUnitario) / nuevoStock);
+      ins.stock = nuevoStock;
+    } else {
+      ins.stock = r2((ins.stock || 0) + cant); // al cancelar solo se devuelve el stock
+    }
+    tocados.push({ insumoId: ins.id, nombre: ins.nombre, stock: ins.stock, costoUnitario: ins.costoUnitario });
+  }
+  return tocados;
+}
+
+// Corta los gastos de un rango en compras de inventario vs gasto operativo
+function resumirGastos(gastos, { desde, hasta, sucursalId, tz = 'America/Mexico_City' } = {}) {
+  const dia = (iso) => {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: tz }); }
+    catch { return String(iso).slice(0, 10); }
+  };
+  const dentro = (g) => {
+    if (g.estado === 'cancelado') return false;
+    if (sucursalId && g.sucursalId !== sucursalId) return false;
+    const d = dia(g.fecha);
+    return (!desde || d >= desde) && (!hasta || d <= hasta);
+  };
+  const usados = gastos.filter(dentro);
+  const porCategoria = {};
+  let operativos = 0, compras = 0;
+  for (const g of usados) {
+    const k = g.categoria;
+    porCategoria[k] = porCategoria[k] || { categoria: k, nombre: (CATEGORIAS_GASTO[k] || {}).nombre || k, total: 0, movimientos: 0, inventario: !!g.inventario };
+    porCategoria[k].total = r2(porCategoria[k].total + g.total);
+    porCategoria[k].movimientos++;
+    if (g.inventario) compras = r2(compras + g.total); else operativos = r2(operativos + g.total);
+  }
+  return {
+    operativos, compras, total: r2(operativos + compras), movimientos: usados.length,
+    porCategoria: Object.values(porCategoria).sort((a, b) => b.total - a.total),
+  };
+}
+
+// ---- Dejar el sistema limpio para arrancar en firme -------------------------
+//  Borra los MOVIMIENTOS de prueba y conserva la CONFIGURACIÓN: menú, precios,
+//  sucursales, personal y usuarios. Los folios vuelven a empezar en 0001 para
+//  que la numeración fiscal y de reparto arranque de cero.
+function contarPruebas(e) {
+  const turnos = Object.values((e.caja && e.caja.turnos) || {});
+  return {
+    pedidos: Object.keys(e.pedidos || {}).length,
+    turnos: turnos.length,
+    turnosAbiertos: turnos.filter((t) => t.estado === 'abierto').length,
+    gastos: (e.gastos || []).filter((g) => g.estado !== 'cancelado').length,
+    clientes: Object.keys(e.clientes || {}).length,
+    proveedores: Object.keys(e.proveedores || {}).length,
+    liquidaciones: (e.liquidaciones || []).length,
+    cancelaciones: (e.cancelaciones || []).length,
+    reservas: (e.reservas || []).length,
+    asistencias: (e.asistencias || []).length,
+    conteos: (e.conteos || []).length,
+    empleados: Object.values(e.empleados || {}).length,
+    productos: Object.keys((e.menu && e.menu.productos) || {}).length,
+    insumos: Object.keys(e.insumos || {}).length,
+  };
+}
+
+function limpiarPruebas(e, opciones = {}) {
+  const {
+    clientes = true, proveedores = false, empleados = false,
+    inventarioEnCero = true, reservas = true, asistencias = true,
+  } = opciones;
+  const antes = contarPruebas(e);
+
+  // Movimientos: siempre se van
+  e.pedidos = {};
+  e.caja = { turnos: {} };
+  e.conteos = [];
+  e.liquidaciones = [];
+  e.cancelaciones = [];
+  e.gastos = [];
+  e.repartoUbicaciones = {};
+  e.secuencias = { pedido: {}, gasto: {} };          // folios desde 0001
+
+  // La velocidad de reparto se aprendió con entregas falsas: no sirve
+  if (e.config) delete e.config.velocidadReparto;
+
+  // Las mesas quedan libres
+  for (const m of Object.values(e.mesas || {})) { m.estado = 'libre'; m.pedidoFolio = null; }
+
+  if (clientes) e.clientes = {};
+  if (proveedores) e.proveedores = {};
+  if (reservas) e.reservas = [];
+  if (asistencias) e.asistencias = [];
+  if (empleados) e.empleados = {};
+
+  // Inventario: se conservan los insumos y su costo, pero el stock se pone en
+  // cero para que la primera cuenta física sea la buena.
+  if (inventarioEnCero) for (const i of Object.values(e.insumos || {})) i.stock = 0;
+
+  // El menú queda disponible y sin "agotados" heredados de las pruebas
+  for (const p of Object.values((e.menu && e.menu.productos) || {})) p.disponible = true;
+
+  e.meta = e.meta || {};
+  e.meta.limpiado = new Date().toISOString();
+  return { antes, despues: contarPruebas(e) };
+}
+
+// ---- Pago -------------------------------------------------------------------
+function registrarPago(p, { pagos = [], recibido = 0, propina = null } = {}) {
+  const ef = pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
+  const propMonto = propina && propina.monto > 0 ? r2(propina.monto) : 0;
+  const propEf = propina && propina.metodo === 'efectivo' ? propMonto : 0;
+  const efectivoTotal = ef + propEf;
+  const cambio = recibido > 0 ? r2(recibido - efectivoTotal) : 0;
+  p.pago = { pagos, recibido, cambio: cambio > 0 ? cambio : 0, metodo: pagos.length === 1 ? pagos[0].metodo : 'mixto', timestamp: new Date().toISOString() };
+  // La propina NO es ingreso del restaurante (LFT 346-347): se guarda aparte, no suma a la venta.
+  p.propina = propMonto > 0 ? { monto: propMonto, metodo: (propina && propina.metodo) || 'efectivo' } : null;
+  p.estado = 'cobrado';
+  p.actualizado = new Date().toISOString();
+  return p;
+}
+
+// ---- Caja -------------------------------------------------------------------
+const movimiento = ({ tipo, monto, metodoPago = 'efectivo', usuario = 'sistema', motivo = '', pedidoFolio = null }) =>
+  ({ id: uid('mov'), tipo, monto: r2(monto), metodoPago, motivo, pedidoFolio, usuario, timestamp: new Date().toISOString() });
+
+function abrirTurno(e, { sucursalId, usuario, fondoInicial = 0 }) {
+  const id = uid('turno');
+  const t = {
+    id, sucursalId, estado: 'abierto', abiertoPor: usuario, abierto: new Date().toISOString(),
+    fondoInicial: r2(fondoInicial),
+    movimientos: [movimiento({ tipo: 'apertura', monto: fondoInicial, usuario, motivo: 'Fondo inicial' })],
+    cerradoPor: null, cerrado: null, esperado: null, conteo: null, diferencia: null, resultado: null,
+  };
+  e.caja.turnos[id] = t;
+  return t;
+}
+function turnoAbierto(e, sucursalId) {
+  return Object.values(e.caja.turnos).find((t) => t.sucursalId === sucursalId && t.estado === 'abierto') || null;
+}
+function registrarVentaEnTurno(t, p) {
+  for (const x of p.pago.pagos) t.movimientos.push(movimiento({ tipo: 'venta', monto: x.monto, metodoPago: x.metodo, pedidoFolio: p.folio, usuario: p.creadoPor, motivo: 'Venta ' + p.folio }));
+  // La propina en efectivo entra físicamente al cajón; se registra para que el corte cuadre.
+  if (p.propina && p.propina.monto > 0) t.movimientos.push(movimiento({ tipo: 'propina', monto: p.propina.monto, metodoPago: p.propina.metodo, pedidoFolio: p.folio, usuario: p.creadoPor, motivo: 'Propina ' + p.folio }));
+  return t;
+}
+function registrarMovimiento(t, { tipo, monto, motivo, usuario }) {
+  // tipo: 'entrada' | 'salida'
+  t.movimientos.push(movimiento({ tipo, monto, motivo, usuario }));
+  return t;
+}
+function cerrarTurno(t, { usuario, conteoEfectivo }) {
+  const sum = (f) => t.movimientos.filter(f).reduce((s, m) => s + m.monto, 0);
+  const vEf = sum((m) => m.tipo === 'venta' && m.metodoPago === 'efectivo');
+  const vTa = sum((m) => m.tipo === 'venta' && m.metodoPago === 'tarjeta');
+  const vTr = sum((m) => m.tipo === 'venta' && m.metodoPago === 'transferencia');
+  const vMp = sum((m) => m.tipo === 'venta' && m.metodoPago === 'mercadopago'); // cobros del menú QR
+  const ent = sum((m) => m.tipo === 'entrada');
+  const sal = sum((m) => m.tipo === 'salida');
+  const propEf = sum((m) => m.tipo === 'propina' && m.metodoPago === 'efectivo');
+  const propTar = sum((m) => m.tipo === 'propina' && m.metodoPago !== 'efectivo');
+  const espEf = r2(t.fondoInicial + vEf + propEf + ent - sal); // las propinas en efectivo están en el cajón
+  const dif = r2(conteoEfectivo - espEf);
+  t.estado = 'cerrado'; t.cerradoPor = usuario; t.cerrado = new Date().toISOString(); t.conteo = r2(conteoEfectivo);
+  t.esperado = { efectivo: espEf, tarjeta: vTa, transferencia: vTr, mercadopago: vMp, ventaTotal: r2(vEf + vTa + vTr + vMp), fondoInicial: t.fondoInicial, entradas: ent, salidas: sal, propinasEfectivo: propEf, propinasTarjeta: propTar, propinasTotal: r2(propEf + propTar) };
+  t.diferencia = dif;
+  t.resultado = dif === 0 ? 'cuadrado' : (dif < 0 ? 'faltante' : 'sobrante');
+  return t;
+}
+
+// ---- Inventario / food cost -------------------------------------------------
+function costoReceta(e, prod) {
+  return r2(prod.receta.reduce((s, r) => { const i = e.insumos[r.insumoId]; return s + (i ? i.costoUnitario * r.cantidad : 0); }, 0));
+}
+function foodCostPct(e, prod) {
+  const c = costoReceta(e, prod);
+  return prod.precioBase > 0 ? r2(c / prod.precioBase * 100) : 0;
+}
+function descontarInventario(e, ped) {
+  for (const l of ped.lineas) {
+    const p = e.menu.productos[l.productoId];
+    if (!p) continue;
+    for (const r of p.receta) {
+      const i = e.insumos[r.insumoId];
+      if (i) i.stock = r2(i.stock - r.cantidad * l.cantidad);
+    }
+  }
+}
+
+module.exports = {
+  uid, r2, estadoInicial,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
+  folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
+  nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
+  efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
+  tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
+  llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
+  velocidadReparto, aprenderVelocidad, estimarLlegada, destinoCreible, MIN_KM_ENTREGA,
+  contarPruebas, limpiarPruebas,
+  CATEGORIAS_GASTO, esCompraInventario, crearProveedor, folioGasto, normalizarLineasGasto,
+  crearGasto, aplicarCompraInsumos, resumirGastos,
+  movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
+  costoReceta, foodCostPct, descontarInventario,
+};
