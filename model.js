@@ -325,9 +325,15 @@ function destinoCreible(destino, referencia) {
   return d == null || d >= MIN_KM_ENTREGA;
 }
 
-const KM_MIN_DEFAULT = 0.25;   // 15 km/h en línea recta ≈ 20 km/h de calle
-const KM_MIN_MIN = 0.08;       // topes de cordura por si un dato sale raro
-const KM_MIN_MAX = 0.9;
+// Una entrega no es solo trayecto: hay un tiempo fijo de salir del local,
+// estacionarse, tocar y cobrar. Sin ese fijo, los domicilios cercanos salían
+// absurdamente rápidos y los lejanos se compensaban con una velocidad muy
+// baja, que a su vez inflaba los tiempos largos al doble.
+//   tiempo = MINUTOS_FIJOS + distancia / velocidad
+const MINUTOS_FIJOS = 4;
+const KM_MIN_DEFAULT = 0.5;    // 30 km/h en línea recta ≈ 40 km/h de calle
+const KM_MIN_MIN = 0.15;       // topes de cordura por si un dato sale raro
+const KM_MIN_MAX = 1.2;
 
 function velocidadReparto(e) {
   const v = (e.config && e.config.velocidadReparto) || null;
@@ -344,7 +350,10 @@ function aprenderVelocidad(e, p) {
   const km = distanciaKm(r.origen, r.destino);
   const min = (new Date(r.entregado) - new Date(r.salida)) / 60000;
   if (!(km >= MIN_KM_ENTREGA) || !(min > 0.5) || min > 120) return null;   // datos absurdos fuera
-  const kmMin = km / min;
+  // Se aprende la velocidad de TRAYECTO: hay que descontar el tiempo fijo.
+  const trayecto = min - MINUTOS_FIJOS;
+  if (trayecto <= 0.5) return null;
+  const kmMin = km / trayecto;
   if (kmMin < KM_MIN_MIN || kmMin > KM_MIN_MAX) return null;
   if (!e.config.velocidadReparto) e.config.velocidadReparto = { kmMin: KM_MIN_DEFAULT, muestras: 0 };
   const v = e.config.velocidadReparto;
@@ -369,7 +378,9 @@ function estimarLlegada(e, p, { ubicacion = null, promedioMin = null } = {}) {
     const km = distanciaKm(ubicacion, r.destino);
     if (km != null) {
       const { kmMin } = velocidadReparto(e);
-      return { min: Math.max(0, Math.round(km / kmMin)), base: 'gps', distanciaKm: km };
+      // A menos de 150 m ya está en la puerta: no se le suma el tiempo fijo.
+      const min = km < MIN_KM_ENTREGA ? 0 : Math.round(MINUTOS_FIJOS + km / kmMin);
+      return { min: Math.max(0, min), base: 'gps', distanciaKm: km };
     }
   }
   // 2) Sin GPS o sin domicilio ubicado: el promedio, pero sin prometer de más.
@@ -760,7 +771,7 @@ module.exports = {
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
   llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
-  velocidadReparto, aprenderVelocidad, estimarLlegada, destinoCreible, MIN_KM_ENTREGA,
+  velocidadReparto, aprenderVelocidad, estimarLlegada, destinoCreible, MIN_KM_ENTREGA, MINUTOS_FIJOS,
   contarPruebas, limpiarPruebas,
   CATEGORIAS_GASTO, esCompraInventario, crearProveedor, folioGasto, normalizarLineasGasto,
   crearGasto, aplicarCompraInsumos, resumirGastos,
