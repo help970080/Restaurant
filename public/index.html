@@ -537,6 +537,19 @@
 .suc-no{font-size:11px;color:var(--red);font-weight:700;background:#fdf1ee;border-radius:6px;padding:2px 7px}
 .suc-btns{display:flex;gap:7px;flex-wrap:wrap}
 .suc-btns .btn{font-size:13px;text-decoration:none;display:inline-flex;align-items:center}
+
+.rc-duda{margin-top:8px;background:#fffaf2;border:1px solid var(--accent);border-radius:9px;padding:8px 10px;font-size:12px;line-height:1.4}
+.rc-duda-b{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.rc-duda-b .btn{flex:1 1 auto;font-size:12px;padding:6px 10px;min-height:auto}
+
+.dg-s{border-top:1px solid var(--line);padding:9px 0;font-size:13px}
+.dg-s:first-child{border-top:none}
+.dg-v{color:var(--muted);margin-top:3px;line-height:1.4}
+.dg-i{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-top:4px;font-size:12px}
+.dg-i code{background:var(--paper);border-radius:5px;padding:2px 5px;font-size:11px;word-break:break-all}
+.dg-i span{color:var(--muted)}
+.dg-l{display:inline-block;margin-top:5px;font-size:12px;color:var(--blue)}
+.dg-al{margin-top:6px;background:#fffaf2;border:1px solid var(--accent);border-radius:8px;padding:6px 8px;font-size:12px}
 </style>
 </head>
 <body>
@@ -1668,6 +1681,9 @@ function pintarReparto(){
   arrancarCronos();
   if(tab.enRuta.length)dibujarMapaOperacion(tab.enRuta);
   document.querySelectorAll('[data-wa]').forEach(b=>b.onclick=()=>mandarSeguimiento(b.dataset.wa));
+  document.querySelectorAll('[data-diag]').forEach(b=>b.onclick=()=>modalDiagnostico(b.dataset.diag));
+  document.querySelectorAll('[data-usadir]').forEach(b=>b.onclick=()=>resolverDuda(b.dataset.usadir,'direccion'));
+  document.querySelectorAll('[data-usaguardado]').forEach(b=>b.onclick=()=>resolverDuda(b.dataset.usaguardado,'guardado'));
   document.querySelectorAll('[data-copiaseg]').forEach(b=>b.onclick=()=>copiarSeguimiento(b.dataset.copiaseg));
   document.querySelectorAll('[data-liq]').forEach(b=>b.onclick=()=>{
     const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===b.dataset.liq);
@@ -1773,8 +1789,14 @@ function tarjetaPedidoRep(p,tipo,caja){
   // "Va tarde" se mide contra el propio promedio del negocio, no contra un número inventado
   const limite=tipo==='en_ruta'?Math.max(25,Math.round((p.promedioMin||22)*1.5)):20;
   const tarde=espera!=null&&espera>=limite;
+  const duda=(caja&&p.destinoDudoso)?`<div class="rc-duda">
+      <div><b>Ubicación en duda.</b> El punto guardado y la dirección escrita están a ${p.destinoDudoso.km.toFixed(1)} km uno del otro.</div>
+      <div class="rc-duda-b">
+        <button class="btn" data-usadir="${p.folio}">Usar la dirección escrita</button>
+        <button class="btn" data-usaguardado="${p.folio}">El punto guardado es el bueno</button>
+      </div></div>`:'';
   const avance=tipo==='en_ruta'?`<div class="rc-avance${tarde?' tarde':''}">
-      ${p.distanciaKm!=null?`<span class="rc-km">${p.distanciaKm<1?Math.round(p.distanciaKm*1000)+' m':p.distanciaKm.toFixed(1)+' km'}</span><span class="rc-al">del domicilio</span>`
+      ${p.distanciaKm!=null?`<span class="rc-km">${p.distanciaKm<1?Math.round(p.distanciaKm*1000)+' m':p.distanciaKm.toFixed(1)+' km'}</span><span class="rc-al">del domicilio${p.destinoFuente==='direccion'?' (por dirección)':''}</span>`
         :(p.moto?'<span class="rc-al">Sin domicilio ubicado — se aprende en esta entrega</span>':'<span class="rc-al">La moto no comparte ubicación</span>')}
       ${(p.distanciaKm!=null&&p.distanciaKm<0.15)?'<span class="rc-eta">está llegando</span>'
         :(p.etaMin!=null?`<span class="rc-eta">~${Math.max(1,p.etaMin)} min${p.etaBase==='historial'?'*':''}</span>`:'')}
@@ -1787,7 +1809,7 @@ function tarjetaPedidoRep(p,tipo,caja){
     <div class="rc-dir">${c.direccion||[c.calle,c.numero,c.colonia].filter(Boolean).join(' ')||'Sin dirección'}</div>
     ${c.referencias?`<div class="rc-ref">${c.referencias}</div>`:''}
     <div class="rc-meta">${p.items} art.${espera!=null?` · ${espera} min${tarde?' <b style="color:var(--red)">va tarde</b>':''}`:''}${r.repartidorNombre?` · ${r.repartidorNombre}`:''}${r.intentos?` · ${r.intentos} intento(s)`:''}${p.cocinaListo?' · <span class="rc-ok">cocina lista</span>':''}</div>
-    ${avance}${califica}
+    ${duda}${avance}${califica}
     ${(tipo==='asignado'||tipo==='en_ruta')?`<div class="rc-nav">
       ${urlComoLlegar(p)?`<a class="btn nav" href="${urlComoLlegar(p)}" target="_blank" rel="noopener">🧭 Cómo llegar</a>`:''}
       ${c.telefono?`<a class="btn" href="tel:${c.telefono}">📞 Llamar al cliente</a>`:''}
@@ -1797,6 +1819,7 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
+      ${tipo==='en_ruta'&&caja?`<button class="btn" data-diag="${p.folio}" title="Por qué marca ese tiempo">¿Por qué?</button>`:''}
       ${tipo!=='entregado'&&caja?`<button class="btn" data-wa="${p.folio}" title="Abrir WhatsApp con la liga de seguimiento">Enviar liga</button>
         <button class="btn" data-copiaseg="${p.folio}" title="Copiar la liga para pegarla a mano">📋 Copiar</button>`:''}
       ${tipo==='entregado'?`<span class="rc-cash">${money(p.efectivo)} en efectivo</span><button class="btn" data-ticketrep="${p.folio}">Ticket</button>`:''}
@@ -1866,6 +1889,47 @@ async function dibujarMapaOperacion(enRuta){
   if(pts.length>1)mapaOp.fitBounds(L.latLngBounds(pts).pad(0.3));
   else if(pts.length===1)mapaOp.setView(pts[0],16);
   setTimeout(()=>{try{mapaOp.invalidateSize();}catch(e){}},120); // el contenedor acaba de aparecer
+}
+// Explica de dónde salió el tiempo estimado, paso por paso.
+async function modalDiagnostico(folio){
+  modal.innerHTML=`<h3>¿Por qué ese tiempo?</h3><div class="sub">${folio}</div><div id="dgBody"><div class="empty">Consultando…</div></div>
+    <div class="modal-foot"><button class="btn-ghost" id="dgCerrar">Cerrar</button></div>`;
+  ov.classList.add('show');
+  $('#dgCerrar').onclick=closeModal;
+  let d;try{d=await API.get(`/api/pedidos/${folio}/diagnostico-ubicacion`);}catch(e){$('#dgBody').innerHTML=`<div class="empty">${e.message}</div>`;return;}
+  const b=$('#dgBody');if(!b)return;
+  const km=v=>v==null?'—':(v<1?Math.round(v*1000)+' m':v.toFixed(1)+' km');
+  const c=d.capturado;
+  b.innerHTML=`
+    <div class="dg-s"><b>1. Dirección capturada</b>
+      <div class="dg-v">${[c.calle,c.numero,c.colonia].filter(Boolean).join(', ')||'—'}</div>
+      ${c.referencias?`<div class="dg-v" style="font-style:italic">${c.referencias}</div>`:''}</div>
+    <div class="dg-s"><b>2. Búsquedas que se hicieron</b>
+      ${d.intentos.length?d.intentos.map(i=>`<div class="dg-i"><code>${i.q}</code><span>${i.resultado}</span></div>`).join('')
+        :`<div class="dg-v">${d.geocodificador.activo?'ninguna':'geocodificador apagado'}</div>`}
+      <div class="dg-v small">Región de respaldo: ${d.geocodificador.region}</div></div>
+    <div class="dg-s"><b>3. Punto que está usando</b>
+      <div class="dg-v">${d.guardado?`${d.guardado.lat.toFixed(5)}, ${d.guardado.lng.toFixed(5)} — por ${d.fuenteGuardada==='gps'?'GPS de una entrega anterior':'la dirección escrita'}${d.guardado.aproximado?' (aproximado)':''}`:'ninguno'}</div>
+      ${d.guardado?`<a class="dg-l" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${d.guardado.lat},${d.guardado.lng}">Ver ese punto en el mapa</a>`:''}
+      ${d.distancias.guardadoVsDireccion!=null&&d.distancias.guardadoVsDireccion>3?`<div class="dg-al">Está a ${km(d.distancias.guardadoVsDireccion)} de donde cae la dirección escrita.</div>`:''}</div>
+    <div class="dg-s"><b>4. Distancias</b>
+      <div class="dg-i"><span>Moto → domicilio</span><b>${km(d.distancias.motoADomicilio)}</b></div>
+      <div class="dg-i"><span>Sucursal → domicilio</span><b>${km(d.distancias.sucursalADomicilio)}</b></div>
+      <div class="dg-i"><span>Tiempo estimado</span><b>${d.estimado.min==null?'sin dato':d.estimado.min+' min'} ${d.estimado.base?'('+d.estimado.base+')':''}</b></div></div>
+    ${d.encontrado?`<button class="btn accent" id="dgUsar" style="width:100%;margin-top:10px">Usar la dirección escrita: ${d.encontrado.etiqueta?d.encontrado.etiqueta.slice(0,60):'ese punto'}</button>`:''}`;
+  if($('#dgUsar'))$('#dgUsar').onclick=async()=>{
+    try{await API.post(`/api/pedidos/${folio}/ubicar`,{forzar:true});closeModal();toast('Ubicación corregida',{tipo:'ok'});vReparto();}
+    catch(e){toast(e.message);}
+  };
+}
+// Cuando el punto guardado y la dirección no coinciden, decide caja: el
+// sistema no puede saber cuál de los dos es el domicilio real.
+async function resolverDuda(folio,usar){
+  try{
+    const r=await API.post(`/api/pedidos/${folio}/ubicar`,{usar});
+    toast(usar==='direccion'?'Se usará la dirección escrita':'Punto confirmado',{tipo:'ok'});
+    vReparto();
+  }catch(e){toast(e.message);}
 }
 async function accionReparto(folio,accion,msg){
   try{await API.post(`/api/reparto/${folio}/${accion}`);toast(msg,{tipo:'ok'});vReparto();}
