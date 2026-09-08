@@ -550,6 +550,9 @@
 .dg-i span{color:var(--muted)}
 .dg-l{display:inline-block;margin-top:5px;font-size:12px;color:var(--blue)}
 .dg-al{margin-top:6px;background:#fffaf2;border:1px solid var(--accent);border-radius:8px;padding:6px 8px;font-size:12px}
+
+.rc-acts .btn.rojo{color:var(--red);border-color:#f0cdc4}
+.rc-acts .btn.rojo:hover{background:#fdf1ee}
 </style>
 </head>
 <body>
@@ -1700,6 +1703,7 @@ function pintarReparto(){
   document.querySelectorAll('[data-salida]').forEach(b=>b.onclick=()=>accionReparto(b.dataset.salida,'salida','Salió a ruta'));
   document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=()=>modalEntregar(b.dataset.entregar));
   document.querySelectorAll('[data-fallo]').forEach(b=>b.onclick=()=>modalFallido(b.dataset.fallo));
+  document.querySelectorAll('[data-cancelar]').forEach(b=>b.onclick=()=>modalCancelarPedido(b.dataset.cancelar));
   document.querySelectorAll('[data-ticketrep]').forEach(b=>b.onclick=async()=>{
     try{ticketFinal(await API.get('/api/pedidos/'+b.dataset.ticketrep));}catch(e){toast(e.message);}
   });
@@ -1833,6 +1837,7 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
+      ${(tipo==='por_asignar'||tipo==='asignado')&&caja?`<button class="btn rojo" data-cancelar="${p.folio}">Cancelar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-diag="${p.folio}" title="Por qué marca ese tiempo">¿Por qué?</button>
         <button class="btn" data-refijar="${p.folio}" title="Volver a ubicar con la dirección escrita">↻ Reubicar</button>`:''}
       ${tipo!=='entregado'&&caja?`<button class="btn" data-wa="${p.folio}" title="Abrir WhatsApp con la liga de seguimiento">Enviar liga</button>
@@ -2015,6 +2020,25 @@ function modalAsignar(folio){
     try{await API.post(`/api/reparto/${folio}/asignar`,{repartidorId:b.dataset.r});soltarDelPOS(folio);closeModal();toast('Moto asignada',{tipo:'ok'});vReparto();}
     catch(e){toast(e.message);}
   });
+}
+// Cancelar un domicilio que no se va a entregar. Queda registrado con motivo
+// en Cancelaciones, que se ve en Caja y en Reportes.
+function modalCancelarPedido(folio){
+  const p=((app._rep&&app._rep.tab)?[...app._rep.tab.porAsignar,...app._rep.tab.asignados]:[]).find(x=>x.folio===folio);
+  modal.innerHTML=`<h3>Cancelar ${folio}</h3>
+    <div class="sub">${p?`${(p.cliente&&p.cliente.nombre)||''} · ${money(p.total)}`:''}</div>
+    <div class="sub">El pedido se cancela pero <b>queda registrado</b> con su motivo en Cancelaciones. No cuenta como venta.</div>
+    <div class="field"><label>Motivo</label><input id="cpMot" placeholder="El cliente ya no lo quiso, dirección equivocada…"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="cpNo">Cerrar</button><button class="btn-primary" id="cpOk">Cancelar pedido</button></div>`;
+  ov.classList.add('show');
+  setTimeout(()=>{const i=$('#cpMot');if(i)i.focus();},50);
+  $('#cpNo').onclick=closeModal;
+  $('#cpOk').onclick=async()=>{
+    const m=$('#cpMot').value.trim();
+    if(!m){toast('Escribe el motivo: queda en el registro');return;}
+    try{await API.post(`/api/pedidos/${folio}/cancelar`,{motivo:m});closeModal();toast(`${folio} cancelado y registrado`);vReparto();}
+    catch(e){toast(e.message);}
+  };
 }
 function modalFallido(folio){
   modal.innerHTML=`<h3>Entrega fallida</h3><div class="sub">${folio} — vuelve a la cola para reasignar</div>
