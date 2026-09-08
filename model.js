@@ -308,6 +308,64 @@ function promedioEnRuta(e, sucursalId, minMuestras = 3) {
   return Math.round(ms[Math.floor(ms.length / 2)]); // mediana: aguanta el pedido raro
 }
 
+// ---- Estimación de llegada --------------------------------------------------
+//  El cálculo viejo era "promedio histórico menos lo transcurrido". Con pocas
+//  entregas, o si alguna se marcó entregada de inmediato, la mediana queda en
+//  dos minutos y el cliente ve "menos de 1 min" con la moto todavía lejos.
+//  Ahora, cuando conocemos dónde va la moto y dónde vive el cliente, se estima
+//  por distancia real. La velocidad se aprende de las propias entregas.
+const KM_MIN_DEFAULT = 0.25;   // 15 km/h en línea recta ≈ 20 km/h de calle
+const KM_MIN_MIN = 0.08;       // topes de cordura por si un dato sale raro
+const KM_MIN_MAX = 0.9;
+
+function velocidadReparto(e) {
+  const v = (e.config && e.config.velocidadReparto) || null;
+  if (!v || !(v.muestras >= 3) || !(v.kmMin > 0)) return { kmMin: KM_MIN_DEFAULT, muestras: (v && v.muestras) || 0, aprendida: false };
+  const kmMin = Math.min(Math.max(v.kmMin, KM_MIN_MIN), KM_MIN_MAX);
+  return { kmMin, muestras: v.muestras, aprendida: true };
+}
+
+// Al entregar sabemos de dónde salió, a dónde llegó y cuánto tardó: con eso se
+// va calibrando la velocidad real del negocio (promedio móvil).
+function aprenderVelocidad(e, p) {
+  const r = p.reparto || {};
+  if (!r.origen || !r.destino || !r.salida || !r.entregado) return null;
+  const km = distanciaKm(r.origen, r.destino);
+  const min = (new Date(r.entregado) - new Date(r.salida)) / 60000;
+  if (!(km > 0.05) || !(min > 0.5) || min > 120) return null;   // datos absurdos fuera
+  const kmMin = km / min;
+  if (kmMin < KM_MIN_MIN || kmMin > KM_MIN_MAX) return null;
+  if (!e.config.velocidadReparto) e.config.velocidadReparto = { kmMin: KM_MIN_DEFAULT, muestras: 0 };
+  const v = e.config.velocidadReparto;
+  const n = Math.min(v.muestras + 1, 40);                        // se adapta si cambia la operación
+  v.kmMin = r2(((v.kmMin * (n - 1)) + kmMin) / n);
+  v.muestras = n;
+  v.actualizado = new Date().toISOString();
+  return v;
+}
+
+//  Devuelve { min, base, distanciaKm }. base: 'gps' | 'historial' | null
+function estimarLlegada(e, p, { ubicacion = null, promedioMin = null } = {}) {
+  const r = p.reparto || {};
+  if (r.estado !== 'en_ruta' || !r.salida) return { min: null, base: null, distanciaKm: null };
+  const transcurrido = Math.round((Date.now() - new Date(r.salida).getTime()) / 60000);
+  // 1) Con posición viva y domicilio ubicado: distancia real
+  if (ubicacion && r.destino) {
+    const km = distanciaKm(ubicacion, r.destino);
+    if (km != null) {
+      const { kmMin } = velocidadReparto(e);
+      return { min: Math.max(0, Math.round(km / kmMin)), base: 'gps', distanciaKm: km };
+    }
+  }
+  // 2) Sin GPS o sin domicilio ubicado: el promedio, pero sin prometer de más.
+  //    Con menos de 5 entregas de historial la mediana no es confiable.
+  const v = (e.config && e.config.velocidadReparto) || {};
+  if (promedioMin != null && v.muestras >= 5) {
+    return { min: Math.max(0, promedioMin - transcurrido), base: 'historial', distanciaKm: null };
+  }
+  return { min: null, base: null, distanciaKm: null };
+}
+
 // Paso del cliente: 0 recibido · 1 en preparacion · 2 listo · 3 en camino · 4 entregado
 function pasoCliente(p) {
   const r = p.reparto || {};
@@ -320,7 +378,7 @@ function pasoCliente(p) {
 
 // Lo unico que ve el cliente. Sin telefono ni direccion propios, sin totales de
 // otros pedidos y sin nada del resto de la operacion.
-function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = null } = {}) {
+function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = null, etaBase = null, distanciaKm: distEta = null } = {}) {
   const r = p.reparto || {};
   const suc = e.sucursales[p.sucursalId] || {};
   return {
@@ -333,7 +391,7 @@ function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = 
     creado: p.creado,
     salida: r.salida || null,
     entregado: r.entregado || null,
-    etaMin,
+    etaMin, etaBase, distanciaKm: distEta,
     repartidor: repartidor ? { nombre: repartidor.nombre, telefono: repartidor.telefono || null } : null,
     repartidorNombre: r.repartidorNombre || null,
     calificacion: r.calificacion ? { estrellas: r.calificacion.estrellas } : null,
@@ -617,6 +675,7 @@ module.exports = {
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
   llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
+  velocidadReparto, aprenderVelocidad, estimarLlegada,
   CATEGORIAS_GASTO, esCompraInventario, crearProveedor, folioGasto, normalizarLineasGasto,
   crearGasto, aplicarCompraInsumos, resumirGastos,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
