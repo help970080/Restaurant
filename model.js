@@ -314,6 +314,17 @@ function promedioEnRuta(e, sucursalId, minMuestras = 3) {
 //  dos minutos y el cliente ve "menos de 1 min" con la moto todavía lejos.
 //  Ahora, cuando conocemos dónde va la moto y dónde vive el cliente, se estima
 //  por distancia real. La velocidad se aprende de las propias entregas.
+// Si "entregado" se marca sin salir del local, la posición de la moto no es el
+// domicilio del cliente: es el local. Guardarla convierte al sistema en un
+// mentiroso confiado ("a 0 m" con el cliente a 28 km).
+const MIN_KM_ENTREGA = 0.15;
+function destinoCreible(destino, referencia) {
+  if (!destino || destino.lat == null) return false;
+  if (!referencia || referencia.lat == null) return true;   // sin con qué comparar, se acepta
+  const d = distanciaKm(destino, referencia);
+  return d == null || d >= MIN_KM_ENTREGA;
+}
+
 const KM_MIN_DEFAULT = 0.25;   // 15 km/h en línea recta ≈ 20 km/h de calle
 const KM_MIN_MIN = 0.08;       // topes de cordura por si un dato sale raro
 const KM_MIN_MAX = 0.9;
@@ -332,7 +343,7 @@ function aprenderVelocidad(e, p) {
   if (!r.origen || !r.destino || !r.salida || !r.entregado) return null;
   const km = distanciaKm(r.origen, r.destino);
   const min = (new Date(r.entregado) - new Date(r.salida)) / 60000;
-  if (!(km > 0.05) || !(min > 0.5) || min > 120) return null;   // datos absurdos fuera
+  if (!(km >= MIN_KM_ENTREGA) || !(min > 0.5) || min > 120) return null;   // datos absurdos fuera
   const kmMin = km / min;
   if (kmMin < KM_MIN_MIN || kmMin > KM_MIN_MAX) return null;
   if (!e.config.velocidadReparto) e.config.velocidadReparto = { kmMin: KM_MIN_DEFAULT, muestras: 0 };
@@ -349,8 +360,12 @@ function estimarLlegada(e, p, { ubicacion = null, promedioMin = null } = {}) {
   const r = p.reparto || {};
   if (r.estado !== 'en_ruta' || !r.salida) return { min: null, base: null, distanciaKm: null };
   const transcurrido = Math.round((Date.now() - new Date(r.salida).getTime()) / 60000);
+  // Defensa para datos ya guardados mal: un domicilio que cae encima del local
+  // no es un domicilio, es un "entregado" marcado sin salir.
+  const suc = (e.sucursales || {})[p.sucursalId] || {};
+  const destinoOK = destinoCreible(r.destino, suc.coordenadas || r.origen);
   // 1) Con posición viva y domicilio ubicado: distancia real
-  if (ubicacion && r.destino) {
+  if (ubicacion && r.destino && destinoOK) {
     const km = distanciaKm(ubicacion, r.destino);
     if (km != null) {
       const { kmMin } = velocidadReparto(e);
@@ -422,7 +437,11 @@ function upsertCliente(e, entrega, extra = {}) {
   });
   c.direccion = `${c.calle} ${c.numero}, ${c.colonia}`.trim();
   // Las coords solo se pisan cuando llega una nueva medida real
-  if (extra.lat != null && extra.lng != null) { c.lat = +extra.lat; c.lng = +extra.lng; c.ubicadoEn = new Date().toISOString(); }
+  if (extra.lat != null && extra.lng != null) {
+    c.lat = +extra.lat; c.lng = +extra.lng;
+    c.fuente = extra.fuente || 'gps';
+    c.ubicadoEn = new Date().toISOString();
+  }
   if (extra.sumarPedido) { c.pedidos = (c.pedidos || 0) + 1; c.ultimoPedido = new Date().toISOString(); }
   e.clientes[k] = c;
   return c;
@@ -585,6 +604,71 @@ function resumirGastos(gastos, { desde, hasta, sucursalId, tz = 'America/Mexico_
   };
 }
 
+// ---- Dejar el sistema limpio para arrancar en firme -------------------------
+//  Borra los MOVIMIENTOS de prueba y conserva la CONFIGURACIÓN: menú, precios,
+//  sucursales, personal y usuarios. Los folios vuelven a empezar en 0001 para
+//  que la numeración fiscal y de reparto arranque de cero.
+function contarPruebas(e) {
+  const turnos = Object.values((e.caja && e.caja.turnos) || {});
+  return {
+    pedidos: Object.keys(e.pedidos || {}).length,
+    turnos: turnos.length,
+    turnosAbiertos: turnos.filter((t) => t.estado === 'abierto').length,
+    gastos: (e.gastos || []).filter((g) => g.estado !== 'cancelado').length,
+    clientes: Object.keys(e.clientes || {}).length,
+    proveedores: Object.keys(e.proveedores || {}).length,
+    liquidaciones: (e.liquidaciones || []).length,
+    cancelaciones: (e.cancelaciones || []).length,
+    reservas: (e.reservas || []).length,
+    asistencias: (e.asistencias || []).length,
+    conteos: (e.conteos || []).length,
+    empleados: Object.values(e.empleados || {}).length,
+    productos: Object.keys((e.menu && e.menu.productos) || {}).length,
+    insumos: Object.keys(e.insumos || {}).length,
+  };
+}
+
+function limpiarPruebas(e, opciones = {}) {
+  const {
+    clientes = true, proveedores = false, empleados = false,
+    inventarioEnCero = true, reservas = true, asistencias = true,
+  } = opciones;
+  const antes = contarPruebas(e);
+
+  // Movimientos: siempre se van
+  e.pedidos = {};
+  e.caja = { turnos: {} };
+  e.conteos = [];
+  e.liquidaciones = [];
+  e.cancelaciones = [];
+  e.gastos = [];
+  e.repartoUbicaciones = {};
+  e.secuencias = { pedido: {}, gasto: {} };          // folios desde 0001
+
+  // La velocidad de reparto se aprendió con entregas falsas: no sirve
+  if (e.config) delete e.config.velocidadReparto;
+
+  // Las mesas quedan libres
+  for (const m of Object.values(e.mesas || {})) { m.estado = 'libre'; m.pedidoFolio = null; }
+
+  if (clientes) e.clientes = {};
+  if (proveedores) e.proveedores = {};
+  if (reservas) e.reservas = [];
+  if (asistencias) e.asistencias = [];
+  if (empleados) e.empleados = {};
+
+  // Inventario: se conservan los insumos y su costo, pero el stock se pone en
+  // cero para que la primera cuenta física sea la buena.
+  if (inventarioEnCero) for (const i of Object.values(e.insumos || {})) i.stock = 0;
+
+  // El menú queda disponible y sin "agotados" heredados de las pruebas
+  for (const p of Object.values((e.menu && e.menu.productos) || {})) p.disponible = true;
+
+  e.meta = e.meta || {};
+  e.meta.limpiado = new Date().toISOString();
+  return { antes, despues: contarPruebas(e) };
+}
+
 // ---- Pago -------------------------------------------------------------------
 function registrarPago(p, { pagos = [], recibido = 0, propina = null } = {}) {
   const ef = pagos.filter((x) => x.metodo === 'efectivo').reduce((s, x) => s + x.monto, 0);
@@ -675,7 +759,8 @@ module.exports = {
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
   llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
-  velocidadReparto, aprenderVelocidad, estimarLlegada,
+  velocidadReparto, aprenderVelocidad, estimarLlegada, destinoCreible, MIN_KM_ENTREGA,
+  contarPruebas, limpiarPruebas,
   CATEGORIAS_GASTO, esCompraInventario, crearProveedor, folioGasto, normalizarLineasGasto,
   crearGasto, aplicarCompraInsumos, resumirGastos,
   movimiento, abrirTurno, turnoAbierto, registrarVentaEnTurno, registrarMovimiento, cerrarTurno,
