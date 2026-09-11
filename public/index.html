@@ -2163,13 +2163,17 @@ async function vMenu(){
   app.menu=await API.get('/api/menu');const inv=await API.get('/api/inventario');
   const fcMap={};inv.foodCost.forEach(f=>fcMap[f.id]=f);
   $('#view').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn dark" id="addProd">+ Nuevo producto</button></div>
-  ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3>${c.nombre} <span class="small">${ps.length} productos</span></h3>
+  ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>${c.nombre} <span class="small">${ps.length} productos</span></span>
+    <button class="btn" data-delcat="${c.id}" data-nom="${c.nombre.replace(/"/g,'&quot;')}" data-n="${ps.length}" style="padding:5px 10px;font-size:12px;min-height:auto;color:var(--muted);font-weight:600">Quitar categoría</button></h3>
     <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
-    <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num"><input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima"></td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td></tr>`;}).join('')}
+    <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th></tr></thead><tbody>
+    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num"><input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima"></td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td>
+      <td class="num"><button class="btn" data-delprod="${p.id}" data-nom="${p.nombre.replace(/"/g,'&quot;')}" title="Quitar del menú" style="padding:6px 10px;font-size:12px;min-height:auto;color:var(--muted)">🗑</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}
   ${editorGrupos()}`;
   $('#addProd').onclick=modalNuevoProducto;
+  document.querySelectorAll('[data-delprod]').forEach(b=>b.onclick=()=>borrarDelMenu('productos',b.dataset.delprod,b.dataset.nom));
+  document.querySelectorAll('[data-delcat]').forEach(b=>b.onclick=()=>borrarDelMenu('categorias',b.dataset.delcat,b.dataset.nom,+b.dataset.n));
   document.querySelectorAll('[data-precio]').forEach(inp=>inp.onchange=async()=>{
     const v=+inp.value;
     if(!(v>0)){toast('Precio inválido');inp.value=app.menu.productos[inp.dataset.precio].precioBase;return;}
@@ -2184,6 +2188,23 @@ async function vMenu(){
   document.querySelectorAll('[data-estprod]').forEach(inp=>inp.onchange=async()=>{const est=inp.value.trim()||'Cocina';try{await API.patch('/api/menu/productos/'+inp.dataset.estprod,{estacion:est});const pr=app.menu.productos[inp.dataset.estprod];if(pr)pr.estacion=est;toast('Estación: '+est);}catch(e){toast(e.message);}});
 }
 const M2=n=>Math.round((+n||0)*100)/100;
+// Quitar del menú. Los tickets viejos guardan copia del nombre y del precio,
+// así que borrar no altera ninguna venta ya cobrada.
+function borrarDelMenu(tipo,id,nombre,cuantos){
+  const esCat=tipo==='categorias';
+  modal.innerHTML=`<h3>Quitar ${esCat?'la categoría':''} ${nombre}</h3>
+    <div class="sub">${esCat?`Se borra la categoría y sus ${cuantos} producto(s).`:'Se quita del menú.'}</div>
+    <div class="sub">Las ventas ya cobradas <b>no se tocan</b>: cada ticket guarda su propia copia.</div>
+    <div class="modal-foot"><button class="btn-ghost" id="bmNo">Cerrar</button><button class="btn-primary" id="bmOk">Quitar</button></div>`;
+  ov.classList.add('show');
+  $('#bmNo').onclick=closeModal;
+  $('#bmOk').onclick=async()=>{
+    try{const r=await API.del(`/api/menu/${tipo}/${id}`);closeModal();
+      toast(esCat?`${r.nombre} y ${r.productos} producto(s) fuera del menú`:`${r.nombre} fuera del menú`,{tipo:'ok'});
+      vMenu();}
+    catch(e){toast(e.message,{ms:6000});}
+  };
+}
 // Los tamaños (Mediana/Grande/Familiar) y la orilla viven en los grupos de
 // modificadores, no en el producto: el precio final es base + ajuste.
 function editorGrupos(){
