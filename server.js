@@ -15,6 +15,10 @@ const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
+// Detrás de Cloudflare y de Render, las peticiones llegan por proxy. Sin esto
+// req.ip devuelve la IP del proxy y req.protocol dice "http" aunque sea HTTPS.
+app.set('trust proxy', true);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // PUBLIC_URL es la misma que ya usa pagos_qr para Mercado Pago.
@@ -599,6 +603,38 @@ app.patch('/api/menu/grupos/:id', soloAdmin, wrap(async (req, res) => {
     return grp;
   });
   res.json(g);
+}));
+
+// Borrar del menú. Los pedidos viejos guardan copia del nombre y del precio de
+// cada línea, así que quitar un producto no altera ningún ticket ni reporte.
+app.delete('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
+  const out = await withState((e) => {
+    const p = e.menu.productos[req.params.id];
+    if (!p) throw bad('Producto inexistente', 404);
+    // Lo único que sí estorba: que esté en una cuenta sin cobrar.
+    const abierto = Object.values(e.pedidos).find((x) => x.estado === 'abierto'
+      && (x.lineas || []).some((l) => l.productoId === p.id));
+    if (abierto) throw bad(`"${p.nombre}" está en el pedido abierto ${abierto.folio}. Cóbralo o cancélalo primero.`, 409);
+    delete e.menu.productos[req.params.id];
+    return { nombre: p.nombre };
+  });
+  res.json({ ok: true, ...out });
+}));
+
+// Borrar una categoría completa, con todo lo que tenga dentro.
+app.delete('/api/menu/categorias/:id', soloAdmin, wrap(async (req, res) => {
+  const out = await withState((e) => {
+    const c = e.menu.categorias[req.params.id];
+    if (!c) throw bad('Categoría inexistente', 404);
+    const suyos = Object.values(e.menu.productos).filter((p) => p.categoriaId === c.id);
+    const abierto = Object.values(e.pedidos).find((x) => x.estado === 'abierto'
+      && (x.lineas || []).some((l) => suyos.some((p) => p.id === l.productoId)));
+    if (abierto) throw bad(`Hay productos de "${c.nombre}" en el pedido abierto ${abierto.folio}. Ciérralo primero.`, 409);
+    for (const p of suyos) delete e.menu.productos[p.id];
+    delete e.menu.categorias[req.params.id];
+    return { nombre: c.nombre, productos: suyos.length };
+  });
+  res.json({ ok: true, ...out });
 }));
 
 app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
