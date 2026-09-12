@@ -55,7 +55,36 @@ const crearReserva = ({ sucursalId = null, nombre, telefono = '', personas = 2, 
   id: uid('res'), sucursalId, nombre: String(nombre || '').trim(), telefono, personas: Math.max(1, +personas || 1),
   fecha, hora, mesaId: mesaId || null, notas, estado: 'pendiente', creado: new Date().toISOString(), creadoPor,
 });
-const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0 }) => ({ id: uid('promo'), nombre, tipo, valor, activo: true });
+//  tipo: 'porcentaje' | 'monto' | '2x1'
+//  En 2x1 se cuentan las piezas elegibles, se ordenan de más cara a más barata
+//  y se regala una de cada par: siempre la más barata. Eso es lo que significa
+//  "se cobra la pizza más cara".
+const crearPromocion = ({ nombre, tipo = 'porcentaje', valor = 0, categorias = [] }) =>
+  ({ id: uid('promo'), nombre, tipo, valor, categorias: Array.isArray(categorias) ? categorias.slice() : [], activo: true });
+
+function promo2x1Activa(e) {
+  return Object.values(e.promociones || {}).find((p) => p.tipo === '2x1' && p.activo) || null;
+}
+
+// Calcula cuánto se regala por el 2x1 y lo deja guardado en el pedido.
+// Devuelve el detalle para poder imprimirlo en el ticket.
+function calcular2x1(e, p) {
+  const promo = promo2x1Activa(e);
+  if (!promo || !promo.categorias.length) { p.promo2x1 = null; return null; }
+  const piezas = [];
+  for (const l of p.lineas || []) {
+    const prod = e.menu.productos[l.productoId];
+    if (!prod || !promo.categorias.includes(prod.categoriaId)) continue;
+    for (let i = 0; i < l.cantidad; i++) piezas.push({ nombre: l.nombre, precio: l.precioUnitario });
+  }
+  if (piezas.length < 2) { p.promo2x1 = null; return null; }
+  piezas.sort((a, b) => b.precio - a.precio);      // de la más cara a la más barata
+  const gratis = [];
+  for (let i = 1; i < piezas.length; i += 2) gratis.push(piezas[i]);   // la 2ª de cada par
+  const monto = r2(gratis.reduce((t, x) => t + x.precio, 0));
+  p.promo2x1 = { promoId: promo.id, nombre: promo.nombre, monto, gratis: gratis.map((x) => ({ nombre: x.nombre, importe: x.precio })) };
+  return p.promo2x1;
+}
 
 // Receta agregada de un combo: suma las recetas de sus productos componentes
 function recetaDeCombo(e, componentes = []) {
@@ -115,7 +144,9 @@ function recalcularPedido(p) {
   p.subtotal = r2(p.lineas.reduce((s, l) => s + l.importe, 0));
   let d = 0;
   if (p.descuento) d = p.descuento.tipo === 'porcentaje' ? p.subtotal * (p.descuento.valor / 100) : p.descuento.valor;
-  p.total = r2(p.subtotal + (p.costoEnvio || 0) - d); // la propina NO entra al total del consumo
+  const promo = (p.promo2x1 && p.promo2x1.monto) || 0;
+  p.total = r2(p.subtotal + (p.costoEnvio || 0) - d - promo); // la propina NO entra al total del consumo
+  if (p.total < 0) p.total = 0;
   return p;
 }
 
@@ -767,6 +798,7 @@ module.exports = {
   uid, r2, estadoInicial,
   crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
+  promo2x1Activa, calcular2x1,
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
