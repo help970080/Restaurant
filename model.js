@@ -164,8 +164,11 @@ function crearPedido(e, { sucursalId, codigo, tipoServicio = 'mostrador', mesaId
     reparto: tipoServicio === 'domicilio' ? nuevoReparto() : null,
     // Liga publica de seguimiento para el cliente. Token aleatorio, no el folio.
     seguimiento: tipoServicio === 'domicilio' ? { token: tokenSeguimiento(), creado: new Date().toISOString(), avisado: null } : null,
+    // Se llena abajo, ya que el pedido existe (necesita ver los demás códigos)
+    codigoEntrega: null,
   };
   e.pedidos[folio] = ped;
+  if (tipoServicio === 'domicilio') ped.codigoEntrega = codigoEntrega(e);
   return ped;
 }
 
@@ -184,6 +187,34 @@ function mandarComanda(ped) {
 //  liquida al volver (reparto.liquidado). Por eso entregar y liquidar son dos
 //  pasos distintos: mientras uno esta en falso, el dinero esta con la moto.
 const tokenSeguimiento = () => crypto.randomBytes(9).toString('hex');
+
+// Código de 4 dígitos que la cocina escribe en la caja de pizza y el repartidor
+// teclea para llevársela. Aleatorio a propósito: si fuera consecutivo, teclear
+// 18 en vez de 19 entregaría la pizza equivocada sin que nada lo detecte.
+function codigoEntrega(e) {
+  const usados = new Set();
+  for (const p of Object.values(e.pedidos || {})) {
+    if (!p.codigoEntrega) continue;
+    if (p.estado === 'cancelado') continue;
+    if (p.reparto && p.reparto.estado === 'entregado') continue;
+    usados.add(p.codigoEntrega);
+  }
+  for (let i = 0; i < 500; i++) {
+    const c = String(1000 + crypto.randomBytes(2).readUInt16BE(0) % 9000);
+    if (!usados.has(c)) return c;
+  }
+  return null; // 9000 códigos vivos a la vez: no va a pasar
+}
+
+// Busca el pedido de un código, para que el repartidor lo tome.
+function pedidoPorCodigo(e, codigo, sucursalId) {
+  const c = String(codigo || '').replace(/\D/g, '');
+  if (c.length !== 4) return null;
+  return Object.values(e.pedidos || {}).find((p) => p.codigoEntrega === c
+    && p.estado === 'abierto'
+    && (!sucursalId || p.sucursalId === sucursalId)
+    && esDomicilio(p)) || null;
+}
 const nuevoReparto = () => ({
   estado: 'por_asignar',
   repartidorId: null, repartidorNombre: null,
@@ -801,7 +832,7 @@ module.exports = {
   promo2x1Activa, calcular2x1,
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
-  tokenSeguimiento, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
+  tokenSeguimiento, codigoEntrega, pedidoPorCodigo, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
   llaveTel, upsertCliente, buscarClientes, distanciaKm, calificarReparto,
   velocidadReparto, aprenderVelocidad, estimarLlegada, destinoCreible, MIN_KM_ENTREGA, MINUTOS_FIJOS,
   contarPruebas, limpiarPruebas,
