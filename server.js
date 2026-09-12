@@ -761,7 +761,7 @@ app.patch('/api/sucursales/:id', soloAdmin, wrap(async (req, res) => {
     if (coordenadas !== undefined) {
       if (coordenadas === null || coordenadas === '') { x.coordenadas = null; x.coordFuente = null; }
       else {
-        if (!coordsResueltas) throw bad('No pude leer esas coordenadas. Pega "18.9145, -98.9760" o la liga de Google Maps.');
+        if (!coordsResueltas) throw bad('No pude leer esas coordenadas. Pega la liga de Google Maps, o los números con al menos 3 decimales, así: 18.9145, -98.9760');
         x.coordenadas = coordsResueltas; x.coordFuente = 'manual';
       }
     }
@@ -1035,7 +1035,7 @@ app.get('/api/cocina', wrap(async (req, res) => {
   const arr = Object.values(e.pedidos)
     .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado' && esDeEstacion(l)))
     .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
-    .map((p) => ({ folio: p.folio, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
+    .map((p) => ({ folio: p.folio, codigo: p.codigoEntrega || null, colonia: (p.cliente && p.cliente.colonia) || null, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
   res.json(arr);
 }));
 app.post('/api/cocina/:folio/listo', wrap(async (req, res) => {
@@ -1120,7 +1120,7 @@ app.get('/api/reparto', wrap(async (req, res) => {
     const eta = M.estimarLlegada(e, p, { ubicacion: moto, promedioMin: prom });
     const etaMin = eta.min;
     return {
-      folio: p.folio, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
+      folio: p.folio, codigo: p.codigoEntrega || null, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
       creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
       items: p.lineas.reduce((t, l) => t + l.cantidad, 0),
       cliente: p.cliente || null,
@@ -1150,6 +1150,81 @@ app.get('/api/reparto', wrap(async (req, res) => {
     enRuta:     dom.filter(M.enRuta).map(vista),
     porLiquidar: dom.filter(M.porLiquidar).map(vista),
   });
+}));
+
+// El repartidor se lleva un pedido tecleando el código de 4 dígitos que la
+// cocina escribió en la caja. Caja no interviene: cada quien toma lo suyo.
+app.post('/api/reparto/tomar', wrap(async (req, res) => {
+  const { codigo, sucursalId } = req.body || {};
+  const out = await withState((e, c) => {
+    // Quién lo toma: el repartidor que está en sesión, o el que indique caja.
+    let emp = empleadoDeCtx(e, c);
+    if (!emp && req.body.repartidorId) emp = (e.empleados || {})[req.body.repartidorId];
+    if (!emp) throw bad('Tu usuario no está ligado a una ficha de Personal. Pide que te la creen con tu usuario.', 409);
+    if (!M.esRepartidor(emp)) throw bad('Tu puesto no es de repartidor', 403);
+
+    const p = M.pedidoPorCodigo(e, codigo, sucursalId);
+    if (!p) throw bad('Ese código no existe o el pedido ya salió. Revísalo en la caja de la pizza.', 404);
+    const r = repartoDe(p);
+    if (r.estado === 'en_ruta' || r.estado === 'entregado') throw bad(`${p.folio} ya salió`, 409);
+    if (r.repartidorId && r.repartidorId !== emp.id) {
+      throw bad(`${p.folio} ya lo tomó ${r.repartidorNombre}`, 409);
+    }
+    if (r.repartidorId === emp.id) return { pedido: p, yaEraTuyo: true };
+    M.asignarReparto(e, p, emp.id);
+    M.mandarComanda(p);
+    return { pedido: p, yaEraTuyo: false };
+  });
+  const row = ctx().row;
+  setImmediate(() => ubicarDomicilio(row, out.pedido.folio));
+  res.json({
+    folio: out.pedido.folio, codigo: out.pedido.codigoEntrega,
+    cliente: out.pedido.cliente || null, total: out.pedido.total,
+    yaEraTuyo: out.yaEraTuyo, cocinaListo: !!(out.pedido.tiemposCocina && out.pedido.tiemposCocina.listo),
+  });
+}));
+
+// Soltar un pedido que se tomó por error, para que otro lo pueda llevar.
+app.post('/api/reparto/:folio/soltar', wrap(async (req, res) => {
+  const p = await withState((e, c) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    const r = ped.reparto || {};
+    if (r.estado === 'en_ruta' || r.estado === 'entregado') throw bad('Ese pedido ya salió', 409);
+    const emp = empleadoDeCtx(e, c);
+    if (emp && r.repartidorId && r.repartidorId !== emp.id && !['admin', 'gerente', 'cajero'].includes(c.rol)) {
+      throw bad('Ese pedido lo tomó otro repartidor', 403);
+    }
+    r.estado = 'por_asignar'; r.repartidorId = null; r.repartidorNombre = null; r.asignado = null;
+    ped.actualizado = new Date().toISOString();
+    return ped;
+  });
+  res.json(p);
+}));
+
+// Salir con TODO lo que trae tomado, de un solo toque.
+app.post('/api/reparto/salir', wrap(async (req, res) => {
+  const { sucursalId } = req.body || {};
+  const out = await withState((e, c) => {
+    let emp = empleadoDeCtx(e, c);
+    if (!emp && req.body.repartidorId) emp = (e.empleados || {})[req.body.repartidorId];
+    if (!emp) throw bad('No se encontró tu ficha de empleado', 409);
+    const mios = Object.values(e.pedidos).filter((p) => M.esDomicilio(p) && p.estado === 'abierto'
+      && p.reparto && p.reparto.estado === 'asignado' && p.reparto.repartidorId === emp.id
+      && (!sucursalId || p.sucursalId === sucursalId));
+    if (!mios.length) throw bad('No traes pedidos tomados', 409);
+    const suc = e.sucursales[mios[0].sucursalId] || {};
+    const salidos = [];
+    for (const p of mios) {
+      M.recalcularPedido(p);
+      M.marcarSalida(e, p);
+      for (const l of p.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
+      if (suc.coordenadas) p.reparto.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
+      salidos.push(p.folio);
+    }
+    return { salidos };
+  });
+  res.json(out);
 }));
 
 // Asignar moto. De paso dispara a cocina lo que siga pendiente.
