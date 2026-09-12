@@ -986,19 +986,19 @@ async function latido(){
   if(!prev){app._tardiosAvisados=setDe(a.reparto.tardios);return;} // primer sondeo: sin ruido
   const ev=[];
   const nCocina=nuevosEn(setDe(prev.cocina.pendientes),a.cocina.pendientes);
-  if(nCocina.length)ev.push(['cocina',`${nCocina.length===1?'Nueva comanda':nCocina.length+' comandas nuevas'} · ${nCocina.join(', ')}`,120]);
+  if(nCocina.length)ev.push(['cocina',nCocina.length>3?`${nCocina.length} comandas nuevas`:`${nCocina.length===1?'Nueva comanda':nCocina.length+' comandas nuevas'} · ${nCocina.join(', ')}`,120]);
   const nListos=nuevosEn(setDe(prev.cocina.listos),a.cocina.listos);
   if(nListos.length)ev.push(['listo',`Listo para servir · ${nListos.join(', ')}`,80]);
   const nDom=nuevosEn(setDe(prev.reparto.porAsignar),a.reparto.porAsignar);
-  if(nDom.length)ev.push(['domicilio',`Domicilio por asignar · ${nDom.join(', ')}`,120]);
+  if(nDom.length)ev.push(['domicilio',nDom.length>3?`${nDom.length} domicilios por asignar`:`Domicilio por asignar · ${nDom.join(', ')}`,120]);
   const nEnt=nuevosEn(setDe(prev.reparto.entregados),a.reparto.entregados);
-  if(nEnt.length)ev.push(['entregado',`Entregado · ${nEnt.join(', ')}`,0]);
+  if(nEnt.length)ev.push(['entregado',nEnt.length>3?`${nEnt.length} entregas completadas`:`Entregado · ${nEnt.join(', ')}`,0]);
   const nLiq=nuevosEn(setDe(prev.reparto.porLiquidar),a.reparto.porLiquidar);
   if(nLiq.length&&puedeCobrar())ev.push(['liquidar',`Efectivo por liquidar: ${money(a.reparto.efectivoPendiente)}`,0]);
   const nConf=nuevosEn(setDe(prev.caja.porConfirmar||[]),a.caja.porConfirmar||[]);
   if(nConf.length&&puedeCobrar())ev.unshift(['domicilio',`${nConf.length===1?'Pedido en línea':nConf.length+' pedidos en línea'} por confirmar`,200]);
   const nCob=nuevosEn(setDe(prev.caja.porCobrar),a.caja.porCobrar);
-  if(nCob.length&&puedeCobrar())ev.push(['cobrar',`Cuenta por cobrar · ${nCob.join(', ')}`,0]);
+  if(nCob.length&&puedeCobrar())ev.push(['cobrar',nCob.length>3?`${nCob.length} cuentas por cobrar`:`Cuenta por cobrar · ${nCob.join(', ')}`,0]);
   // Un pedido tardío avisa una sola vez, no cada 15 segundos
   if(!app._tardiosAvisados)app._tardiosAvisados=new Set();
   const nTarde=nuevosEn(app._tardiosAvisados,a.reparto.tardios);
@@ -1206,7 +1206,7 @@ function renderShell(){
   pintarCampana();
   $('#btnSonido').onclick=()=>{Sonido.prender(!Sonido.encendido());pintarCampana();if(Sonido.encendido())Sonido.tocar('listo');};
   $('#logout').onclick=()=>{detenerGPS();if(latidoTimer){clearInterval(latidoTimer);latidoTimer=null;}app._avisos=null;API.token=null;app.sucursalId=null;app.rol=null;app.tenant=null;boot();};
-  $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
+  $('#sucSel').onchange=async e=>{app.sucursalId=e.target.value;app._avisos=null;app._tardiosAvisados=null;app.pos={folio:null,pedido:null,tipoServicio:'mostrador',mesaId:null,cat:null};await refreshTurno();go(app.vista);};
   $('#btnTurno').onclick=()=>app.turno?modalCerrarTurno():modalAbrirTurno();
   const cerrarNav=()=>$('#app').querySelector('.shell').classList.remove('navopen');
   if($('#navTog'))$('#navTog').onclick=()=>$('#app').querySelector('.shell').classList.toggle('navopen');
