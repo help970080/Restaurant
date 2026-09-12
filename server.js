@@ -820,9 +820,15 @@ app.get('/api/caja/turno-actual', wrap(async (req, res) => {
   const t = M.turnoAbierto(e, sucursalId);
   const tz = tzTenant(e);
   const hoy = diaLocal(new Date().toISOString(), tz);
-  if (!t) return res.json(cajaModo(e) === 'diario' ? { modo: 'diario', sinAbrir: true, dia: hoy } : null);
-  res.json(Object.assign({}, t, {
-    modo: cajaModo(e),
+  // La píldora de arriba necesita saber qué pasó HOY, no solo si hay algo
+  // abierto: si ya se hizo el corte, decir "sin ventas" sería mentira.
+  const delDia = pedsCobrados(e, sucursalId, hoy, hoy);
+  const ventaHoy = M.r2(delDia.reduce((s2, p) => s2 + p.total, 0));
+  const cortesHoy = Object.values(e.caja.turnos || {})
+    .filter((x) => x.estado === 'cerrado' && x.sucursalId === sucursalId && x.cerrado && diaLocal(x.cerrado, tz) === hoy).length;
+  const extra = { modo: cajaModo(e), hoy, ventaHoy, pedidosHoy: delDia.length, cortesHoy };
+  if (!t) return res.json(cajaModo(e) === 'diario' ? Object.assign({ sinAbrir: true, dia: hoy }, extra) : null);
+  res.json(Object.assign({}, t, extra, {
     dia: diaLocal(t.abierto, tz),
     atrasado: cajaModo(e) === 'diario' && diaLocal(t.abierto, tz) !== hoy,
   }));
