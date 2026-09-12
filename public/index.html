@@ -588,6 +588,13 @@
 .cb-s{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.4}
 .caja-bar .btn{margin-left:auto;white-space:nowrap;font-size:13px}
 @media(max-width:820px){.caja-bar{flex-wrap:wrap;margin:10px 14px 0}.caja-bar .btn{width:100%;margin-left:0}}
+
+.av-lista{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.av-b{display:flex;align-items:center;gap:10px;width:100%;background:#f2faf4;border:1px solid var(--green);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;font-size:14px}
+.av-b.enviado{background:var(--paper);border-color:var(--line);opacity:.6}
+.av-n{font-weight:700;flex:1;min-width:0}
+.av-t{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.av-w{font-weight:700;color:var(--green);white-space:nowrap}
 </style>
 </head>
 <body>
@@ -1884,10 +1891,36 @@ function pintarTomar(tab){
   inp.oninput=()=>{inp.value=inp.value.replace(/\D/g,'').slice(0,4);if(inp.value.length===4)tomar();};
   $('#tmOk').onclick=tomar;
   if($('#tmSalir'))$('#tmSalir').onclick=async()=>{
-    try{const r=await API.post('/api/reparto/salir',{sucursalId:app.sucursalId});
-      toast(`Saliste con ${r.salidos.length} pedido(s)`,{tipo:'ok'});vReparto();}
-    catch(e){toast(e.message);}
+    try{
+      const r=await API.post('/api/reparto/salir',{sucursalId:app.sucursalId});
+      if(r.automatico){
+        toast(`Saliste con ${r.salidos.length} pedido(s) · avisamos a los clientes`,{tipo:'ok',ms:4500});
+        vReparto();
+      }else{
+        // Sin servicio de mensajería conectado: el repartidor manda las ligas
+        // desde su propio WhatsApp, un toque por cliente.
+        modalAvisarClientes(r.avisos,r.salidos.length);
+      }
+    }catch(e){toast(e.message);}
   };
+}
+// Manda la liga de seguimiento desde el WhatsApp del propio repartidor.
+function modalAvisarClientes(avisos,cuantos,yaRefrescado){
+  const con=(avisos||[]).filter(a=>a.telefono);
+  if(!con.length){toast(`Saliste con ${cuantos} pedido(s)`,{tipo:'ok'});if(!yaRefrescado)vReparto();return;}
+  const wa=(tel)=>{const d=String(tel).replace(/\D/g,'');return d.length===10?'521'+d:d;};
+  modal.innerHTML=`<h3>Avisa que vas en camino</h3>
+    <div class="sub">Un toque por cliente. Se abre WhatsApp con el mensaje listo.</div>
+    <div class="av-lista">${con.map((a,i)=>`<button class="av-b" data-i="${i}">
+      <span class="av-n">${a.nombre||a.folio}</span><span class="av-t">${a.telefono}</span><span class="av-w">Avisar</span></button>`).join('')}</div>
+    <div class="modal-foot"><button class="btn-primary" id="avListo" style="width:100%">Listo, ya salí</button></div>`;
+  ov.classList.add('show');
+  modal.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{
+    const a=con[+b.dataset.i];
+    window.open(`https://wa.me/${wa(a.telefono)}?text=${encodeURIComponent(a.mensaje)}`,'_blank');
+    b.classList.add('enviado');b.querySelector('.av-w').textContent='✓ Enviado';
+  });
+  $('#avListo').onclick=()=>{closeModal();if(!yaRefrescado)vReparto();};
 }
 // Cronómetro vivo: los minutos del tablero se refrescan cada 20s, pero el
 // repartidor quiere ver correr el tiempo de la entrega que trae encima.
@@ -2078,8 +2111,12 @@ async function resolverDuda(folio,usar){
   }catch(e){toast(e.message);}
 }
 async function accionReparto(folio,accion,msg){
-  try{await API.post(`/api/reparto/${folio}/${accion}`);toast(msg,{tipo:'ok'});vReparto();}
-  catch(e){toast(e.message);}
+  try{
+    const r=await API.post(`/api/reparto/${folio}/${accion}`);
+    toast(msg+(r&&r.automatico&&accion==='salida'?' · avisamos al cliente':''),{tipo:'ok'});
+    await vReparto();
+    if(accion==='salida'&&r&&r.aviso)modalAvisarClientes([r.aviso],1,true);
+  }catch(e){toast(e.message);}
 }
 // Manda al cliente la liga de seguimiento. El servidor ya la intenta enviar
 // solo si hay webhook de mensajería; esto es el respaldo manual y el reenvío.
