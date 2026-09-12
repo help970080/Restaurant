@@ -1114,7 +1114,8 @@ app.get('/api/pedidos/por-confirmar', wrap(async (req, res) => {
       cliente: p.cliente, notasCliente: p.notasCliente || '',
       motivo: p.confirmacion.motivo, entregasPrevias: p.confirmacion.entregasPrevias,
       codigoTel: p.confirmacion.codigoTel || null, verificacion: p.confirmacion.verificacion || null,
-      items: p.lineas.map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: l.modificadores.map((m) => m.opcionNombre) })),
+      items: p.lineas.map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, partes: l.partes || null,
+        modificadores: l.modificadores.map((m) => m.opcionNombre) })),
     })));
 }));
 
@@ -2790,7 +2791,9 @@ app.post('/pedir/:row/:suc/pedido', express.json(), (req, res) => {
           const prod = e.menu.productos[it.productoId];
           if (!prod || prod.activo === false) continue;
           const cant = Math.max(1, Math.min(20, parseInt(it.cantidad, 10) || 1));
-          p.lineas.push(M.crearLinea(prod, e, { cantidad: cant, modsElegidos: it.modsElegidos || [], notas: String(it.notas || '').slice(0, 80) }));
+          p.lineas.push(M.crearLinea(prod, e, { cantidad: cant, modsElegidos: it.modsElegidos || [],
+            partes: Array.isArray(it.partes) && it.partes.length ? it.partes.slice(0, 4) : null,
+            notas: String(it.notas || '').slice(0, 80) }));
         }
         if (!p.lineas.length) { const x = new Error('Ninguno de esos productos está disponible'); x.status = 400; throw x; }
         M.calcular2x1(e, p);
