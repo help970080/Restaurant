@@ -561,6 +561,20 @@
 .pm-cats{display:flex;flex-direction:column;gap:6px;font-size:13px}
 .pm-cats label{display:flex;align-items:center;gap:8px;cursor:pointer}
 .pm-cats input{width:auto;margin:0}
+
+/* ---- Código de entrega y toma de pedidos ---- */
+.ko-cod{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--ink);color:#f2ede2;border-radius:9px;padding:6px 11px;margin:7px 0}
+.ko-cod span{font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.75;font-weight:700}
+.ko-cod b{font-family:var(--mono);font-size:30px;line-height:1;letter-spacing:2px}
+.rc-cod{font-family:var(--mono);font-size:16px;color:var(--ink);letter-spacing:1px;background:var(--paper);border-radius:6px;padding:1px 6px}
+.panel.tomar{margin-bottom:12px}
+.tm-row{display:flex;gap:8px}
+.tm-row input{flex:1;font-family:var(--mono);font-size:30px;text-align:center;letter-spacing:8px;padding:10px;border:2px solid var(--line);border-radius:12px}
+.tm-row input:focus{border-color:var(--accent);outline:none}
+.tm-row .btn{padding:0 22px;font-size:15px;font-weight:700}
+.tm-msg{min-height:20px;font-size:13px;margin-top:7px;text-align:center}
+.tm-msg .bien{color:var(--green);font-weight:600}
+.tm-msg .mal{color:var(--red);font-weight:600}
 </style>
 </head>
 <body>
@@ -1759,6 +1773,7 @@ function pintarRepartoMoto(tab,reps){
       <div class="mt ${pend>0?'ojo':''}"><b>${money(pend)}</b><span>Traes en efectivo</span></div>
       <div class="mt"><b>${tab.porLiquidar.length}</b><span>Por liquidar</span></div>
     </div>
+    <div id="motoTomar"></div>
     <div id="motoCorte"></div>
     ${vacio?'<div class="panel"><div class="empty">Sin entregas asignadas. En cuanto caja te asigne un pedido aparece aquí y suena.</div></div>':`
     <div class="rep-board moto">
@@ -1768,11 +1783,53 @@ function pintarRepartoMoto(tab,reps){
     </div>`}`;
   pintarBannerGPS();
   arrancarCronos();
+  pintarTomar(tab);
   cargarCorteMoto(mio);
   document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=()=>modalEntregar(b.dataset.entregar));
+  document.querySelectorAll('[data-soltar]').forEach(b=>b.onclick=async()=>{
+    try{await API.post(`/api/reparto/${b.dataset.soltar}/soltar`);toast('Lo soltaste, ya lo puede tomar otro');vReparto();}
+    catch(e){toast(e.message);}
+  });
   document.querySelectorAll('[data-ticketrep]').forEach(b=>b.onclick=async()=>{
     try{ticketFinal(await API.get('/api/pedidos/'+b.dataset.ticketrep));}catch(e){toast(e.message);}
   });
+}
+// El repartidor teclea el código que la cocina escribió en la caja y el pedido
+// queda suyo. Caja no tiene que asignar nada.
+function pintarTomar(tab){
+  const c=$('#motoTomar');if(!c)return;
+  const listos=tab.asignados.length;
+  c.innerHTML=`<div class="panel tomar">
+    <h3>Tomar un pedido <span class="small">teclea el código que trae la caja</span></h3>
+    <div class="tm-row"><input id="tmCod" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="0000" autocomplete="off">
+      <button class="btn accent" id="tmOk">Tomar</button></div>
+    <div class="tm-msg" id="tmMsg"></div>
+    ${listos?`<button class="btn dark" id="tmSalir" style="width:100%;margin-top:10px">Salí con ${listos} pedido(s)</button>`:''}
+  </div>`;
+  const inp=$('#tmCod');
+  const tomar=async()=>{
+    const cod=inp.value.trim();
+    if(cod.length!==4){$('#tmMsg').innerHTML='<span class="mal">Son 4 dígitos</span>';return;}
+    inp.disabled=true;
+    try{
+      const r=await API.post('/api/reparto/tomar',{codigo:cod,sucursalId:app.sucursalId});
+      Sonido.tocar('listo');Sonido.vibrar(80);
+      $('#tmMsg').innerHTML=`<span class="bien">${r.yaEraTuyo?'Ya era tuyo':'Tomaste'} ${r.folio} · ${(r.cliente&&r.cliente.nombre)||''}${r.cocinaListo?'':' — cocina aún no lo marca listo'}</span>`;
+      inp.value='';setTimeout(()=>vReparto(),800);
+    }catch(e){
+      Sonido.tocar('tarde');Sonido.vibrar(250);
+      $('#tmMsg').innerHTML=`<span class="mal">${e.message}</span>`;
+      inp.value='';
+    }
+    inp.disabled=false;inp.focus();
+  };
+  inp.oninput=()=>{inp.value=inp.value.replace(/\D/g,'').slice(0,4);if(inp.value.length===4)tomar();};
+  $('#tmOk').onclick=tomar;
+  if($('#tmSalir'))$('#tmSalir').onclick=async()=>{
+    try{const r=await API.post('/api/reparto/salir',{sucursalId:app.sucursalId});
+      toast(`Saliste con ${r.salidos.length} pedido(s)`,{tipo:'ok'});vReparto();}
+    catch(e){toast(e.message);}
+  };
 }
 // Cronómetro vivo: los minutos del tablero se refrescan cada 20s, pero el
 // repartidor quiere ver correr el tiempo de la entrega que trae encima.
@@ -1832,7 +1889,7 @@ function tarjetaPedidoRep(p,tipo,caja){
     </div>`:'';
   const califica=r.calificacion?`<div class="rc-cal" title="${(r.calificacion.comentario||'').replace(/"/g,'')}">${estrellasTxt(r.calificacion.estrellas)}${r.calificacion.comentario?' <span class="rc-com">“'+r.calificacion.comentario.slice(0,60)+'”</span>':''}</div>`:'';
   return `<div class="rep-card ${tarde?'tarde':''}">
-    <div class="rc-top"><span class="rc-folio">${p.folio}</span><span class="rc-tot">${money(p.total)}</span></div>
+    <div class="rc-top"><span class="rc-folio">${p.codigo?`<b class="rc-cod">${p.codigo}</b> `:''}${p.folio}</span><span class="rc-tot">${money(p.total)}</span></div>
     <div class="rc-cli"><b>${c.nombre||'—'}</b>${c.telefono?` · <a class="ent-tel" href="tel:${c.telefono}">${c.telefono}</a>`:''}</div>
     <div class="rc-dir">${c.direccion||[c.calle,c.numero,c.colonia].filter(Boolean).join(' ')||'Sin dirección'}</div>
     ${c.referencias?`<div class="rc-ref">${c.referencias}</div>`:''}
@@ -1845,6 +1902,7 @@ function tarjetaPedidoRep(p,tipo,caja){
     <div class="rc-acts">
       ${tipo==='por_asignar'&&caja?`<button class="btn accent" data-asignar="${p.folio}">Asignar moto</button>`:''}
       ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
+      ${tipo==='asignado'&&!caja?`<button class="btn" data-soltar="${p.folio}">Soltar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
       ${(tipo==='por_asignar'||tipo==='asignado')&&caja?`<button class="btn rojo" data-cancelar="${p.folio}">Cancelar</button>`:''}
@@ -2158,7 +2216,8 @@ async function pintarCocina(){
     const min=Math.floor((now-new Date(p.recibido).getTime())/60000);
     const srv=p.tipoServicio==='mesa'?mesaNombre(p.mesaId):(p.tipoServicio==='domicilio'?'🛵 Domicilio':'🧾 Mostrador');
     const tk=p.listo?'ready':tier(min);
-    return `<div class="ko ko-${tk} ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer">${p.listo?'LISTO':min+' min'}</span></div><div class="ko-srv">${srv}</div>
+    return `<div class="ko ko-${tk} ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer">${p.listo?'LISTO':min+' min'}</span></div><div class="ko-srv">${srv}${p.colonia?' · '+p.colonia:''}</div>
+      ${p.codigo?`<div class="ko-cod"><span>Escribe en la caja</span><b>${p.codigo}</b></div>`:''}
       <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${est==='__all'&&estaciones.length>1?` <span class="ko-est">${l.estacion||'Cocina'}</span>`:''}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
       <div class="ko-foot">${p.listo?`<button class="b-entregar" data-entregar="${p.folio}">Entregar</button>`:`<button class="b-listo" data-listo="${p.folio}">Marcar listo</button>`}</div></div>`;}).join('')}</div>`;
   document.querySelectorAll('[data-est]').forEach(b=>b.onclick=()=>{app.cocinaEst=b.dataset.est;pintarCocina();});
