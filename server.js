@@ -122,6 +122,9 @@ async function salud() {
   let base = 'ok', ms = null;
   try { await db.loadSys(); ms = Date.now() - t; } catch (e) { base = 'error: ' + (e && e.message); }
   return { ok: base === 'ok', ts: Date.now(), version: 'v0.9.22',
+    publicUrl: PUBLIC_BASE || '(sin configurar)',
+    rutas: { seguimiento: '/t/:row/:token', pedido: '/pedir/:row/:suc', qr: '/qr/:row/:suc' },
+    mensajeria: CANAL,
     encendidoMin: Math.round((Date.now() - arranque) / 60000),
     base, baseMs: ms, memoriaMB: Math.round(process.memoryUsage().heapUsed / 1048576) };
 }
@@ -2835,9 +2838,21 @@ app.post('/api/pedidos/:folio/aceptar', puedeCaja, wrap(async (req, res) => {
     ped.confirmacion.aceptadoPor = c.username;
     ped.confirmacion.aceptado = new Date().toISOString();
     M.mandarComanda(ped);
+    if (!ped.seguimiento || !ped.seguimiento.token) ped.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
+    ped._aviso = { folio: ped.folio, token: ped.seguimiento.token, negocio: (e.meta && e.meta.nombre) || '',
+      telefono: (ped.cliente && ped.cliente.telefono) || null, nombre: (ped.cliente && ped.cliente.nombre) || '' };
     return ped;
   });
-  res.json(p);
+  const row = ctx().row;
+  const a = p._aviso; delete p._aviso;
+  let aviso = null;
+  if (a && a.telefono) {
+    const url = urlSeguimiento(row, a.token);
+    const mensaje = `Hola ${a.nombre}, confirmamos tu pedido ${a.folio} en ${a.negocio}. Ya lo estamos preparando. Síguelo aquí: ${url}`.trim();
+    if (HAY_CANAL()) enviarMensaje({ telefono: a.telefono, mensaje });
+    else aviso = { folio: a.folio, nombre: a.nombre, telefono: a.telefono, url, mensaje };
+  }
+  res.json(Object.assign({}, p, { automatico: HAY_CANAL(), aviso }));
 }));
 
 app.post('/api/pedidos/:folio/rechazar', puedeCaja, wrap(async (req, res) => {
