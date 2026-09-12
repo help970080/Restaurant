@@ -575,6 +575,19 @@
 .tm-msg{min-height:20px;font-size:13px;margin-top:7px;text-align:center}
 .tm-msg .bien{color:var(--green);font-weight:600}
 .tm-msg .mal{color:var(--red);font-weight:600}
+
+.turno-pill.atrasado{background:#fdf1ee;color:var(--red);border:1px solid var(--red);font-weight:700}
+.cm-ops{display:flex;flex-direction:column;gap:10px}
+.cm-o{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:11px 13px;cursor:pointer}
+.cm-o:has(input:checked){border-color:var(--accent);background:#fffaf2}
+.cm-o input{width:auto;margin:3px 0 0}
+
+.caja-bar{display:flex;align-items:center;gap:12px;background:#fdf1ee;border:1px solid var(--red);border-radius:12px;padding:11px 14px;margin:12px 18px 0}
+.cb-ico{font-size:16px;flex:none}
+.cb-t{font-weight:700;font-size:14px;color:var(--red)}
+.cb-s{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.4}
+.caja-bar .btn{margin-left:auto;white-space:nowrap;font-size:13px}
+@media(max-width:820px){.caja-bar{flex-wrap:wrap;margin:10px 14px 0}.caja-bar .btn{width:100%;margin-left:0}}
 </style>
 </head>
 <body>
@@ -946,6 +959,7 @@ async function latido(){
   app._avisos=a;
   pintarBadges();
   pintarTiraCaja();
+  if(a.caja&&app.turno&&!!app.turno.atrasado!==!!a.caja.atrasado){refreshTurno().then(renderTopbar);}
   if(!prev){app._tardiosAvisados=setDe(a.reparto.tardios);return;} // primer sondeo: sin ruido
   const ev=[];
   const nCocina=nuevosEn(setDe(prev.cocina.pendientes),a.cocina.pendientes);
@@ -1064,7 +1078,10 @@ function renderLogin(){
     try{const r=await API.post('/api/auth/login',{username:$('#lu').value.trim(),password:$('#lp').value});API.token=r.token;app.tenant=r.tenant;boot();}
     catch(e){$('#le').textContent=e.message;}};
 }
-async function refreshTurno(){app.turno=await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId);}
+async function refreshTurno(){
+  app.turno=await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId);
+  pintarAvisoCaja();
+}
 
 // ===========================================================================
 //  MODO OFFLINE — el cobro queda solo en línea; aquí se capturan pedidos
@@ -1154,6 +1171,7 @@ function renderShell(){
     <div class="app-main">
       <div id="offbar" class="offbar" style="display:none"></div>
       <div id="instalarBar"></div>
+      <div id="cajaBar"></div>
       <div class="topbar"><button class="navtog" id="navTog" aria-label="Menú">☰</button><div class="vtitle" id="vtitle">Resumen</div><div class="spacer"></div>
         <button class="campana" id="btnSonido" title="Avisos con sonido"></button>
         <select class="suc" id="sucSel"></select>
@@ -1168,7 +1186,7 @@ function renderShell(){
   const cerrarNav=()=>$('#app').querySelector('.shell').classList.remove('navopen');
   if($('#navTog'))$('#navTog').onclick=()=>$('#app').querySelector('.shell').classList.toggle('navopen');
   if($('#navbk'))$('#navbk').onclick=cerrarNav;
-  renderTopbar();renderNav();renderConexion();pintarInstalar();
+  renderTopbar();renderNav();renderConexion();pintarInstalar();pintarAvisoCaja();
 }
 function pintarCampana(){
   const b=$('#btnSonido');if(!b)return;
@@ -1177,6 +1195,24 @@ function pintarCampana(){
   b.classList.toggle('off',!on);
   b.title=on?'Avisos con sonido — tocar para silenciar':'Avisos silenciados — tocar para activar';
 }
+// Advertencia imposible de ignorar: la caja de otro día sigue sin cortar.
+// Se ve desde cualquier pantalla, no solo en la barra de arriba.
+function pintarAvisoCaja(){
+  const c=$('#cajaBar');if(!c)return;
+  const t=app.turno;
+  if(!t||!t.atrasado||!puedeCobrar()){c.innerHTML='';return;}
+  const dias=Math.max(1,Math.round((Date.now()-new Date(t.abierto).getTime())/86400000));
+  c.innerHTML=`<div class="caja-bar"><span class="cb-ico">🔴</span>
+    <div><div class="cb-t">Falta el corte del ${fechaCorta(t.dia)}</div>
+      <div class="cb-s">La caja lleva ${dias} día(s) abierta. Hasta que cierres, las ventas de días distintos se mezclan en el mismo corte.</div></div>
+    <button class="btn dark" id="cbIr">Hacer el corte</button></div>`;
+  $('#cbIr').onclick=()=>go('caja');
+}
+function fechaCorta(d){
+  if(!d)return '';
+  try{return new Date(d+'T12:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'short'});}catch(e){return d;}
+}
+function esModoDiario(){return !app.turno||app.turno.modo!=='turnos';}
 function renderTopbar(){
   $('#sucSel').innerHTML=app.sucursales.map(s=>`<option value="${s.id}" ${s.id===app.sucursalId?'selected':''}>${s.nombre}</option>`).join('');
   $('#sucSel').disabled=!esAdmin();
@@ -1184,8 +1220,23 @@ function renderTopbar(){
   const pill=$('#turnoPill'),btn=$('#btnTurno');
   const caja=puedeCobrar();
   pill.style.display=caja?'':'none';btn.style.display=caja?'':'none';
-  if(app.turno){pill.className='turno-pill on';pill.textContent='Turno abierto · '+money(app.turno.fondoInicial);btn.textContent='Cerrar turno';btn.classList.remove('accent');}
-  else{pill.className='turno-pill off';pill.textContent='Turno cerrado';btn.textContent='Abrir turno';btn.classList.add('accent');}
+  const t=app.turno;
+  const diario=!t||t.modo!=='turnos';
+  if(t&&t.atrasado){
+    // La caja quedó abierta de otro día: hay que cortarla antes de seguir.
+    pill.className='turno-pill atrasado';
+    pill.textContent='Corte pendiente · '+fechaCorta(t.dia);
+    btn.textContent='Hacer el corte';btn.classList.add('accent');
+  }else if(t&&t.id){
+    pill.className='turno-pill on';
+    pill.textContent=diario?('Caja del día · '+fechaCorta(t.dia)):('Turno abierto · '+money(t.fondoInicial));
+    btn.textContent=diario?'Corte del día':'Cerrar turno';btn.classList.remove('accent');
+  }else if(diario){
+    pill.className='turno-pill off';pill.textContent='Sin ventas hoy';
+    btn.style.display='none';   // en modo diario no hay nada que abrir
+  }else{
+    pill.className='turno-pill off';pill.textContent='Turno cerrado';btn.textContent='Abrir turno';btn.classList.add('accent');
+  }
 }
 function renderNav(){
   $('#nav').innerHTML=NAV().map(([k,l])=>`<button data-v="${k}" class="${k===app.vista?'active':''}">${IC[k]}<span>${l}</span><span class="badge" data-bdg="${k}" style="display:none"></span></button>`).join('');
@@ -1223,7 +1274,14 @@ function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textCon
 //  RESUMEN
 // ===========================================================================
 async function vResumen(){
-  const [res,inv,peds]=await Promise.all([API.get('/api/reportes/resumen?sucursalId='+app.sucursalId),API.get('/api/inventario'),API.get('/api/pedidos?estado=cobrado&sucursalId='+app.sucursalId)]);
+  // Antes se pedía TODO el histórico y se rotulaba "venta del día": por eso
+  // seguía creciendo días tras día y la gráfica por hora acumulaba todo.
+  const hoy=fechaHoy();
+  const rango=`&desde=${hoy}&hasta=${hoy}`;
+  const [res,inv,peds]=await Promise.all([
+    API.get(`/api/reportes/resumen?sucursalId=${app.sucursalId}${rango}`),
+    API.get('/api/inventario'),
+    API.get(`/api/pedidos?estado=cobrado&sucursalId=${app.sucursalId}${rango}`)]);
   const fcAvg=inv.foodCost.length?inv.foodCost.reduce((s,f)=>s+f.foodCostPct,0)/inv.foodCost.length:0;
   const low=inv.insumos.filter(i=>i.bajo).length;
   const porHora={};peds.forEach(p=>{const ts=p.pago&&p.pago.timestamp?p.pago.timestamp:p.creado;const h=new Date(ts).getHours();porHora[h]=(porHora[h]||0)+p.total;});
@@ -3339,6 +3397,14 @@ async function vAjustes(){
       ${usuarios.map(u=>`<tr><td>${u.username}</td><td><span class="chip ${['admin','gerente'].includes(u.rol)?'cocina':'barra'}">${u.rol}</span></td><td class="num">${u.username===app.username?'':`<button class="btn" data-du="${u.username}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button>`}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>Caja <span class="small">cómo se cierra el día</span></h3>
+    <div class="cm-ops">
+      <label class="cm-o"><input type="radio" name="cmodo" value="diario" id="cmDiario"><div>
+        <b>Corte diario</b><div class="small" style="color:var(--muted)">No hay turnos que abrir. La caja se abre sola con la primera venta y se corta una vez al día. Si queda un corte pendiente de ayer, el sistema avisa antes de seguir vendiendo.</div></div></label>
+      <label class="cm-o"><input type="radio" name="cmodo" value="turnos" id="cmTurnos"><div>
+        <b>Por turnos</b><div class="small" style="color:var(--muted)">Se abre y se cierra a mano, con fondo inicial. Úsalo si hay relevo de cajero en el mismo día.</div></div></label>
+    </div>
+  </div>
   <div class="panel" style="margin-top:16px"><h3>Sucursales <span class="small">la dirección del local es el punto de partida de cada entrega</span></h3>
     <div id="sucBox"><div class="empty">Cargando…</div></div>
   </div>
@@ -3376,6 +3442,15 @@ async function vAjustes(){
   $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
   $('#addUser').onclick=modalNuevoUsuario;
   if($('#btnRespaldo'))$('#btnRespaldo').onclick=descargarRespaldo;
+  (async()=>{
+    let modo='diario';try{modo=(await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId)||{}).modo||'diario';}catch{}
+    const r=$('#cm'+(modo==='turnos'?'Turnos':'Diario'));if(r)r.checked=true;
+    document.querySelectorAll('input[name=cmodo]').forEach(x=>x.onchange=async()=>{
+      try{await API.patch('/api/config',{cajaModo:x.value});await refreshTurno();renderTopbar();
+        toast(x.value==='diario'?'Caja en corte diario':'Caja por turnos',{tipo:'ok'});}
+      catch(e){toast(e.message);}
+    });
+  })();
   pintarSucursales();
   pintarRespaldos();
   pintarLimpieza();
