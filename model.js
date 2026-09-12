@@ -101,8 +101,31 @@ function recetaDeCombo(e, componentes = []) {
 const crearCategoria = ({ nombre, orden = 0 }) => ({ id: uid('cat'), nombre, orden, visible: true });
 const crearOpcion = ({ nombre, precioDelta = 0, porDefecto = false }) => ({ id: uid('opt'), nombre, precioDelta, porDefecto, activo: true });
 const crearGrupo = ({ nombre, tipo = 'unico', obligatorio = false, max = null, opciones = [] }) => ({ id: uid('grp'), nombre, tipo, obligatorio, max, opciones });
-const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], descripcion = '', estacion = 'Cocina', icono = '' }) =>
-  ({ id: uid('prod'), categoriaId, nombre, descripcion, precioBase, gruposIds, destino, estacion, icono, receta, activo: true, disponible: true });
+// divisible: { maxPartes, excluirCategorias } — para la Mega y la Barra, que
+// se pueden pedir con varias especialidades sin que cambie el precio.
+const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], descripcion = '', estacion = 'Cocina', icono = '', divisible = null }) =>
+  ({ id: uid('prod'), categoriaId, nombre, descripcion, precioBase, gruposIds, destino, estacion, icono, receta, divisible, activo: true, disponible: true });
+
+const FRACCION = { 1: 'entera', 2: 'mitad', 3: 'un tercio', 4: 'un cuarto' };
+// Valida los sabores elegidos para una pizza dividida y devuelve sus nombres.
+function armarPartes(e, prod, partes = []) {
+  const d = prod.divisible;
+  if (!d || !Array.isArray(partes) || partes.length < 2) return null;
+  const max = Math.min(4, Math.max(2, +d.maxPartes || 2));
+  if (partes.length > max) { const x = new Error(`${prod.nombre} se divide en máximo ${max} partes`); x.status = 400; throw x; }
+  const excluir = d.excluirCategorias || [];
+  const out = [];
+  for (const id of partes) {
+    const p = e.menu.productos[id];
+    if (!p || p.activo === false) { const x = new Error('Uno de los sabores no existe'); x.status = 400; throw x; }
+    if (excluir.includes(p.categoriaId)) {
+      const cat = (e.menu.categorias[p.categoriaId] || {}).nombre || '';
+      const x = new Error(`${p.nombre} (${cat}) no se puede combinar en ${prod.nombre}`); x.status = 400; throw x;
+    }
+    out.push({ productoId: p.id, nombre: p.nombre });
+  }
+  return out;
+}
 const crearInsumo = ({ nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 }) => ({ id: uid('ins'), nombre, unidad, stock, costoUnitario, stockMin });
 const crearMesa = ({ nombre, sucursalId }) => ({ id: uid('mesa'), nombre, sucursalId, estado: 'libre', pedidoFolio: null });
 
@@ -114,7 +137,8 @@ function folioPedido(e, sucId, codigo = 'SUC') {
 
 // ---- Línea del pedido (resuelve modificadores y snapshot de precio) ---------
 //  prod: producto del menú.  modsElegidos: [{ grupoId, opcionId }]
-function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '' } = {}) {
+function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', partes = null } = {}) {
+  const trozos = partes ? armarPartes(e, prod, partes) : null;
   const modificadores = [];
   for (const sel of modsElegidos) {
     const g = e.menu.gruposModificadores[sel.grupoId];
@@ -129,6 +153,9 @@ function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '' } = {
     id: uid('ln'),
     productoId: prod.id,
     nombre: prod.nombre,            // SNAPSHOT
+    // Sabores de una pizza dividida. El precio NO cambia: es el del producto.
+    partes: trozos,
+    fraccion: trozos ? (FRACCION[trozos.length] || `1/${trozos.length}`) : null,
     destino: prod.destino,
     estacion: prod.estacion || 'Cocina', // SNAPSHOT — estación de cocina para ruteo del KDS
     cantidad,
@@ -827,7 +854,7 @@ function descontarInventario(e, ped) {
 
 module.exports = {
   uid, r2, estadoInicial,
-  crearCategoria, crearOpcion, crearGrupo, crearProducto, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, armarPartes, FRACCION, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   promo2x1Activa, calcular2x1,
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
