@@ -319,12 +319,14 @@ app.get('/api/config', wrap(async (req, res) => {
   res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda, fiscal: e.config.fiscal || {} });
 }));
 app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
-  const { nombre, logo, fiscal } = req.body || {};
+  const { nombre, logo, fiscal, cajaModo: modo } = req.body || {};
+  if (modo !== undefined && !['diario', 'turnos'].includes(modo)) throw bad('Modo de caja inválido');
   const out = await withState((e) => {
     if (nombre) e.meta.nombre = nombre;
     if (logo !== undefined) e.config.logo = logo;
     if (fiscal && typeof fiscal === 'object') e.config.fiscal = { ...(e.config.fiscal || {}), ...fiscal };
-    return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {} };
+    if (modo !== undefined) e.config.cajaModo = modo;
+    return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {}, cajaModo: cajaModo(e) };
   });
   res.json(out);
 }));
@@ -805,7 +807,15 @@ app.post('/api/caja/abrir', puedeCaja, wrap(async (req, res) => {
 app.get('/api/caja/turno-actual', wrap(async (req, res) => {
   const e = await readState();
   const sucursalId = req.query.sucursalId;
-  res.json(M.turnoAbierto(e, sucursalId) || null);
+  const t = M.turnoAbierto(e, sucursalId);
+  const tz = tzTenant(e);
+  const hoy = diaLocal(new Date().toISOString(), tz);
+  if (!t) return res.json(cajaModo(e) === 'diario' ? { modo: 'diario', sinAbrir: true, dia: hoy } : null);
+  res.json(Object.assign({}, t, {
+    modo: cajaModo(e),
+    dia: diaLocal(t.abierto, tz),
+    atrasado: cajaModo(e) === 'diario' && diaLocal(t.abierto, tz) !== hoy,
+  }));
 }));
 app.post('/api/caja/movimiento', puedeCaja, wrap(async (req, res) => {
   const { sucursalId, tipo, monto, motivo } = req.body || {};
@@ -981,7 +991,7 @@ app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
     M.recalcularPedido(p);
     const sumPagos = M.r2(pagos.reduce((s, x) => s + x.monto, 0));
     if (sumPagos < p.total) throw bad(`El pago (${sumPagos}) no cubre el total (${p.total})`);
-    const turno = M.turnoAbierto(e, p.sucursalId);
+    const turno = turnoDeHoy(e, p.sucursalId, c.username);
     if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
     p.turnoId = turno.id;
     M.mandarComanda(p); // dispara a cocina lo que falte (mostrador) o ronda final (mesa)
@@ -1002,10 +1012,16 @@ app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
 
 app.get('/api/pedidos', wrap(async (req, res) => {
   const e = await readState();
-  const { estado, sucursalId } = req.query;
+  const { estado, sucursalId, desde, hasta } = req.query;
+  const tz = tzTenant(e);
+  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
   let arr = Object.values(e.pedidos);
   if (sucursalId) arr = arr.filter((p) => p.sucursalId === sucursalId);
   if (estado) arr = arr.filter((p) => p.estado === estado);
+  if (d1 || d2) arr = arr.filter((p) => {
+    const d = diaLocal(_fechaPed(p), tz);
+    return (!d1 || d >= d1) && (!d2 || d <= d2);
+  });
   res.json(arr);
 }));
 app.get('/api/pedidos/:folio', wrap(async (req, res) => {
@@ -1391,8 +1407,8 @@ app.post('/api/reparto/liquidar', puedeCaja, wrap(async (req, res) => {
     if (!e.liquidaciones) e.liquidaciones = [];
     const emp = (e.empleados || {})[repartidorId];
     if (!emp) throw bad('Repartidor inexistente', 404);
-    const turno = M.turnoAbierto(e, sucursalId);
-    if (!turno) throw bad('No hay turno de caja abierto en la sucursal', 409);
+    const turno = turnoDeHoy(e, sucursalId, c.username);
+    if (!turno) throw bad('No hay caja abierta en la sucursal', 409);
     const peds = Object.values(e.pedidos)
       .filter((p) => M.porLiquidar(p) && p.sucursalId === sucursalId && p.reparto.repartidorId === repartidorId)
       .sort((a, b) => new Date(a.reparto.entregado) - new Date(b.reparto.entregado));
@@ -1761,6 +1777,7 @@ app.get('/api/avisos', wrap(async (req, res) => {
     },
     caja: {
       turnoAbierto: !!turno,
+      atrasado: !!(turno && cajaModo(e) === 'diario' && diaLocal(turno.abierto, tzTenant(e)) !== diaLocal(new Date().toISOString(), tzTenant(e))),
       // Mesas se cobran en Mesas y domicilios en Reparto (los cobra la moto).
       porCobrar: mio ? [] : peds.filter((p) => p.estado === 'abierto' && p.tipoServicio === 'mostrador' && p.lineas.length).map((p) => p.folio),
       mesasConCuenta: mio ? 0 : Object.values(e.mesas || {}).filter((m) => (!sucursalId || m.sucursalId === sucursalId) && m.estado === 'cuenta').length,
@@ -1832,9 +1849,9 @@ app.post('/api/gastos', puedeCaja, wrap(async (req, res) => {
   const out = await withState((e, c) => {
     const suc = e.sucursales[sucursalId];
     if (!suc) throw bad('Sucursal inexistente');
-    const turno = M.turnoAbierto(e, sucursalId);
-    // Solo el efectivo exige turno: es lo único que sale físicamente del cajón.
-    if (metodoPago === 'efectivo' && !turno) throw bad('Abre el turno de caja para registrar un gasto en efectivo', 409);
+    const turno = turnoDeHoy(e, sucursalId, c.username);
+    // Solo el efectivo exige caja abierta: es lo único que sale del cajón.
+    if (metodoPago === 'efectivo' && !turno) throw bad('Abre la caja para registrar un gasto en efectivo', 409);
     // Si llega solo el nombre, se busca o se crea: así no quedan gastos
     // huérfanos ni proveedores duplicados por diferencias de mayúsculas.
     let provId = req.body.proveedorId || null;
@@ -1874,7 +1891,7 @@ app.post('/api/gastos/:id/cancelar', soloAdmin, wrap(async (req, res) => {
     if (g.movimientoId) {
       // El dinero ya salió del cajón: se repone con una entrada en el turno
       // abierto, para no alterar un corte que ya se cerró.
-      const turno = M.turnoAbierto(e, g.sucursalId);
+      const turno = turnoDeHoy(e, g.sucursalId, c.username);
       if (!turno) throw bad('Abre el turno de caja: hay que reponer el efectivo de este gasto', 409);
       M.registrarMovimiento(turno, { tipo: 'entrada', monto: g.total, motivo: `Cancelación de ${g.folio}`, usuario: c.username });
       devuelto = turno.id;
@@ -2203,6 +2220,33 @@ function diaParam(v, tz) {
   if (!t) return null;
   return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : diaLocal(t, tz);
 }
+// ---- Modo de caja ----------------------------------------------------------
+//  'diario'  (por omisión): no hay turnos que abrir. El corte es del día y la
+//            caja se abre sola al primer movimiento. Es lo que necesita un
+//            negocio que opera un solo horario corrido.
+//  'turnos'  : como antes, se abre y se cierra a mano. Útil si hay relevos.
+const cajaModo = (e) => ((e.config && e.config.cajaModo) === 'turnos' ? 'turnos' : 'diario');
+
+// Devuelve el turno abierto. En modo diario lo crea si no existe, y si el que
+// está abierto es de un día anterior NO lo reusa: ese ya necesita su corte.
+function turnoDeHoy(e, sucursalId, usuario, { crear = true } = {}) {
+  const tz = tzTenant(e);
+  const hoy = diaLocal(new Date().toISOString(), tz);
+  const abierto = M.turnoAbierto(e, sucursalId);
+  if (abierto) {
+    const dia = diaLocal(abierto.abierto, tz);
+    if (cajaModo(e) === 'turnos' || dia === hoy) return abierto;
+    // Modo diario con un turno de ayer sin cortar: se avisa, no se pisa.
+    const err = new Error(`El corte del ${dia} sigue pendiente. Ciérralo antes de seguir vendiendo.`);
+    err.status = 409; err.turnoPendiente = abierto.id; err.dia = dia;
+    throw err;
+  }
+  if (!crear || cajaModo(e) !== 'diario') return null;
+  const t = M.abrirTurno(e, { sucursalId, usuario: usuario || 'sistema', fondoInicial: 0 });
+  t.automatico = true;
+  return t;
+}
+
 function pedsCobrados(e, sucursalId, desde, hasta) {
   const tz = tzTenant(e);
   const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
