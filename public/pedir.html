@@ -71,6 +71,11 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
 .paso b{font-size:15px}
 .pd{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.4}
 .cod2{font-family:var(--mono);font-size:38px;letter-spacing:12px;text-align:center;margin:12px 0 0;font-weight:700}
+
+.pt-n{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.pt-b{flex:1 1 auto;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 8px;font-size:13px;font-weight:700;cursor:pointer}
+.pt-b.on{background:var(--ink);color:#f2ede2;border-color:var(--ink)}
+.f select{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;font-size:15px;font-family:inherit;background:var(--card)}
 </style>
 </head>
 <body>
@@ -114,10 +119,22 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
     barra();
   }
 
+  var ETIQ={1:'Entera',2:'Mitad y mitad',3:'En tres',4:'En cuatro'};
+  function saboresPara(p){
+    var ex=(p.divisible&&p.divisible.excluirCategorias)||[];
+    return M.productos.filter(function(x){
+      return x.id!==p.id && !x.divisible && ex.indexOf(x.categoriaId)<0;
+    }).sort(function(a,b){return a.nombre.localeCompare(b.nombre);});
+  }
   function abrirProducto(id){
     var p=M.productos.find(function(x){return x.id===id;});
     var grupos=(p.gruposIds||[]).map(function(g){return M.grupos.find(function(x){return x.id===g;});}).filter(Boolean);
     var sel={}, cant=1;
+    // Mega y Barra: varias especialidades sin que cambie el precio
+    var div=p.divisible||null;
+    var maxP=div?Math.min(4,Math.max(2,+div.maxPartes||2)):1;
+    var nPartes=1, partes=[];
+    var opcSab=div?saboresPara(p):[];
     grupos.forEach(function(g){var o=g.opciones[0];if(g.obligatorio&&o)sel[g.id]=o.id;});
     function precio(){
       var t=p.precioBase;
@@ -126,6 +143,14 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
     }
     function render(){
       mo.innerHTML='<h3>'+esc(p.nombre)+'</h3>'+(p.descripcion?'<div class="sub">'+esc(p.descripcion)+'</div>':'')+
+        (div?'<div class="grp"><div class="grp-t">¿Cómo la quieres? El precio es el mismo</div>'+
+          '<div class="pt-n">'+[1,2,3,4].slice(0,maxP).map(function(k){
+            return '<button class="pt-b '+(nPartes===k?'on':'')+'" data-np="'+k+'">'+ETIQ[k]+'</button>';}).join('')+'</div>'+
+          (nPartes>1?Array.apply(null,{length:nPartes}).map(function(_,i){
+            return '<div class="f"><label>Parte '+(i+1)+'</label><select class="ps" data-i="'+i+'">'+
+              '<option value="">— elige el sabor —</option>'+
+              opcSab.map(function(o){return '<option value="'+o.id+'" '+(partes[i]===o.id?'selected':'')+'>'+esc(o.nombre)+'</option>';}).join('')+
+              '</select></div>';}).join(''):'')+'</div>':'')+
         grupos.map(function(g){
           return '<div class="grp"><div class="grp-t">'+esc(g.nombre)+(g.obligatorio?'':' (opcional)')+'</div>'+
             g.opciones.map(function(o){
@@ -137,17 +162,27 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
       [].forEach.call(mo.querySelectorAll('[data-o]'),function(el){el.onclick=function(){
         var g=M.grupos.find(function(x){return x.id===el.dataset.g;});
         sel[el.dataset.g]=(sel[el.dataset.g]===el.dataset.o&&!g.obligatorio)?null:el.dataset.o;render();};});
+      [].forEach.call(mo.querySelectorAll('[data-np]'),function(b){b.onclick=function(){
+        nPartes=+b.dataset.np;partes=partes.slice(0,nPartes);render();};});
+      [].forEach.call(mo.querySelectorAll('.ps'),function(s2){s2.onchange=function(){partes[+s2.dataset.i]=s2.value;};});
       $('#me').onclick=function(){if(cant>1){cant--;render();}};
       $('#ma').onclick=function(){if(cant<20){cant++;render();}};
       $('#add').onclick=function(){
         var falta=grupos.find(function(g){return g.obligatorio&&!sel[g.id];});
         if(falta){alert('Elige '+falta.nombre);return;}
+        var trozos=null;
+        if(div&&nPartes>1){
+          trozos=partes.slice(0,nPartes).filter(Boolean);
+          if(trozos.length!==nPartes){alert('Elige el sabor de cada parte');return;}
+        }
         var mods=[],nombres=[];
         grupos.forEach(function(g){
           var o=g.opciones.find(function(x){return x.id===sel[g.id];});
           if(o){mods.push({grupoId:g.id,opcionId:o.id});nombres.push(o.nombre);}
         });
-        carrito.push({productoId:p.id,nombre:p.nombre,cantidad:cant,modsElegidos:mods,
+        if(trozos)nombres=trozos.map(function(t){
+          var o=opcSab.find(function(x){return x.id===t;});return o?o.nombre:'';}).concat(nombres);
+        carrito.push({productoId:p.id,nombre:p.nombre,cantidad:cant,modsElegidos:mods,partes:trozos,
           nombresMods:nombres,notas:($('#pn').value||'').trim(),importe:precio()});
         cerrar();barra();
       };
@@ -289,7 +324,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
       $('#env').disabled=true;$('#env').textContent='Enviando…';
       fetch('/pedir/'+ROW+'/'+SUC+'/pedido',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({token:token,cliente:datos,notas:($('#dnot').value||'').trim(),
-          items:carrito.map(function(i){return {productoId:i.productoId,cantidad:i.cantidad,modsElegidos:i.modsElegidos,notas:i.notas};})})})
+          items:carrito.map(function(i){return {productoId:i.productoId,cantidad:i.cantidad,modsElegidos:i.modsElegidos,partes:i.partes||null,notas:i.notas};})})})
         .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
         .then(function(x){
           if(!x.ok)throw new Error(x.j.error||'No se pudo enviar');
