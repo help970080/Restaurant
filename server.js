@@ -754,7 +754,7 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
   const p = await withState((e) => {
     const prod = e.menu.productos[id];
     if (!prod) throw bad('Producto inexistente', 404);
-    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion', 'estacion']) if (k in patch) prod[k] = patch[k];
+    for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion', 'estacion', 'divisible']) if (k in patch) prod[k] = patch[k];
     return prod;
   });
   res.json(p);
@@ -991,14 +991,14 @@ app.post('/api/pedidos', wrap(async (req, res) => {
 
 app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
   const { folio } = req.params;
-  const { productoId, cantidad = 1, modsElegidos = [], notas = '' } = req.body || {};
+  const { productoId, cantidad = 1, modsElegidos = [], notas = '', partes = null } = req.body || {};
   const ped = await withState((e) => {
     const p = e.pedidos[folio];
     if (!p) throw bad('Pedido inexistente', 404);
     if (p.estado !== 'abierto') throw bad('El pedido ya está cerrado');
     const prod = e.menu.productos[productoId];
     if (!prod) throw bad('Producto inexistente');
-    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas }));
+    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas, partes }));
     p.actualizado = new Date().toISOString();
     M.calcular2x1(e, p);
     return M.recalcularPedido(p);
@@ -1145,7 +1145,7 @@ app.get('/api/cocina', wrap(async (req, res) => {
   const arr = Object.values(e.pedidos)
     .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado' && esDeEstacion(l)))
     .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
-    .map((p) => ({ folio: p.folio, codigo: p.codigoEntrega || null, colonia: (p.cliente && p.cliente.colonia) || null, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
+    .map((p) => ({ folio: p.folio, codigo: p.codigoEntrega || null, colonia: (p.cliente && p.cliente.colonia) || null, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, partes: l.partes || null, fraccion: l.fraccion || null, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
   res.json(arr);
 }));
 app.post('/api/cocina/:folio/listo', wrap(async (req, res) => {
@@ -2691,7 +2691,7 @@ app.get('/pedir/:row/:suc/menu', (req, res) => {
         negocio: (e.meta && e.meta.nombre) || '', logo: (e.config && e.config.logo) || null,
         sucursal: { id: suc.id, nombre: suc.nombre, telefono: suc.telefono || null },
         categorias: cats.filter((c) => prods.some((p) => p.categoriaId === c.id)).map((c) => ({ id: c.id, nombre: c.nombre })),
-        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [] })),
+        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [], divisible: p.divisible || null })),
         grupos: Object.values(e.menu.gruposModificadores).filter((g) => usados.has(g.id))
           .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio,
             opciones: g.opciones.filter((o) => o.activo !== false).map((o) => ({ id: o.id, nombre: o.nombre, precioDelta: o.precioDelta })) })),
