@@ -3114,7 +3114,7 @@ async function pintarPorConfirmar(){
         <a class="ent-tel" href="tel:${(p.cliente&&p.cliente.telefono)||''}">${(p.cliente&&p.cliente.telefono)||''}</a>
         <span class="pc-tot">${money(p.total)}</span></div>
       <div class="pc-d">${(p.cliente&&p.cliente.direccion)||''}${(p.cliente&&p.cliente.referencias)?' · '+p.cliente.referencias:''}</div>
-      <div class="pc-i">${p.items.map(i=>`${i.cantidad}× ${i.nombre}${i.modificadores.length?' ('+i.modificadores.join(', ')+')':''}`).join(' · ')}</div>
+      <div class="pc-i">${p.items.map(i=>`${i.cantidad}× ${i.nombre}${i.partes?' — '+i.partes.map(x=>x.nombre).join(' / '):''}${i.modificadores.length?' ('+i.modificadores.join(', ')+')':''}`).join(' · ')}</div>
       ${p.notasCliente?`<div class="pc-n">“${p.notasCliente}”</div>`:''}
       ${p.codigoTel?`<div class="pc-cod">Debe haberte llegado por WhatsApp el código <b>${p.codigoTel}</b> desde ${(p.cliente&&p.cliente.telefono)||''}. Si no llegó, no aceptes.</div>`:''}
       <div class="pc-m">${p.motivo} · ${p.entregasPrevias} entrega(s) previa(s) · ${minsDesde(p.creado)} min esperando</div>
