@@ -595,6 +595,22 @@
 .av-n{font-weight:700;flex:1;min-width:0}
 .av-t{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .av-w{font-weight:700;color:var(--green);white-space:nowrap}
+
+/* ---- Pedidos en línea por confirmar ---- */
+.panel.pc{border-color:var(--accent)}
+.pc-c{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:11px;padding:11px 13px;margin-bottom:9px;background:#fffaf2}
+.pc-h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;font-size:15px}
+.pc-tot{margin-left:auto;font-family:var(--mono);font-weight:700}
+.pc-d{font-size:13px;margin-top:3px}
+.pc-i{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.4}
+.pc-n{font-size:12px;font-style:italic;color:var(--muted);margin-top:3px}
+.pc-m{font-size:11px;color:var(--accent-ink,#9a5b12);margin-top:5px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.pc-b{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap}
+.pc-b .btn{flex:1 1 auto;font-size:13px}
+.pc-b .btn.rojo{color:var(--red);border-color:#f0cdc4;flex:0 0 auto}
+
+.pc-cod{background:var(--ink);color:#f2ede2;border-radius:9px;padding:7px 10px;font-size:12px;margin-top:7px;line-height:1.4}
+.pc-cod b{font-family:var(--mono);font-size:17px;letter-spacing:2px}
 </style>
 </head>
 <body>
@@ -979,6 +995,8 @@ async function latido(){
   if(nEnt.length)ev.push(['entregado',`Entregado · ${nEnt.join(', ')}`,0]);
   const nLiq=nuevosEn(setDe(prev.reparto.porLiquidar),a.reparto.porLiquidar);
   if(nLiq.length&&puedeCobrar())ev.push(['liquidar',`Efectivo por liquidar: ${money(a.reparto.efectivoPendiente)}`,0]);
+  const nConf=nuevosEn(setDe(prev.caja.porConfirmar||[]),a.caja.porConfirmar||[]);
+  if(nConf.length&&puedeCobrar())ev.unshift(['domicilio',`${nConf.length===1?'Pedido en línea':nConf.length+' pedidos en línea'} por confirmar`,200]);
   const nCob=nuevosEn(setDe(prev.caja.porCobrar),a.caja.porCobrar);
   if(nCob.length&&puedeCobrar())ev.push(['cobrar',`Cuenta por cobrar · ${nCob.join(', ')}`,0]);
   // Un pedido tardío avisa una sola vez, no cada 15 segundos
@@ -1266,13 +1284,14 @@ function pintarBadges(){
   const n={
     cocina:a.cocina.pendientes.length,
     reparto:a.reparto.porAsignar.length+a.reparto.asignados.length+a.reparto.porLiquidar.length,
-    caja:a.caja.porCobrar.length+a.caja.mesasConCuenta,
+    caja:a.caja.porCobrar.length+a.caja.mesasConCuenta+((a.caja.porConfirmar||[]).length),
     mesas:a.caja.mesasConCuenta,
   };
   document.querySelectorAll('[data-bdg]').forEach(el=>{
     const v=n[el.dataset.bdg]||0;
     el.style.display=v?'':'none';el.textContent=v>99?'99+':v;
-    el.classList.toggle('urg',el.dataset.bdg==='reparto'&&a.reparto.tardios.length>0);
+    el.classList.toggle('urg',(el.dataset.bdg==='reparto'&&a.reparto.tardios.length>0)
+      ||(el.dataset.bdg==='caja'&&(a.caja.porConfirmar||[]).length>0));
   });
 }
 function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
@@ -2942,6 +2961,7 @@ async function vCaja(){
     <div class="kpi"><div class="lab">Ventas (sucursal)</div><div class="val">${money(resumen.venta)}</div><div class="lab" style="margin-top:2px">${resumen.pedidos} ticket(s) · prom ${money(resumen.ticketPromedio)}</div></div>
     <div class="kpi"><div class="lab">Efectivo en la calle</div><div class="val" style="color:${efectivoCalle>0?'var(--accent-ink)':'var(--green)'}">${money(efectivoCalle)}</div><div class="lab" style="margin-top:2px">${conPendiente.length} moto(s) sin liquidar</div></div>
   </div>
+  <div id="porConfirmar"></div>
   <div id="tiraReparto"></div>
   ${app.turno?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px"><button class="btn" id="cajaEntrada" style="font-size:13px">+ Entrada de efectivo</button><button class="btn" id="cajaRetiro" style="font-size:13px">− Retiro de efectivo</button><button class="btn dark" id="cajaGasto" style="font-size:13px">🧾 Registrar gasto</button></div>`:''}
 
@@ -2994,6 +3014,7 @@ async function vCaja(){
   if($('#cajaIrReparto'))$('#cajaIrReparto').onclick=()=>go('reparto');
   if($('#cajaGasto'))$('#cajaGasto').onclick=gastoDesdeCaja;
   pintarTiraCaja();
+  pintarPorConfirmar();
   document.querySelectorAll('[data-liqcaja]').forEach(b=>b.onclick=()=>{
     const r=(app._repCaja||[]).find(x=>x.id===b.dataset.liqcaja);
     if(r)modalLiquidar(r,vCaja);
@@ -3001,6 +3022,52 @@ async function vCaja(){
   document.querySelectorAll('[data-verliq]').forEach(b=>b.onclick=()=>modalDetalleLiquidacion(b.dataset.verliq));
 }
 // Detalle de una liquidacion: que folios trajo esa moto y por cuanto.
+// Pedidos que llegaron por la liga y esperan el visto bueno de caja.
+async function pintarPorConfirmar(){
+  const c=$('#porConfirmar');if(!c)return;
+  let l;try{l=await API.get('/api/pedidos/por-confirmar?sucursalId='+app.sucursalId);}catch{c.innerHTML='';return;}
+  app._porConfirmar=l;
+  if(!l.length){c.innerHTML='';return;}
+  c.innerHTML=`<div class="panel pc" style="margin-bottom:16px"><h3>Pedidos en línea por confirmar <span class="small">${l.length} esperando</span></h3>
+    ${l.map(p=>`<div class="pc-c">
+      <div class="pc-h"><b>${(p.cliente&&p.cliente.nombre)||''}</b>
+        <a class="ent-tel" href="tel:${(p.cliente&&p.cliente.telefono)||''}">${(p.cliente&&p.cliente.telefono)||''}</a>
+        <span class="pc-tot">${money(p.total)}</span></div>
+      <div class="pc-d">${(p.cliente&&p.cliente.direccion)||''}${(p.cliente&&p.cliente.referencias)?' · '+p.cliente.referencias:''}</div>
+      <div class="pc-i">${p.items.map(i=>`${i.cantidad}× ${i.nombre}${i.modificadores.length?' ('+i.modificadores.join(', ')+')':''}`).join(' · ')}</div>
+      ${p.notasCliente?`<div class="pc-n">“${p.notasCliente}”</div>`:''}
+      ${p.codigoTel?`<div class="pc-cod">Debe haberte llegado por WhatsApp el código <b>${p.codigoTel}</b> desde ${(p.cliente&&p.cliente.telefono)||''}. Si no llegó, no aceptes.</div>`:''}
+      <div class="pc-m">${p.motivo} · ${p.entregasPrevias} entrega(s) previa(s) · ${minsDesde(p.creado)} min esperando</div>
+      <div class="pc-b">
+        <button class="btn accent" data-acepta="${p.folio}">Aceptar y mandar a cocina</button>
+        <button class="btn rojo" data-rechaza="${p.folio}">Rechazar</button>
+      </div></div>`).join('')}</div>`;
+  document.querySelectorAll('[data-acepta]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{await API.post(`/api/pedidos/${b.dataset.acepta}/aceptar`);toast('Aceptado · ya está en cocina',{tipo:'ok'});vCaja();}
+    catch(e){toast(e.message);b.disabled=false;}
+  });
+  document.querySelectorAll('[data-rechaza]').forEach(b=>b.onclick=()=>modalRechazar(b.dataset.rechaza));
+}
+function modalRechazar(folio){
+  const p=(app._porConfirmar||[]).find(x=>x.folio===folio);
+  modal.innerHTML=`<h3>Rechazar ${folio}</h3>
+    <div class="sub">${p?`${(p.cliente&&p.cliente.nombre)||''} · ${(p.cliente&&p.cliente.telefono)||''}`:''}</div>
+    <div class="sub">El pedido se cancela y queda registrado. La cocina nunca lo vio.</div>
+    <div class="field"><label>Motivo</label><input id="rcMot" placeholder="No contesta, dirección falsa…"></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+      <input type="checkbox" id="rcBloq" style="width:auto;margin:0"> Bloquear este teléfono para futuros pedidos</label>
+    <div class="modal-foot"><button class="btn-ghost" id="rcNo">Cerrar</button><button class="btn-primary" id="rcOk">Rechazar</button></div>`;
+  ov.classList.add('show');
+  $('#rcNo').onclick=closeModal;
+  $('#rcOk').onclick=async()=>{
+    const m=$('#rcMot').value.trim();
+    if(!m){toast('Escribe el motivo');return;}
+    try{await API.post(`/api/pedidos/${folio}/rechazar`,{motivo:m,bloquear:$('#rcBloq').checked});
+      closeModal();toast('Pedido rechazado');vCaja();}
+    catch(e){toast(e.message);}
+  };
+}
 async function modalDetalleLiquidacion(id){
   const l=(app._liqs||[]).find(x=>x.id===id);
   if(!l){toast('Liquidación no encontrada');return;}
@@ -3463,6 +3530,13 @@ async function vAjustes(){
   <div class="panel riesgo" style="margin-top:16px"><h3>Terminar las pruebas <span class="small">deja el sistema listo para operar de verdad</span></h3>
     <div id="limpiezaBox"><div class="empty">Cargando…</div></div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>Pedido a domicilio en línea <span class="small">pégala en Facebook, WhatsApp o Instagram</span></h3>
+    <div class="small" style="color:var(--muted);margin-bottom:10px">El cliente arma su pedido, verifica su teléfono con un código y tú lo confirmas desde Caja antes de que entre a cocina. Los clientes con ${'$'}{3} entregas o más pasan directo.</div>
+    <table><tbody>${app.sucursales.map(s=>{const url=location.origin+'/pedir/'+app.row+'/'+s.id;return `<tr>
+      <td style="font-weight:600">${s.nombre}</td><td class="mono" style="font-size:12px">${url}</td>
+      <td class="num"><button class="btn" data-copiapedir="${url}" style="padding:6px 11px;font-size:12px;min-height:auto">Copiar</button></td>
+      <td class="num"><a class="btn" href="${url}" target="_blank" rel="noopener" style="padding:6px 11px;font-size:12px;min-height:auto;text-decoration:none">Abrir</a></td></tr>`;}).join('')}</tbody></table>
+  </div>
   <div class="panel" style="margin-top:16px"><h3>Menú QR / pedido en línea <span class="small">el cliente escanea, ve el menú y manda su pedido (sin comisión)</span></h3>
     <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Pega un QR por sucursal en las mesas o en la entrada. El pedido llega a <b>Caja</b> como cuenta por cobrar (marcada 🔲 QR); ahí lo confirmas y cobras. El pago es en caja.</div>
     <table><thead><tr><th>Sucursal</th><th>Enlace</th><th></th></tr></thead><tbody>
@@ -3488,6 +3562,9 @@ async function vAjustes(){
   $('#logoFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>700000){toast('La imagen es muy pesada (máx ~700KB)');return;}const rd=new FileReader();rd.onload=()=>{logoData=rd.result;$('#logoPrev').src=logoData;$('#logoPrev').style.display='';$('#logoEmpty').style.display='none';};rd.readAsDataURL(f);};
   $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
   $('#addUser').onclick=modalNuevoUsuario;
+  document.querySelectorAll('[data-copiapedir]').forEach(b=>b.onclick=async()=>{
+    toast(await copiar(b.dataset.copiapedir)?'Liga copiada · pégala en tus redes':'Cópiala a mano',{tipo:'ok',ms:4000});
+  });
   if($('#btnRespaldo'))$('#btnRespaldo').onclick=descargarRespaldo;
   (async()=>{
     let modo='diario';try{modo=(await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId)||{}).modo||'diario';}catch{}
@@ -3536,6 +3613,8 @@ async function pintarSucursales(){
         :'<span class="suc-no">sin ubicar</span>'}</div>
     <div class="field"><label>Dirección del local</label>
       <input class="suc-dir" value="${(s.direccion||'').replace(/"/g,'&quot;')}" placeholder="Carr. Xochimilco-Oaxtepec km 67.5, Texalco, Tlayacapan"></div>
+    <div class="field"><label>WhatsApp del negocio <span class="small" style="color:var(--muted)">a este número te mandan los clientes su código de confirmación</span></label>
+      <input class="suc-tel" value="${s.telefono||''}" placeholder="5575120300"></div>
     <div class="field"><label>Ubicación exacta <span class="small" style="color:var(--muted)">pega la liga de Google Maps (la de Compartir) o las coordenadas</span></label>
       <input class="suc-coord" value="${s.coordenadas?s.coordenadas.lat+', '+s.coordenadas.lng:''}" placeholder="https://share.google/... o 18.9145, -98.9760"></div>
     <div class="suc-btns">
@@ -3544,10 +3623,11 @@ async function pintarSucursales(){
       ${s.coordenadas?`<a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${s.coordenadas.lat},${s.coordenadas.lng}">Ver en el mapa</a>`:''}
     </div></div>`).join('');
   const datos=(id)=>{const k=c.querySelector(`[data-suc="${id}"]`);
-    return {direccion:k.querySelector('.suc-dir').value.trim(),coordenadas:k.querySelector('.suc-coord').value.trim()};};
+    return {direccion:k.querySelector('.suc-dir').value.trim(),coordenadas:k.querySelector('.suc-coord').value.trim(),
+      telefono:k.querySelector('.suc-tel').value.trim()};};
   c.querySelectorAll('[data-sucsave]').forEach(b=>b.onclick=async()=>{
     const d=datos(b.dataset.sucsave);
-    try{await API.patch('/api/sucursales/'+b.dataset.sucsave,{direccion:d.direccion,coordenadas:d.coordenadas||null});
+    try{await API.patch('/api/sucursales/'+b.dataset.sucsave,{direccion:d.direccion,coordenadas:d.coordenadas||null,telefono:d.telefono});
       toast('Sucursal actualizada',{tipo:'ok'});pintarSucursales();}
     catch(e){toast(e.message);}
   });
