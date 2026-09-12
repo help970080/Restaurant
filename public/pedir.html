@@ -62,6 +62,15 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
 .ok p{color:var(--muted);font-size:14px;line-height:1.5;margin:0}
 .ok a{display:inline-block;margin-top:18px;background:var(--ink);color:#f2ede2;text-decoration:none;padding:13px 22px;border-radius:12px;font-weight:700}
 .aviso{background:#fffaf2;border:1px solid var(--accent);border-radius:11px;padding:10px 12px;font-size:13px;margin-top:12px;line-height:1.45}
+
+.paso{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);border-radius:13px;padding:13px;margin-top:12px;opacity:.55}
+.paso.activo{opacity:1;border-color:var(--accent);background:#fffaf2}
+.paso.hecho{opacity:.75;border-color:var(--green);background:#f7fbf8}
+.pn{flex:none;width:26px;height:26px;border-radius:50%;background:var(--ink);color:#f2ede2;display:grid;place-items:center;font-weight:700;font-size:13px}
+.paso.hecho .pn{background:var(--green)}
+.paso b{font-size:15px}
+.pd{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.4}
+.cod2{font-family:var(--mono);font-size:38px;letter-spacing:12px;text-align:center;margin:12px 0 0;font-weight:700}
 </style>
 </head>
 <body>
@@ -222,22 +231,39 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
   // Sin servicio de mensajería: el cliente nos manda ÉL el código desde su
   // WhatsApp. Prueba igual que el número es suyo y no cuesta nada.
   function pasoAutoconfirmar(a){
-    mo.innerHTML='<h3>Confírmanos tu número</h3>'+
-      '<div class="sub">Mándanos este código por WhatsApp. Así sabemos que el teléfono es tuyo y podemos avisarte cuando salga tu pedido.</div>'+
-      '<div class="cod" style="margin:18px 0;font-size:40px;letter-spacing:14px">'+esc(a.codigo)+'</div>'+
-      (a.whatsappNegocio
-        ? '<a class="btn full" style="display:block;text-align:center;text-decoration:none" target="_blank" rel="noopener" id="wa" href="https://wa.me/'+esc(a.whatsappNegocio)+'?text='+encodeURIComponent('Confirmo mi pedido con el código '+a.codigo)+'">Abrir WhatsApp y mandarlo</a>'
-        : '<div class="msg mal">Falta configurar el WhatsApp del negocio.</div>')+
-      '<button class="btn ghost full" id="ya" style="margin-top:10px">Ya lo mandé, continuar</button>'+
-      '<div class="msg" id="m2"></div>';
-    $('#ya').onclick=function(){
+    var mando=false;
+    function render(){
+      mo.innerHTML='<h3>Confírmanos tu número</h3>'+
+        '<div class="sub">Falta poco. Son dos pasos.</div>'+
+        '<div class="paso'+(mando?' hecho':' activo')+'"><span class="pn">1</span>'+
+          '<div><b>Mándanos este código por WhatsApp</b>'+
+          '<div class="pd">Así sabemos que el número es tuyo y podemos avisarte cuando salga tu pedido.</div>'+
+          '<div class="cod2">'+esc(a.codigo)+'</div>'+
+          (a.whatsappNegocio
+            ? '<a class="btn '+(mando?'ghost':'')+' full" style="display:block;text-align:center;text-decoration:none;margin-top:10px" target="_blank" rel="noopener" id="wa" href="https://wa.me/'+esc(a.whatsappNegocio)+'?text='+encodeURIComponent('Confirmo mi pedido con el código '+a.codigo)+'">'+(mando?'Volver a mandarlo':'Abrir WhatsApp y mandarlo')+'</a>'
+            : '<div class="msg mal">Falta configurar el WhatsApp del negocio.</div>')+
+          '</div></div>'+
+        '<div class="paso'+(mando?' activo':'')+'"><span class="pn">2</span>'+
+          '<div><b>Regresa aquí y continúa</b>'+
+          '<div class="pd">Te vamos a pedir la dirección de entrega.</div>'+
+          '<button class="btn full '+(mando?'':'ghost')+'" id="ya" style="margin-top:10px">'+(mando?'Ya lo mandé · Continuar':'Continuar sin mandarlo')+'</button>'+
+          '</div></div>'+
+        '<div class="msg" id="m2"></div>';
+      if($('#wa'))$('#wa').onclick=function(){mando=true;setTimeout(render,400);};
+      $('#ya').onclick=seguir;
+    }
+    function seguir(){
+      $('#ya').disabled=true;$('#ya').textContent='Un momento…';
       fetch('/pedir/'+ROW+'/codigo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({telefono:tel,codigo:a.codigo})})
         .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
         .then(function(x){
           if(!x.ok)throw new Error(x.j.error||'Error');
           token=x.j.token;pasoDireccion();
-        }).catch(function(e){$('#m2').className='msg mal';$('#m2').textContent=e.message;});
-    };
+        }).catch(function(e){$('#m2').className='msg mal';$('#m2').textContent=e.message;$('#ya').disabled=false;render();});
+    }
+    // Al regresar de WhatsApp, el paso 2 ya está esperando en naranja
+    document.addEventListener('visibilitychange',function(){if(!document.hidden&&mando)render();});
+    render();
   }
 
   function pasoDireccion(){
