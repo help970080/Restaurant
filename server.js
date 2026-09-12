@@ -29,10 +29,20 @@ const urlSeguimiento = (row, token) => `${PUBLIC_BASE}/t/${row}/${token}`;
 // de mensajeria (el bot de WhatsApp, un proveedor, lo que sea), se le manda el
 // link ahi. Sin la variable no truena: caja lo envia con el boton de la vista
 // Reparto. Nunca bloquea la respuesta del pedido.
-function avisarCliente({ telefono, nombre, negocio, folio, url }) {
+const HAY_WEBHOOK = () => !!process.env.SEGUIMIENTO_WEBHOOK_URL;
+// Dos momentos distintos, dos mensajes distintos. El de la salida es el que
+// de verdad le importa al cliente.
+function textoAviso({ nombre, negocio, folio, url, momento = 'recibido' }) {
+  const hola = `Hola ${nombre || ''}`.trim();
+  if (momento === 'salida') {
+    return `${hola}, tu pedido ${folio} de ${negocio || 'la pizzería'} ya va en camino. Sigue al repartidor en vivo aquí: ${url}`;
+  }
+  return `${hola}, ${negocio || 'tu pedido'} ya recibió tu orden ${folio}. Sigue tu pedido en vivo aquí: ${url}`;
+}
+function avisarCliente({ telefono, nombre, negocio, folio, url, momento = 'recibido' }) {
   const hook = process.env.SEGUIMIENTO_WEBHOOK_URL;
   if (!hook || !telefono || !url) return;
-  const mensaje = `Hola ${nombre || ''}, ${negocio || 'tu pedido'} ya recibió tu orden ${folio}. Sigue tu pedido en vivo aquí: ${url}`.trim();
+  const mensaje = textoAviso({ nombre, negocio, folio, url, momento });
   fetch(hook, {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' },
@@ -1230,17 +1240,31 @@ app.post('/api/reparto/salir', wrap(async (req, res) => {
       && (!sucursalId || p.sucursalId === sucursalId));
     if (!mios.length) throw bad('No traes pedidos tomados', 409);
     const suc = e.sucursales[mios[0].sucursalId] || {};
-    const salidos = [];
+    const salidos = [], avisos = [];
     for (const p of mios) {
       M.recalcularPedido(p);
       M.marcarSalida(e, p);
       for (const l of p.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
       if (suc.coordenadas) p.reparto.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
       salidos.push(p.folio);
+      if (!p.seguimiento || !p.seguimiento.token) p.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
+      avisos.push({
+        folio: p.folio, token: p.seguimiento.token,
+        telefono: (p.cliente && p.cliente.telefono) || null,
+        nombre: (p.cliente && p.cliente.nombre) || '',
+      });
+      p.seguimiento.avisado = new Date().toISOString();
     }
-    return { salidos };
+    return { salidos, avisos, negocio: (e.meta && e.meta.nombre) || '' };
   });
-  res.json(out);
+  const row = ctx().row;
+  const lista = out.avisos.map((a) => Object.assign(a, {
+    url: urlSeguimiento(row, a.token),
+    mensaje: textoAviso({ nombre: a.nombre, negocio: out.negocio, folio: a.folio, url: urlSeguimiento(row, a.token), momento: 'salida' }),
+  }));
+  // Con webhook se manda solo; sin él, el panel ofrece abrir WhatsApp.
+  if (HAY_WEBHOOK()) for (const a of lista) avisarCliente({ telefono: a.telefono, nombre: a.nombre, negocio: out.negocio, folio: a.folio, url: a.url, momento: 'salida' });
+  res.json({ salidos: out.salidos, automatico: HAY_WEBHOOK(), avisos: HAY_WEBHOOK() ? [] : lista });
 }));
 
 // Asignar moto. De paso dispara a cocina lo que siga pendiente.
@@ -1289,11 +1313,28 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
         if (s2 && !s2.coordenadas) { s2.coordenadas = { lat: uo.lat, lng: uo.lng }; s2.coordFuente = 'gps'; }
       }
     }
+    if (!ped.seguimiento || !ped.seguimiento.token) ped.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
+    ped.seguimiento.avisado = new Date().toISOString();
+    ped._avisoSalida = {
+      folio: ped.folio, token: ped.seguimiento.token,
+      telefono: (ped.cliente && ped.cliente.telefono) || null,
+      nombre: (ped.cliente && ped.cliente.nombre) || '',
+      negocio: (e.meta && e.meta.nombre) || '',
+    };
     return r;
   });
   const row = ctx().row;
   setImmediate(() => ubicarDomicilio(row, req.params.folio));
-  res.json(p);
+  const a = p._avisoSalida;
+  let aviso = null;
+  if (a && a.telefono) {
+    const url = urlSeguimiento(row, a.token);
+    const mensaje = textoAviso({ nombre: a.nombre, negocio: a.negocio, folio: a.folio, url, momento: 'salida' });
+    if (HAY_WEBHOOK()) avisarCliente({ telefono: a.telefono, nombre: a.nombre, negocio: a.negocio, folio: a.folio, url, momento: 'salida' });
+    else aviso = { folio: a.folio, nombre: a.nombre, telefono: a.telefono, url, mensaje };
+  }
+  delete p._avisoSalida;
+  res.json(Object.assign({}, p, { automatico: HAY_WEBHOOK(), aviso }));
 }));
 
 // Entregado: el repartidor cobró en la puerta. Cierra el pedido, descuenta
