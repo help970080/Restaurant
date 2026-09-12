@@ -1236,11 +1236,21 @@ function renderTopbar(){
     btn.textContent='Hacer el corte';btn.classList.add('accent');
   }else if(t&&t.id){
     pill.className='turno-pill on';
-    pill.textContent=diario?('Caja del día · '+fechaCorta(t.dia)):('Turno abierto · '+money(t.fondoInicial));
+    pill.textContent=diario?('Caja del día · '+money(t.ventaHoy||0)):('Turno abierto · '+money(t.fondoInicial));
+    pill.title=diario?`${t.pedidosHoy||0} pedido(s) hoy${t.cortesHoy?` · ${t.cortesHoy} corte(s) ya hechos`:''}`:'';
     btn.textContent=diario?'Corte del día':'Cerrar turno';btn.classList.remove('accent');
   }else if(diario){
-    pill.className='turno-pill off';pill.textContent='Sin ventas hoy';
+    // No hay caja abierta. Puede ser que aún no venda nada, o que ya cortó.
     btn.style.display='none';   // en modo diario no hay nada que abrir
+    if(t&&t.cortesHoy>0){
+      pill.className='turno-pill on';
+      pill.textContent=`Corte hecho · ${money(t.ventaHoy||0)}`;
+      pill.title=`${t.pedidosHoy||0} pedido(s) hoy. La caja se abre sola con la próxima venta.`;
+    }else{
+      pill.className='turno-pill off';
+      pill.textContent='Sin ventas hoy';
+      pill.title='La caja se abre sola con la primera venta del día.';
+    }
   }else{
     pill.className='turno-pill off';pill.textContent='Turno cerrado';btn.textContent='Abrir turno';btn.classList.add('accent');
   }
