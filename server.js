@@ -1892,7 +1892,8 @@ app.get('/api/avisos', wrap(async (req, res) => {
       asignados: dom.filter((p) => p.reparto && p.reparto.estado === 'asignado').map((p) => p.folio),
       enRuta: dom.filter(M.enRuta).map((p) => p.folio),
       porLiquidar: porLiquidar.map((p) => p.folio),
-      entregados: dom.filter((p) => p.reparto && p.reparto.estado === 'entregado').map((p) => p.folio),
+      entregados: dom.filter((p) => p.reparto && p.reparto.estado === 'entregado'
+        && diaLocal(p.reparto.entregado, tzTenant(e)) === diaLocal(new Date().toISOString(), tzTenant(e))).map((p) => p.folio),
       tardios,
       efectivoPendiente: M.r2(porLiquidar.reduce((t, p) => t + M.efectivoDePedido(p), 0)),
       promedioMin: prom,
