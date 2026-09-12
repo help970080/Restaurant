@@ -553,6 +553,14 @@
 
 .rc-acts .btn.rojo{color:var(--red);border-color:#f0cdc4}
 .rc-acts .btn.rojo:hover{background:#fdf1ee}
+
+.promo-2x1{background:#f2faf4;border:1px solid var(--green);border-radius:10px;padding:8px 11px;margin-bottom:10px}
+.p2-h{display:flex;justify-content:space-between;align-items:baseline;font-size:14px}
+.p2-h span{font-family:var(--mono);font-weight:700;color:var(--green)}
+.p2-d{font-size:12px;color:var(--muted);margin-top:2px}
+.pm-cats{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.pm-cats label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.pm-cats input{width:auto;margin:0}
 </style>
 </head>
 <body>
@@ -1281,6 +1289,8 @@ function vPOS(){
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}</button>`).join('')}</div>`:''}
+      ${(ped&&ped.promo2x1)?`<div class="promo-2x1"><div class="p2-h"><b>${ped.promo2x1.nombre}</b><span>−${money(ped.promo2x1.monto)}</span></div>
+        <div class="p2-d">Gratis: ${ped.promo2x1.gratis.map(g=>g.nombre).join(', ')}</div></div>`:''}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?tarjetaEntrega(ped):''}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div style="display:flex;gap:6px;margin-bottom:10px">
         <button class="btn accent" id="btnSeg" style="flex:1;font-size:13px"${ped&&ped.folio?'':' disabled'}>📲 Enviar seguimiento</button>
@@ -3180,7 +3190,7 @@ async function vPromociones(){
       <button class="btn" id="addCombo">+ Crear combo</button><button class="btn dark" id="addPromo">+ Nueva promoción</button></div>
     <div class="panel"><h3>Promociones <span class="small">descuentos aplicables en el punto de venta</span></h3>
       ${promos.length?`<table><thead><tr><th>Nombre</th><th>Tipo</th><th class="num">Valor</th><th>Estado</th><th></th></tr></thead><tbody>
-      ${promos.map(p=>`<tr><td>${p.nombre}</td><td>${p.tipo==='porcentaje'?'Porcentaje':'Monto fijo'}</td><td class="num">${p.tipo==='porcentaje'?p.valor+'%':money(p.valor)}</td><td><span class="chip ${p.activo?'ok':'low'}">${p.activo?'Activa':'Inactiva'}</span></td><td class="num"><button class="btn" data-toggle="${p.id}" data-act="${p.activo}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">${p.activo?'Desactivar':'Activar'}</button><button class="btn" data-del="${p.id}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button></td></tr>`).join('')}
+      ${promos.map(p=>`<tr><td>${p.nombre}</td><td>${p.tipo==='2x1'?'2x1':(p.tipo==='porcentaje'?'Porcentaje':'Monto fijo')}</td><td class="num">${p.tipo==='2x1'?(p.categorias||[]).length+' categoría(s)':(p.tipo==='porcentaje'?p.valor+'%':money(p.valor))}</td><td><span class="chip ${p.activo?'ok':'low'}">${p.activo?'Activa':'Inactiva'}</span></td><td class="num"><button class="btn" data-toggle="${p.id}" data-act="${p.activo}" style="padding:7px 11px;font-size:12px;min-height:auto;margin-right:6px">${p.activo?'Desactivar':'Activar'}</button><button class="btn" data-del="${p.id}" style="padding:7px 11px;font-size:12px;min-height:auto">Eliminar</button></td></tr>`).join('')}
       </tbody></table>`:'<div class="empty">Aún no hay promociones. Crea una con el botón de arriba.</div>'}</div>
     <div class="panel" style="margin-top:16px"><h3>¿Qué es un combo?</h3><div style="color:var(--muted);font-size:14px;line-height:1.6">Un combo es un producto que junta varios (ej. hamburguesa + papas + refresco) a un precio especial. Aparece en el menú y en el punto de venta como cualquier producto, y descuenta los insumos de cada componente automáticamente.</div></div>`;
   $('#addPromo').onclick=modalNuevaPromo;
@@ -3189,6 +3199,44 @@ async function vPromociones(){
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{await API.del('/api/promociones/'+b.dataset.del);vPromociones();});
 }
 function modalNuevaPromo(){
+  return modalPromo();
+}
+async function modalPromo(){
+  let cats=[];try{cats=Object.values((await API.get('/api/menu')).categorias||{});}catch{}
+  let tipo='2x1';
+  const pinta=()=>{
+    modal.innerHTML=`<h3>Nueva promoción</h3>
+      <div class="field"><label>Tipo</label><select id="pmTipo">
+        <option value="2x1" ${tipo==='2x1'?'selected':''}>2x1 — se cobra la más cara de cada par</option>
+        <option value="porcentaje" ${tipo==='porcentaje'?'selected':''}>Descuento por porcentaje</option>
+        <option value="monto" ${tipo==='monto'?'selected':''}>Descuento de monto fijo</option></select></div>
+      <div class="field"><label>Nombre</label><input id="pmNom" value="${tipo==='2x1'?'2x1 todos los días':''}" placeholder="Como lo verá caja"></div>
+      ${tipo==='2x1'
+        ?`<div class="field"><label>¿Qué categorías participan?</label>
+           <div class="pm-cats">${cats.map(c=>`<label><input type="checkbox" class="pm-c" value="${c.id}" ${/especial|gourmet/i.test(c.nombre)?'checked':''}> ${c.nombre}</label>`).join('')}</div>
+           <div class="small" style="color:var(--muted);margin-top:6px">Deja fuera formatos grandes y bebidas. Se aplica solo si hay dos o más piezas de las categorías marcadas.</div></div>`
+        :`<div class="field"><label>Valor</label><input id="pmVal" type="number" placeholder="${tipo==='porcentaje'?'10':'50'}"></div>`}
+      <div class="modal-foot"><button class="btn-ghost" id="pmNo">Cancelar</button><button class="btn-primary" id="pmOk">Crear</button></div>`;
+    $('#pmTipo').onchange=()=>{tipo=$('#pmTipo').value;pinta();};
+    $('#pmNo').onclick=closeModal;
+    $('#pmOk').onclick=async()=>{
+      const nombre=$('#pmNom').value.trim();
+      if(!nombre){toast('Ponle nombre');return;}
+      const body={nombre,tipo};
+      if(tipo==='2x1'){
+        body.categorias=[...modal.querySelectorAll('.pm-c:checked')].map(x=>x.value);
+        if(!body.categorias.length){toast('Marca al menos una categoría');return;}
+      }else{
+        body.valor=+$('#pmVal').value||0;
+        if(!(body.valor>0)){toast('Pon un valor mayor a cero');return;}
+      }
+      try{await API.post('/api/promociones',body);closeModal();toast('Promoción creada',{tipo:'ok'});vPromociones();}
+      catch(e){toast(e.message,{ms:6000});}
+    };
+  };
+  pinta();ov.classList.add('show');
+}
+function modalNuevaPromoViejo(){
   modal.innerHTML=`<h3>Nueva promoción</h3><div class="sub">Descuento que podrás aplicar a un pedido</div>
     <div class="field"><label>Nombre</label><input id="prNom" placeholder="Ej. Martes 2x1, Cliente frecuente"></div>
     <div class="field"><label>Tipo</label><select id="prTipo"><option value="porcentaje">Porcentaje (%)</option><option value="monto">Monto fijo ($)</option></select></div>
