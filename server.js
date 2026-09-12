@@ -6,6 +6,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const M = require('./model');
@@ -29,7 +30,71 @@ const urlSeguimiento = (row, token) => `${PUBLIC_BASE}/t/${row}/${token}`;
 // de mensajeria (el bot de WhatsApp, un proveedor, lo que sea), se le manda el
 // link ahi. Sin la variable no truena: caja lo envia con el boton de la vista
 // Reparto. Nunca bloquea la respuesta del pedido.
-const HAY_WEBHOOK = () => !!process.env.SEGUIMIENTO_WEBHOOK_URL;
+// ---------------------------------------------------------------------------
+//  MENSAJERÍA — el canal es intercambiable
+//  Baileys (WhatsApp no oficial) no sirve en producción: banea y exige una
+//  máquina encendida. Aquí el canal se elige con MENSAJERIA y se puede cambiar
+//  sin tocar el resto del sistema.
+//    sms_twilio       Twilio u otro proveedor de SMS. Sin aprobaciones.
+//    whatsapp_cloud   API oficial de Meta. Sin riesgo de baneo, pide plantilla.
+//    webhook          Tu propio servicio (el bot, un gateway SMS, lo que sea).
+//    ninguno          Sin canal: el cliente confirma él mismo por WhatsApp.
+// ---------------------------------------------------------------------------
+const CANAL = (process.env.MENSAJERIA || (process.env.SEGUIMIENTO_WEBHOOK_URL ? 'webhook' : 'ninguno')).toLowerCase();
+const HAY_CANAL = () => CANAL !== 'ninguno';
+const telE164 = (t) => { const d = String(t || '').replace(/\D/g, ''); return d.length === 10 ? '+52' + d : (d.startsWith('52') ? '+' + d : '+' + d); };
+
+async function enviarMensaje({ telefono, mensaje, plantilla = null, variables = [] }) {
+  if (!telefono || !mensaje) return false;
+  try {
+    if (CANAL === 'sms_twilio') {
+      const sid = process.env.TWILIO_SID, tok = process.env.TWILIO_TOKEN, from = process.env.TWILIO_FROM;
+      if (!sid || !tok || !from) throw new Error('faltan TWILIO_SID / TWILIO_TOKEN / TWILIO_FROM');
+      const body = new URLSearchParams({ To: telE164(telefono), From: from, Body: mensaje });
+      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+        method: 'POST',
+        headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      if (!r.ok) throw new Error('twilio ' + r.status + ' ' + (await r.text()).slice(0, 200));
+      return true;
+    }
+    if (CANAL === 'whatsapp_cloud') {
+      const id = process.env.WA_PHONE_ID, tok = process.env.WA_TOKEN;
+      if (!id || !tok) throw new Error('faltan WA_PHONE_ID / WA_TOKEN');
+      // Fuera de las 24 h de conversación, Meta solo deja plantillas aprobadas.
+      const payload = plantilla
+        ? { messaging_product: 'whatsapp', to: telE164(telefono).replace('+', ''), type: 'template',
+            template: { name: plantilla, language: { code: 'es_MX' },
+              components: variables.length ? [{ type: 'body', parameters: variables.map((v) => ({ type: 'text', text: String(v) })) }] : [] } }
+        : { messaging_product: 'whatsapp', to: telE164(telefono).replace('+', ''), type: 'text', text: { body: mensaje } };
+      const r = await fetch(`https://graph.facebook.com/v21.0/${id}/messages`, {
+        method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error('meta ' + r.status + ' ' + (await r.text()).slice(0, 200));
+      return true;
+    }
+    if (CANAL === 'webhook') {
+      const hook = process.env.SEGUIMIENTO_WEBHOOK_URL;
+      if (!hook) throw new Error('falta SEGUIMIENTO_WEBHOOK_URL');
+      const r = await fetch(hook, {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' },
+          process.env.SEGUIMIENTO_WEBHOOK_TOKEN ? { Authorization: 'Bearer ' + process.env.SEGUIMIENTO_WEBHOOK_TOKEN } : {}),
+        body: JSON.stringify({ telefono, mensaje }),
+      });
+      if (!r || !r.ok) throw new Error('webhook ' + (r && r.status));
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[mensajeria:${CANAL}] no se pudo enviar:`, err && err.message);
+    return false;
+  }
+}
+
+const HAY_WEBHOOK = () => HAY_CANAL();
 // Dos momentos distintos, dos mensajes distintos. El de la salida es el que
 // de verdad le importa al cliente.
 function textoAviso({ nombre, negocio, folio, url, momento = 'recibido' }) {
@@ -40,15 +105,9 @@ function textoAviso({ nombre, negocio, folio, url, momento = 'recibido' }) {
   return `${hola}, ${negocio || 'tu pedido'} ya recibió tu orden ${folio}. Sigue tu pedido en vivo aquí: ${url}`;
 }
 function avisarCliente({ telefono, nombre, negocio, folio, url, momento = 'recibido' }) {
-  const hook = process.env.SEGUIMIENTO_WEBHOOK_URL;
-  if (!hook || !telefono || !url) return;
+  if (!HAY_CANAL() || !telefono || !url) return;
   const mensaje = textoAviso({ nombre, negocio, folio, url, momento });
-  fetch(hook, {
-    method: 'POST',
-    headers: Object.assign({ 'Content-Type': 'application/json' },
-      process.env.SEGUIMIENTO_WEBHOOK_TOKEN ? { Authorization: 'Bearer ' + process.env.SEGUIMIENTO_WEBHOOK_TOKEN } : {}),
-    body: JSON.stringify({ telefono, mensaje, url, folio }),
-  }).catch((err) => console.error('[seguimiento] no se pudo avisar:', err && err.message));
+  enviarMensaje({ telefono, mensaje, plantilla: process.env.WA_PLANTILLA_SEGUIMIENTO || null, variables: [nombre || '', folio, url] });
 }
 
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
@@ -1040,6 +1099,22 @@ app.get('/api/pedidos', wrap(async (req, res) => {
   });
   res.json(arr);
 }));
+app.get('/api/pedidos/por-confirmar', wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId } = req.query;
+  res.json(Object.values(e.pedidos)
+    .filter((p) => p.confirmacion && p.confirmacion.estado === 'pendiente' && p.estado === 'abierto'
+      && (!sucursalId || p.sucursalId === sucursalId))
+    .sort((a, b) => new Date(a.creado) - new Date(b.creado))
+    .map((p) => ({
+      folio: p.folio, creado: p.creado, total: p.total,
+      cliente: p.cliente, notasCliente: p.notasCliente || '',
+      motivo: p.confirmacion.motivo, entregasPrevias: p.confirmacion.entregasPrevias,
+      codigoTel: p.confirmacion.codigoTel || null, verificacion: p.confirmacion.verificacion || null,
+      items: p.lineas.map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, modificadores: l.modificadores.map((m) => m.opcionNombre) })),
+    })));
+}));
+
 app.get('/api/pedidos/:folio', wrap(async (req, res) => {
   const e = await readState();
   const p = e.pedidos[req.params.folio];
@@ -1827,6 +1902,7 @@ app.get('/api/avisos', wrap(async (req, res) => {
       atrasado: !!(turno && cajaModo(e) === 'diario' && diaLocal(turno.abierto, tzTenant(e)) !== diaLocal(new Date().toISOString(), tzTenant(e))),
       // Mesas se cobran en Mesas y domicilios en Reparto (los cobra la moto).
       porCobrar: mio ? [] : peds.filter((p) => p.estado === 'abierto' && p.tipoServicio === 'mostrador' && p.lineas.length).map((p) => p.folio),
+      porConfirmar: mio ? [] : peds.filter((p) => p.confirmacion && p.confirmacion.estado === 'pendiente').map((p) => p.folio),
       mesasConCuenta: mio ? 0 : Object.values(e.mesas || {}).filter((m) => (!sucursalId || m.sucursalId === sucursalId) && m.estado === 'cuenta').length,
     },
   });
@@ -2579,6 +2655,212 @@ app.post('/t/:row/:token/calificar', express.json(), (req, res) => {
     }
   });
 });
+
+// ===========================================================================
+//  PEDIDO EN LÍNEA A DOMICILIO — público, sin sesión
+//  El riesgo de pegar la liga en redes son los pedidos fantasma. Se defiende
+//  por capas, no cobrando por adelantado a todo el mundo:
+//    1. El teléfono se verifica con un código que llega por WhatsApp.
+//    2. El pedido NO entra a cocina: cae en "por confirmar" y caja lo acepta.
+//    3. Un cliente que ya recibió varias entregas se salta la confirmación.
+//    4. Un teléfono marcado como fantasma queda bloqueado.
+// ===========================================================================
+const PEDIR_PAGE = path.join(__dirname, 'public', 'pedir.html');
+const ENTREGAS_PARA_CONFIAR = +(process.env.ENTREGAS_PARA_CONFIAR || 3);
+const MONTO_REVISION = +(process.env.MONTO_REVISION || 800);
+
+app.get('/pedir/:row/:suc', (req, res) => res.sendFile(PEDIR_PAGE));
+
+// Menú público: solo lo que el cliente necesita ver para armar su pedido.
+app.get('/pedir/:row/:suc/menu', (req, res) => {
+  runPublic(Number(req.params.row), async () => {
+    try {
+      const e = await readState();
+      if (!e) return res.status(404).json({ error: 'No disponible' });
+      const suc = e.sucursales[req.params.suc];
+      if (!suc) return res.status(404).json({ error: 'Sucursal no encontrada' });
+      const cats = Object.values(e.menu.categorias).filter((c) => c.visible !== false)
+        .sort((a, b) => (a.orden || 0) - (b.orden || 0));
+      const prods = Object.values(e.menu.productos).filter((p) => p.activo !== false && p.disponible !== false);
+      const usados = new Set(prods.flatMap((p) => p.gruposIds || []));
+      res.json({
+        negocio: (e.meta && e.meta.nombre) || '', logo: (e.config && e.config.logo) || null,
+        sucursal: { id: suc.id, nombre: suc.nombre, telefono: suc.telefono || null },
+        categorias: cats.filter((c) => prods.some((p) => p.categoriaId === c.id)).map((c) => ({ id: c.id, nombre: c.nombre })),
+        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [] })),
+        grupos: Object.values(e.menu.gruposModificadores).filter((g) => usados.has(g.id))
+          .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio,
+            opciones: g.opciones.filter((o) => o.activo !== false).map((o) => ({ id: o.id, nombre: o.nombre, precioDelta: o.precioDelta })) })),
+        promo2x1: (() => { const p = M.promo2x1Activa(e); return p ? { nombre: p.nombre, categorias: p.categorias } : null; })(),
+      });
+    } catch (err) { console.error('[pedir/menu]', err && err.message); res.status(500).json({ error: 'Error' }); }
+  });
+});
+
+// --- Verificación del teléfono ---------------------------------------------
+const codigoTel = () => String(1000 + crypto.randomBytes(2).readUInt16BE(0) % 9000);
+const verifs = new Map();   // telefono -> { codigo, expira, intentos, enviado }
+const tokensTel = new Map(); // token -> { telefono, expira }
+setInterval(() => {
+  const t = Date.now();
+  for (const [k, v] of verifs) if (v.expira < t) verifs.delete(k);
+  for (const [k, v] of tokensTel) if (v.expira < t) tokensTel.delete(k);
+}, 60000).unref();
+
+// Número de WhatsApp del negocio, para que el cliente le escriba.
+function WA_NEGOCIO(e, sucId) {
+  const suc = sucId && e.sucursales[sucId];
+  const t = (suc && suc.telefono) || process.env.WHATSAPP_NEGOCIO || '';
+  const d = String(t).replace(/\D/g, '');
+  return d.length === 10 ? '521' + d : d;
+}
+
+app.post('/pedir/:row/verificar', express.json(), (req, res) => {
+  runPublic(Number(req.params.row), async () => {
+    try {
+      const tel = M.llaveTel((req.body || {}).telefono);
+      if (tel.length !== 10) return res.status(400).json({ error: 'Escribe tu teléfono a 10 dígitos' });
+      const e = await readState();
+      const cli = (e.clientes || {})[tel];
+      if (cli && cli.bloqueado) return res.status(403).json({ error: 'No podemos tomar pedidos de este número. Llámanos por favor.' });
+      const prev = verifs.get(tel);
+      if (prev && prev.enviado > Date.now() - 45000) {
+        return res.json({ ok: true, reenviarEn: Math.ceil((prev.enviado + 45000 - Date.now()) / 1000) });
+      }
+      const codigo = codigoTel();
+      verifs.set(tel, { codigo, expira: Date.now() + 10 * 60000, intentos: 0, enviado: Date.now() });
+      const negocio = (e.meta && e.meta.nombre) || 'la pizzería';
+      const texto = `Tu código para pedir en ${negocio} es ${codigo}. No lo compartas.`;
+      if (HAY_CANAL()) {
+        enviarMensaje({ telefono: tel, mensaje: texto, plantilla: process.env.WA_PLANTILLA_CODIGO || null, variables: [codigo] });
+      } else {
+        console.log(`[pedir] código para ${tel}: ${codigo} (sin canal de mensajería)`);
+      }
+      // Sin canal, el cliente lo manda ÉL desde su WhatsApp al negocio: eso
+      // prueba igual que el número es suyo y no cuesta ni depende de nadie.
+      res.json({
+        ok: true, enviado: HAY_CANAL(), canal: CANAL, reenviarEn: 45,
+        autoconfirmar: !HAY_CANAL() ? { codigo, whatsappNegocio: WA_NEGOCIO(e, (req.body || {}).sucursalId) } : null,
+      });
+    } catch (err) { console.error('[pedir/verificar]', err && err.message); res.status(500).json({ error: 'Error' }); }
+  });
+});
+
+app.post('/pedir/:row/codigo', express.json(), (req, res) => {
+  const tel = M.llaveTel((req.body || {}).telefono);
+  const codigo = String((req.body || {}).codigo || '').replace(/\D/g, '');
+  const v = verifs.get(tel);
+  if (!v || v.expira < Date.now()) return res.status(400).json({ error: 'El código venció. Pide uno nuevo.' });
+  v.intentos++;
+  if (v.intentos > 6) { verifs.delete(tel); return res.status(429).json({ error: 'Demasiados intentos. Pide un código nuevo.' }); }
+  if (codigo !== v.codigo) return res.status(400).json({ error: 'Código incorrecto' });
+  verifs.delete(tel);
+  const token = crypto.randomBytes(12).toString('hex');
+  tokensTel.set(token, { telefono: tel, expira: Date.now() + 30 * 60000, codigo, autoconfirmado: !HAY_CANAL() });
+  res.json({ ok: true, token });
+});
+
+// --- El pedido --------------------------------------------------------------
+app.post('/pedir/:row/:suc/pedido', express.json(), (req, res) => {
+  const row = Number(req.params.row);
+  runPublic(row, async () => {
+    try {
+      const { token, cliente = {}, items = [], notas = '' } = req.body || {};
+      const t = tokensTel.get(token);
+      if (!t || t.expira < Date.now()) return res.status(401).json({ error: 'Vuelve a verificar tu teléfono' });
+      if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Tu pedido está vacío' });
+      if (items.length > 30) return res.status(400).json({ error: 'Demasiados productos. Llámanos para un pedido grande.' });
+
+      const out = await withState((e) => {
+        const suc = e.sucursales[req.params.suc];
+        if (!suc) { const x = new Error('Sucursal no encontrada'); x.status = 404; throw x; }
+        const entrega = M.normalizarEntrega(Object.assign({}, cliente, { telefono: t.telefono }));
+        const previo = (e.clientes || {})[t.telefono];
+        if (previo && previo.bloqueado) { const x = new Error('No podemos tomar pedidos de este número'); x.status = 403; throw x; }
+
+        const p = M.crearPedido(e, { sucursalId: suc.id, codigo: suc.codigo, tipoServicio: 'domicilio',
+          cliente: entrega, usuario: 'en línea', canalId: 'linea' });
+        p.origen = 'linea';
+        p.notasCliente = String(notas || '').trim().slice(0, 200);
+        for (const it of items) {
+          const prod = e.menu.productos[it.productoId];
+          if (!prod || prod.activo === false) continue;
+          const cant = Math.max(1, Math.min(20, parseInt(it.cantidad, 10) || 1));
+          p.lineas.push(M.crearLinea(prod, e, { cantidad: cant, modsElegidos: it.modsElegidos || [], notas: String(it.notas || '').slice(0, 80) }));
+        }
+        if (!p.lineas.length) { const x = new Error('Ninguno de esos productos está disponible'); x.status = 400; throw x; }
+        M.calcular2x1(e, p);
+        M.recalcularPedido(p);
+
+        // ¿Entra directo o pasa por confirmación?
+        const entregas = (previo && previo.pedidos) || 0;
+        const confiable = entregas >= ENTREGAS_PARA_CONFIAR && !!(previo && previo.verificado);
+        const caro = p.total >= MONTO_REVISION;
+        const auto = confiable && !caro;
+        // Sin canal de mensajería la verificación es más débil: el cliente dice
+        // haber mandado el código. Entonces SIEMPRE pasa por caja, que lo
+        // coteja contra su WhatsApp Business.
+        const debil = !!t.autoconfirmado;
+        p.confirmacion = {
+          codigoTel: debil ? t.codigo : null,
+          verificacion: debil ? 'el cliente dice haberlo mandado' : 'código confirmado',
+          estado: (auto && !debil) ? 'aceptado' : 'pendiente',
+          motivo: (auto && !debil) ? 'cliente frecuente' : (caro ? 'monto alto' : (debil ? 'cotejar código en WhatsApp' : (entregas ? 'pocos pedidos previos' : 'cliente nuevo'))),
+          entregasPrevias: entregas,
+          creado: new Date().toISOString(),
+          aceptadoPor: auto ? 'automático' : null,
+        };
+        if (auto && !debil) M.mandarComanda(p);   // solo entonces la cocina lo ve
+        M.upsertCliente(e, entrega, { sumarPedido: true });
+        return { folio: p.folio, total: p.total, token: p.seguimiento.token, estado: p.confirmacion.estado };
+      });
+      setImmediate(() => ubicarDomicilio(row, out.folio));
+      res.json({ folio: out.folio, total: out.total, confirmado: out.estado === 'aceptado',
+        seguimiento: urlSeguimiento(row, out.token) });
+    } catch (err) {
+      console.error('[pedir/pedido]', err && err.message);
+      res.status(err.status || 500).json({ error: err.message || 'No se pudo tomar el pedido' });
+    }
+  });
+});
+
+// --- Caja confirma ----------------------------------------------------------
+app.post('/api/pedidos/:folio/aceptar', puedeCaja, wrap(async (req, res) => {
+  const p = await withState((e, c) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    if (!ped.confirmacion || ped.confirmacion.estado !== 'pendiente') throw bad('Ese pedido no está por confirmar', 409);
+    ped.confirmacion.estado = 'aceptado';
+    ped.confirmacion.aceptadoPor = c.username;
+    ped.confirmacion.aceptado = new Date().toISOString();
+    M.mandarComanda(ped);
+    return ped;
+  });
+  res.json(p);
+}));
+
+app.post('/api/pedidos/:folio/rechazar', puedeCaja, wrap(async (req, res) => {
+  const { motivo = '', bloquear = false } = req.body || {};
+  const p = await withState((e, c) => {
+    const ped = e.pedidos[req.params.folio];
+    if (!ped) throw bad('Pedido inexistente', 404);
+    if (!ped.confirmacion || ped.confirmacion.estado !== 'pendiente') throw bad('Ese pedido no está por confirmar', 409);
+    ped.confirmacion.estado = 'rechazado';
+    ped.confirmacion.motivoRechazo = String(motivo || '').trim();
+    ped.estado = 'cancelado';
+    ped.canceladoEn = new Date().toISOString();
+    if (!e.cancelaciones) e.cancelaciones = [];
+    e.cancelaciones.unshift({ folio: ped.folio, etiqueta: 'Pedido en línea rechazado', motivo: ped.confirmacion.motivoRechazo,
+      total: ped.total, usuario: c.username, fecha: ped.canceladoEn });
+    // Marcar el teléfono corta de raíz al que insiste
+    if (bloquear) {
+      const cli = (e.clientes || {})[M.llaveTel(ped.cliente && ped.cliente.telefono)];
+      if (cli) { cli.bloqueado = true; cli.bloqueadoPor = c.username; cli.bloqueadoEn = ped.canceladoEn; }
+    }
+    return ped;
+  });
+  res.json(p);
+}));
 
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
