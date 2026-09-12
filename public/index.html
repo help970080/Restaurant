@@ -611,6 +611,12 @@
 
 .pc-cod{background:var(--ink);color:#f2ede2;border-radius:9px;padding:7px 10px;font-size:12px;margin-top:7px;line-height:1.4}
 .pc-cod b{font-family:var(--mono);font-size:17px;letter-spacing:2px}
+
+.lpartes{font-size:11.5px;color:var(--blue);font-weight:600;margin-top:1px}
+.ko-partes{display:flex;gap:6px;flex-wrap:wrap;background:#eef4f9;border-radius:7px;padding:5px 8px;margin-top:5px;font-size:14px;font-weight:700;color:var(--blue)}
+.pt-n{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 4px}
+.pt-b{flex:1 1 auto;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 10px;font-size:13px;font-weight:700;cursor:pointer}
+.pt-b.on{background:var(--ink);color:#f2ede2;border-color:var(--ink)}
 </style>
 </head>
 <body>
@@ -1457,10 +1463,50 @@ async function asegurarPedido(){
   }
   const p=await API.post('/api/pedidos',body);app.pos.folio=p.folio;app.pos.pedido=p;return p;
 }
+// La Mega y la Barra se pueden pedir con varias especialidades sin que cambie
+// el precio. Aquí el cliente elige en cuántas partes y qué sabor va en cada una.
+function modalPartes(prod){
+  const d=prod.divisible||{};
+  const max=Math.min(4,Math.max(2,+d.maxPartes||2));
+  const excluir=d.excluirCategorias||[];
+  const opciones=Object.values(app.menu.productos)
+    .filter(p=>p.id!==prod.id&&p.activo!==false&&p.disponible!==false&&!excluir.includes(p.categoriaId)&&!p.divisible)
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const ETIQ={1:'Entera',2:'Mitad y mitad',3:'En tres',4:'En cuatro'};
+  let n=1, sel=[];
+  const render=()=>{
+    modal.innerHTML=`<h3>${prod.nombre}</h3>
+      <div class="sub">${money(prod.precioBase)} · el precio no cambia aunque la dividas</div>
+      <div class="pt-n">${Array.from({length:max},(_,i)=>i+1).map(k=>
+        `<button class="pt-b ${n===k?'on':''}" data-n="${k}">${ETIQ[k]||k}</button>`).join('')}</div>
+      ${n>1?Array.from({length:n},(_,i)=>`<div class="field"><label>Parte ${i+1}</label>
+        <select class="pt-s" data-i="${i}"><option value="">— elige el sabor —</option>
+        ${opciones.map(o=>`<option value="${o.id}" ${sel[i]===o.id?'selected':''}>${o.nombre}</option>`).join('')}</select></div>`).join('')
+        :'<div class="sub" style="margin-top:10px">Se prepara de un solo sabor, como viene en el menú.</div>'}
+      ${excluir.length?`<div class="small" style="color:var(--muted);margin-top:8px">No se pueden combinar: ${excluir.map(c=>(app.menu.categorias[c]||{}).nombre).filter(Boolean).join(', ')}.</div>`:''}
+      <div class="modal-foot"><button class="btn-ghost" id="ptNo">Cancelar</button><button class="btn-primary" id="ptOk">Agregar</button></div>`;
+    modal.querySelectorAll('[data-n]').forEach(b=>b.onclick=()=>{n=+b.dataset.n;sel=sel.slice(0,n);render();});
+    modal.querySelectorAll('.pt-s').forEach(s2=>s2.onchange=()=>{sel[+s2.dataset.i]=s2.value;});
+    $('#ptNo').onclick=closeModal;
+    $('#ptOk').onclick=async()=>{
+      let partes=null;
+      if(n>1){
+        partes=sel.slice(0,n).filter(Boolean);
+        if(partes.length!==n){toast('Elige el sabor de cada parte');return;}
+      }
+      try{
+        app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,partes});
+        closeModal();renderLines();
+      }catch(e){toast(e.message,{ms:6000});}
+    };
+  };
+  render();ov.classList.add('show');
+}
 async function onProducto(prod){
   if(!app.turno){toast('Abre el turno antes de vender');return;}
   try{
     await asegurarPedido();
+    if(prod.divisible){modalPartes(prod);return;}
     if(prod.gruposIds.length){modalModificadores(prod);return;}
     app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1});
     renderLines();
@@ -1544,7 +1590,7 @@ function modalEntrega(actual,onOk){
 function renderLines(){
   const ped=app.pos.pedido;const cont=$('#lines');if(!cont)return;
   if(!ped||!ped.lineas.length){cont.innerHTML=`<div class="empty">${app.turno?'Toca un producto para empezar.':'Abre el turno para vender.'}</div>`;}
-  else cont.innerHTML=ped.lineas.map(l=>`<div class="line"><div style="flex:1"><div class="lname">${l.cantidad}× ${l.nombre}</div>${l.modificadores.length?`<div class="lmod">${l.modificadores.map(m=>m.opcionNombre+(m.precioDelta?` (+${money(m.precioDelta)})`:'')).join(' · ')}</div>`:''}${l.notas?`<div class="lnote">“${l.notas}”</div>`:''}</div><div class="lprice">${money(l.importe)}</div><button class="rm" data-rm="${l.id}">×</button></div>`).join('');
+  else cont.innerHTML=ped.lineas.map(l=>`<div class="line"><div style="flex:1"><div class="lname">${l.cantidad}× ${l.nombre}</div>${l.partes?`<div class="lpartes">${l.fraccion}: ${l.partes.map(x=>x.nombre).join(' / ')}</div>`:''}${l.modificadores.length?`<div class="lmod">${l.modificadores.map(m=>m.opcionNombre+(m.precioDelta?` (+${money(m.precioDelta)})`:'')).join(' · ')}</div>`:''}${l.notas?`<div class="lnote">“${l.notas}”</div>`:''}</div><div class="lprice">${money(l.importe)}</div><button class="rm" data-rm="${l.id}">×</button></div>`).join('');
   cont.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{app.pos.pedido=await API.del(`/api/pedidos/${app.pos.folio}/lineas/${b.dataset.rm}`);renderLines();});
   const sub=ped?ped.subtotal:0,env=ped?ped.costoEnvio:0,tot=ped?ped.total:0;
   $('#tSub').textContent=money(sub);
@@ -1704,7 +1750,7 @@ function ticketHTML(p){
   ${canal&&canal.esApp?`<div class="muted">Canal: ${canal.nombre}</div>`:''}
   ${p.cliente&&p.cliente.nombre?`<div class="muted">Cliente: ${p.cliente.nombre}</div>`:''}
   <hr>
-  ${p.lineas.map(l=>`<div class="it"><div class="row"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>${(l.modificadores||[]).map(m=>`<div class="mod">+ ${m.opcionNombre}</div>`).join('')}${l.notas?`<div class="mod">Nota: ${l.notas}</div>`:''}</div>`).join('')}
+  ${p.lineas.map(l=>`<div class="it"><div class="row"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>${l.partes?`<div class="mod">${l.fraccion}: ${l.partes.map(x=>x.nombre).join(' / ')}</div>`:''}${(l.modificadores||[]).map(m=>`<div class="mod">+ ${m.opcionNombre}</div>`).join('')}${l.notas?`<div class="mod">Nota: ${l.notas}</div>`:''}</div>`).join('')}
   <hr>
   <div class="row"><span>Subtotal</span><span>${money(p.subtotal)}</span></div>
   ${desc?`<div class="row"><span>Descuento${p.descuento&&p.descuento.motivo?' ('+p.descuento.motivo+')':''}</span><span>-${money(desc)}</span></div>`:''}
@@ -1725,7 +1771,7 @@ function imprimirTicket(p){
 }
 function ticketFinal(p){
   modal.innerHTML=`<h3>${p.folio}</h3><div class="sub">${p.tipoServicio} · cobrado</div>
-    <div class="breakdown">${p.lineas.map(l=>`<div class="b"><span>${l.cantidad}× ${l.nombre}</span><span>${money(l.importe)}</span></div>`).join('')}${p.costoEnvio?`<div class="b"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}<div class="b hl"><span>Total</span><span>${money(p.total)}</span></div>${p.propina&&p.propina.monto?`<div class="b"><span>Propina</span><span>${money(p.propina.monto)}</span></div>`:''}<div class="b"><span>Pago (${p.pago.metodo})</span><span>${money(p.pago.recibido||p.total)}</span></div>${p.pago.cambio?`<div class="b"><span>Cambio</span><span>${money(p.pago.cambio)}</span></div>`:''}</div>
+    <div class="breakdown">${p.lineas.map(l=>`<div class="b"><span>${l.cantidad}× ${l.nombre}${l.partes?' ('+l.partes.map(x=>x.nombre).join(' / ')+')':''}</span><span>${money(l.importe)}</span></div>`).join('')}${p.costoEnvio?`<div class="b"><span>Envío</span><span>${money(p.costoEnvio)}</span></div>`:''}<div class="b hl"><span>Total</span><span>${money(p.total)}</span></div>${p.propina&&p.propina.monto?`<div class="b"><span>Propina</span><span>${money(p.propina.monto)}</span></div>`:''}<div class="b"><span>Pago (${p.pago.metodo})</span><span>${money(p.pago.recibido||p.total)}</span></div>${p.pago.cambio?`<div class="b"><span>Cambio</span><span>${money(p.pago.cambio)}</span></div>`:''}</div>
     <div class="modal-foot"><button class="btn-ghost" id="okPrint">🖨 Imprimir ticket</button><button class="btn-primary" id="okDone">Listo</button></div>`;
   ov.classList.add('show');
   $('#okPrint').onclick=()=>imprimirTicket(p);
@@ -1938,8 +1984,9 @@ function modalAvisarClientes(avisos,cuantos,yaRefrescado){
   const con=(avisos||[]).filter(a=>a.telefono);
   if(!con.length){toast(`Saliste con ${cuantos} pedido(s)`,{tipo:'ok'});if(!yaRefrescado)vReparto();return;}
   const wa=(tel)=>{const d=String(tel).replace(/\D/g,'');return d.length===10?'521'+d:d;};
-  modal.innerHTML=`<h3>Avisa que vas en camino</h3>
-    <div class="sub">Un toque por cliente. Se abre WhatsApp con el mensaje listo.</div>
+  const confirma=con.length===1&&/confirmamos tu pedido/.test(con[0].mensaje||'');
+  modal.innerHTML=`<h3>${confirma?'Confírmale al cliente':'Avisa que vas en camino'}</h3>
+    <div class="sub">${confirma?'Mándale la liga para que siga su pedido.':'Un toque por cliente. Se abre WhatsApp con el mensaje listo.'}</div>
     <div class="av-lista">${con.map((a,i)=>`<button class="av-b" data-i="${i}">
       <span class="av-n">${a.nombre||a.folio}</span><span class="av-t">${a.telefono}</span><span class="av-w">Avisar</span></button>`).join('')}</div>
     <div class="modal-foot"><button class="btn-primary" id="avListo" style="width:100%">Listo, ya salí</button></div>`;
@@ -2342,7 +2389,7 @@ async function pintarCocina(){
     const tk=p.listo?'ready':tier(min);
     return `<div class="ko ko-${tk} ${p.listo?'listo':''}"><div class="ko-head"><span class="folio">${p.folio}</span><span class="timer">${p.listo?'LISTO':min+' min'}</span></div><div class="ko-srv">${srv}${p.colonia?' · '+p.colonia:''}</div>
       ${p.codigo?`<div class="ko-cod"><span>Escribe en la caja</span><b>${p.codigo}</b></div>`:''}
-      <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${est==='__all'&&estaciones.length>1?` <span class="ko-est">${l.estacion||'Cocina'}</span>`:''}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
+      <div class="ko-body">${p.items.map(l=>`<div class="ko-item">${l.cantidad}× ${l.nombre}${est==='__all'&&estaciones.length>1?` <span class="ko-est">${l.estacion||'Cocina'}</span>`:''}${l.partes?`<div class="ko-partes">${l.partes.map(x=>x.nombre).join(' &nbsp;|&nbsp; ')}</div>`:''}${l.modificadores.length?`<div class="m">${l.modificadores.join(', ')}</div>`:''}${l.notas?`<div class="n">“${l.notas}”</div>`:''}</div>`).join('')}</div>
       <div class="ko-foot">${p.listo?`<button class="b-entregar" data-entregar="${p.folio}">Entregar</button>`:`<button class="b-listo" data-listo="${p.folio}">Marcar listo</button>`}</div></div>`;}).join('')}</div>`;
   document.querySelectorAll('[data-est]').forEach(b=>b.onclick=()=>{app.cocinaEst=b.dataset.est;pintarCocina();});
   document.querySelectorAll('[data-listo]').forEach(b=>b.onclick=async()=>{await API.post(`/api/cocina/${b.dataset.listo}/listo`);pintarCocina();});
@@ -2359,12 +2406,14 @@ async function vMenu(){
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>${c.nombre} <span class="small">${ps.length} productos</span></span>
     <button class="btn" data-delcat="${c.id}" data-nom="${c.nombre.replace(/"/g,'&quot;')}" data-n="${ps.length}" style="padding:5px 10px;font-size:12px;min-height:auto;color:var(--muted);font-weight:600">Quitar categoría</button></h3>
     <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
-    <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th><th></th></tr></thead><tbody>
     ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num"><input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima"></td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td>
+      <td class="num"><button class="btn" data-divide="${p.id}" title="¿Se puede pedir con varios sabores?" style="padding:6px 10px;font-size:12px;min-height:auto;${p.divisible?'background:var(--blue);color:#fff;border-color:var(--blue)':'color:var(--muted)'}">${p.divisible?'÷'+Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):'÷'}</button></td>
       <td class="num"><button class="btn" data-delprod="${p.id}" data-nom="${p.nombre.replace(/"/g,'&quot;')}" title="Quitar del menú" style="padding:6px 10px;font-size:12px;min-height:auto;color:var(--muted)">🗑</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}
   ${editorGrupos()}`;
   $('#addProd').onclick=modalNuevoProducto;
+  document.querySelectorAll('[data-divide]').forEach(b=>b.onclick=()=>modalDivisible(b.dataset.divide));
   document.querySelectorAll('[data-delprod]').forEach(b=>b.onclick=()=>borrarDelMenu('productos',b.dataset.delprod,b.dataset.nom));
   document.querySelectorAll('[data-delcat]').forEach(b=>b.onclick=()=>borrarDelMenu('categorias',b.dataset.delcat,b.dataset.nom,+b.dataset.n));
   document.querySelectorAll('[data-precio]').forEach(inp=>inp.onchange=async()=>{
@@ -2383,6 +2432,37 @@ async function vMenu(){
 const M2=n=>Math.round((+n||0)*100)/100;
 // Quitar del menú. Los tickets viejos guardan copia del nombre y del precio,
 // así que borrar no altera ninguna venta ya cobrada.
+// La Mega y la Barra se venden con varias especialidades al mismo precio.
+// Aquí se define en cuántas partes y qué categorías no se pueden combinar.
+function modalDivisible(id){
+  const p=app.menu.productos[id];
+  const cats=Object.values(app.menu.categorias);
+  const d=p.divisible||null;
+  let activo=!!d, max=(d&&+d.maxPartes)||2, excl=(d&&d.excluirCategorias)||[];
+  const render=()=>{
+    modal.innerHTML=`<h3>${p.nombre}</h3><div class="sub">¿Se puede pedir con varios sabores sin cambiar el precio?</div>
+      <label class="cm-o" style="margin-top:12px"><input type="checkbox" id="dvOn" ${activo?'checked':''}>
+        <div><b>Sí, se puede dividir</b><div class="small" style="color:var(--muted)">Como la Mega o la Pizza Barra.</div></div></label>
+      ${activo?`<div class="field"><label>¿En cuántas partes como máximo?</label>
+        <div class="pt-n">${[2,3,4].map(k=>`<button class="pt-b ${max===k?'on':''}" data-m="${k}">${k} partes</button>`).join('')}</div></div>
+        <div class="field"><label>Categorías que NO se pueden combinar</label>
+          <div class="pm-cats">${cats.map(c=>`<label><input type="checkbox" class="dv-c" value="${c.id}" ${excl.includes(c.id)?'checked':''}> ${c.nombre}</label>`).join('')}</div></div>`:''}
+      <div class="modal-foot"><button class="btn-ghost" id="dvNo">Cancelar</button><button class="btn-primary" id="dvOk">Guardar</button></div>`;
+    $('#dvOn').onchange=()=>{activo=$('#dvOn').checked;render();};
+    modal.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{max=+b.dataset.m;render();});
+    modal.querySelectorAll('.dv-c').forEach(c=>c.onchange=()=>{
+      excl=[...modal.querySelectorAll('.dv-c:checked')].map(x=>x.value);});
+    $('#dvNo').onclick=closeModal;
+    $('#dvOk').onclick=async()=>{
+      const val=activo?{maxPartes:max,excluirCategorias:excl}:null;
+      try{const r=await API.patch('/api/menu/productos/'+id,{divisible:val});
+        app.menu.productos[r.id]=r;closeModal();
+        toast(val?`${p.nombre} se puede dividir en ${max}`:`${p.nombre} ya no se divide`,{tipo:'ok'});vMenu();}
+      catch(e){toast(e.message);}
+    };
+  };
+  render();ov.classList.add('show');
+}
 function borrarDelMenu(tipo,id,nombre,cuantos){
   const esCat=tipo==='categorias';
   modal.innerHTML=`<h3>Quitar ${esCat?'la categoría':''} ${nombre}</h3>
@@ -3044,8 +3124,13 @@ async function pintarPorConfirmar(){
       </div></div>`).join('')}</div>`;
   document.querySelectorAll('[data-acepta]').forEach(b=>b.onclick=async()=>{
     b.disabled=true;
-    try{await API.post(`/api/pedidos/${b.dataset.acepta}/aceptar`);toast('Aceptado · ya está en cocina',{tipo:'ok'});vCaja();}
-    catch(e){toast(e.message);b.disabled=false;}
+    try{
+      const r=await API.post(`/api/pedidos/${b.dataset.acepta}/aceptar`);
+      toast('Aceptado · ya está en cocina'+(r.automatico?' · avisamos al cliente':''),{tipo:'ok'});
+      await vCaja();
+      // Sin servicio de mensajería, caja le manda la liga con un toque
+      if(r.aviso)modalAvisarClientes([r.aviso],1,true);
+    }catch(e){toast(e.message);b.disabled=false;}
   });
   document.querySelectorAll('[data-rechaza]').forEach(b=>b.onclick=()=>modalRechazar(b.dataset.rechaza));
 }
