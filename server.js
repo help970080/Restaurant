@@ -337,9 +337,22 @@ app.get('/api/promociones', wrap(async (req, res) => {
   res.json(Object.values(e.promociones || {}));
 }));
 app.post('/api/promociones', soloAdmin, wrap(async (req, res) => {
-  const { nombre, tipo = 'porcentaje', valor } = req.body || {};
-  if (!nombre || valor == null) throw bad('Falta nombre o valor');
-  const p = await withState((e) => { if (!e.promociones) e.promociones = {}; const pr = M.crearPromocion({ nombre, tipo, valor }); e.promociones[pr.id] = pr; return pr; });
+  const { nombre, tipo = 'porcentaje', valor = 0, categorias = [] } = req.body || {};
+  if (!nombre) throw bad('Falta el nombre');
+  if (tipo === '2x1') {
+    if (!Array.isArray(categorias) || !categorias.length) throw bad('Elige al menos una categoría que participe en el 2x1');
+  } else if (valor == null) throw bad('Falta el valor');
+  const p = await withState((e) => {
+    if (!e.promociones) e.promociones = {};
+    if (tipo === '2x1') {
+      const ya = Object.values(e.promociones).find((x) => x.tipo === '2x1');
+      if (ya) throw bad('Ya existe un 2x1. Edítalo en lugar de crear otro.', 409);
+      for (const c of categorias) if (!e.menu.categorias[c]) throw bad('Categoría inexistente');
+    }
+    const pr = M.crearPromocion({ nombre, tipo, valor, categorias });
+    e.promociones[pr.id] = pr;
+    return pr;
+  });
   res.json(p);
 }));
 app.patch('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
@@ -348,6 +361,16 @@ app.patch('/api/promociones/:id', soloAdmin, wrap(async (req, res) => {
     const pr = (e.promociones || {})[req.params.id];
     if (!pr) throw bad('Promoción inexistente', 404);
     for (const k of ['nombre', 'tipo', 'valor', 'activo']) if (k in patch) pr[k] = patch[k];
+    if (Array.isArray(patch.categorias)) pr.categorias = patch.categorias.filter((c) => e.menu.categorias[c]);
+    // Al prender o apagar el 2x1 hay que recalcular lo que esté abierto, o las
+    // cuentas en curso se quedarían con el precio de antes.
+    if (pr.tipo === '2x1') {
+      for (const ped of Object.values(e.pedidos)) {
+        if (ped.estado !== 'abierto') continue;
+        M.calcular2x1(e, ped);
+        M.recalcularPedido(ped);
+      }
+    }
     return pr;
   });
   res.json(p);
@@ -889,6 +912,7 @@ app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
     if (!prod) throw bad('Producto inexistente');
     p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas }));
     p.actualizado = new Date().toISOString();
+    M.calcular2x1(e, p);
     return M.recalcularPedido(p);
   });
   res.json(ped);
@@ -900,6 +924,7 @@ app.delete('/api/pedidos/:folio/lineas/:lineaId', wrap(async (req, res) => {
     const p = e.pedidos[folio];
     if (!p) throw bad('Pedido inexistente', 404);
     p.lineas = p.lineas.filter((l) => l.id !== lineaId);
+    M.calcular2x1(e, p);
     return M.recalcularPedido(p);
   });
   res.json(ped);
@@ -922,6 +947,7 @@ app.patch('/api/pedidos/:folio', wrap(async (req, res) => {
       }
     }
     if (canalId !== undefined) p.canalId = canalId;
+    M.calcular2x1(e, p);
     return M.recalcularPedido(p);
   });
   res.json(ped);
@@ -951,6 +977,7 @@ app.post('/api/pedidos/:folio/cobrar', puedeCaja, wrap(async (req, res) => {
     // (el efectivo lo trae el repartidor y entra al turno hasta que liquida).
     if (M.esDomicilio(p) && p.reparto && p.reparto.estado !== 'por_asignar')
       throw bad('Pedido en reparto: cóbralo con /api/reparto/' + folio + '/entregado', 409);
+    M.calcular2x1(e, p);
     M.recalcularPedido(p);
     const sumPagos = M.r2(pagos.reduce((s, x) => s + x.monto, 0));
     if (sumPagos < p.total) throw bad(`El pago (${sumPagos}) no cubre el total (${p.total})`);
@@ -1151,6 +1178,7 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
     if (!ped) throw bad('Pedido inexistente', 404);
     if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
     if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
+    M.calcular2x1(e, ped);
     M.recalcularPedido(ped);
     const r = M.marcarSalida(e, ped);
     for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
@@ -1195,6 +1223,7 @@ app.post('/api/reparto/:folio/entregado', wrap(async (req, res) => {
     if (!ped.lineas.length) throw bad('El pedido no tiene productos');
     const r = repartoDe(ped);
     if (!r.repartidorId) throw bad('El pedido no tiene repartidor asignado', 409);
+    M.calcular2x1(e, ped);
     M.recalcularPedido(ped);
     const sumPagos = M.r2(pagos.reduce((t, x) => t + (+x.monto), 0));
     if (sumPagos < ped.total) throw bad(`El pago (${sumPagos}) no cubre el total (${ped.total})`);
@@ -2034,6 +2063,7 @@ app.post('/api/mesas/:destinoId/juntar', wrap(async (req, res) => {
     const teniaEnviado = po.lineas.some((l) => l.cocina === 'enviado');
     for (const l of po.lineas) destino.lineas.push(l);
     if (teniaEnviado && !destino.tiemposCocina.recibido) destino.tiemposCocina.recibido = po.tiemposCocina.recibido || new Date().toISOString();
+    M.calcular2x1(e, destino);
     M.recalcularPedido(destino); destino.actualizado = new Date().toISOString();
     po.lineas = []; po.estado = 'cancelado'; po.canceladoEn = new Date().toISOString(); po.motivoCancelacion = 'Juntada con ' + dest.nombre; M.recalcularPedido(po);
     orig.estado = 'libre'; orig.pedidoFolio = null;
