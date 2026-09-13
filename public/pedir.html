@@ -7,90 +7,161 @@
 <title>Pedir a domicilio</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <style>
+/* Jefe Pizzas — tomado del volante: negro, amarillo rótulo y rojo jitomate. */
 *{box-sizing:border-box}
-:root{--ink:#17150f;--paper:#f4f1ea;--card:#fff;--line:#e5dfd2;--accent:#e0841a;--green:#2f8f4e;--red:#c8472f;--muted:#8c857a;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;padding-bottom:96px}
-.wrap{max-width:560px;margin:0 auto;padding:14px}
-.top{text-align:center;padding:14px 0 10px}
-.top img{height:56px;border-radius:12px}
-.neg{font-size:22px;font-weight:800;letter-spacing:-.3px;margin-top:6px}
-.sub{font-size:13px;color:var(--muted);margin-top:2px}
-.cats{display:flex;gap:7px;overflow-x:auto;padding:10px 0;position:sticky;top:0;background:var(--paper);z-index:5}
-.cat{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:8px 15px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
-.cat.active{background:var(--ink);color:#f2ede2;border-color:var(--ink)}
-.prod{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:9px;cursor:pointer}
-.prod:active{border-color:var(--accent)}
-.p-n{font-weight:700;font-size:15px}
-.p-d{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.35}
-.p-p{font-family:var(--mono);font-weight:700;margin-left:auto;white-space:nowrap}
-.banner{background:#f2faf4;border:1px solid var(--green);border-radius:12px;padding:9px 12px;font-size:13px;margin-bottom:12px;text-align:center;font-weight:600;color:var(--green)}
-.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:12px 14px;box-shadow:0 -6px 20px rgba(0,0,0,.08)}
-.bar .in{max-width:560px;margin:0 auto;display:flex;align-items:center;gap:12px}
-.bar b{font-family:var(--mono);font-size:19px}
-.btn{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:13px 20px;font-size:15px;font-weight:700;cursor:pointer}
-.btn.full{width:100%}
-.btn:disabled{background:#ddd6c8;cursor:not-allowed}
-.btn.ghost{background:none;color:var(--muted);border:1px solid var(--line)}
-.ov{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:40}
+:root{
+  --noche:#0E0D0C; --carbon:#1B1917; --borde:#2E2A26;
+  --masa:#F7F0E3; --tenue:#9C9287;
+  --queso:#F5B700; --jitomate:#D62828; --albahaca:#4E9C4A;
+  --display:"Anton","Haettenschweiler","Arial Narrow",system-ui,sans-serif;
+  --texto:"Archivo",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--noche);color:var(--masa);font-family:var(--texto);
+  -webkit-font-smoothing:antialiased;padding-bottom:110px;font-size:15px;line-height:1.5}
+.wrap{max-width:600px;margin:0 auto;padding:0 16px}
+
+/* Portada: el logo y la promesa del volante */
+.top{text-align:center;padding:30px 0 6px}
+.top img{height:74px;border-radius:14px;display:inline-block}
+.neg{font-family:var(--display);font-size:clamp(38px,11vw,58px);line-height:.92;
+  letter-spacing:.01em;margin:14px 0 0;text-transform:uppercase}
+.lema{color:var(--queso);font-size:15px;font-style:italic;margin-top:6px}
+.donde{color:var(--tenue);font-size:13px;margin-top:10px}
+
+/* El 2x1 es el héroe: una cinta roja, como el estallido del volante */
+.banner{background:var(--jitomate);color:#fff;border-radius:4px;padding:13px 16px;margin:20px 0 4px;
+  text-align:center;transform:rotate(-1.2deg);box-shadow:5px 5px 0 rgba(245,183,0,.9)}
+.banner b{font-family:var(--display);font-size:25px;letter-spacing:.02em;display:block;text-transform:uppercase}
+.banner span{font-size:13px;opacity:.92}
+
+/* Categorías: subrayado amarillo, no píldoras */
+.cats{display:flex;gap:22px;overflow-x:auto;padding:22px 0 0;position:sticky;top:0;
+  background:linear-gradient(var(--noche) 78%,transparent);z-index:5;scrollbar-width:none}
+.cats::-webkit-scrollbar{display:none}
+.cat{background:none;border:none;color:var(--tenue);font-family:var(--display);font-size:19px;
+  text-transform:uppercase;letter-spacing:.02em;padding:0 0 9px;white-space:nowrap;cursor:pointer;
+  border-bottom:3px solid transparent;font-weight:400}
+.cat.active{color:var(--masa);border-bottom-color:var(--queso)}
+
+/* Productos: lista con filete, no tarjetas flotantes idénticas */
+.lista{border-top:1px solid var(--borde);margin-top:2px}
+.prod{display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;background:none;
+  border:none;border-bottom:1px solid var(--borde);color:inherit;padding:17px 2px;cursor:pointer;font:inherit}
+.prod:hover,.prod:focus-visible{background:var(--carbon);outline:none}
+.p-n{font-family:var(--display);font-size:21px;text-transform:uppercase;letter-spacing:.01em;line-height:1.1}
+.p-d{font-size:13px;color:var(--tenue);margin-top:4px;line-height:1.45;max-width:46ch}
+.p-p{margin-left:auto;font-family:var(--display);font-size:21px;color:var(--queso);white-space:nowrap}
+.p-div{display:inline-block;font-size:11px;color:var(--noche);background:var(--queso);
+  border-radius:3px;padding:1px 6px;margin-top:7px;font-weight:600}
+
+/* Barra de pedido: el único golpe de color fuerte */
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--queso);color:var(--noche);
+  padding:13px 16px calc(13px + env(safe-area-inset-bottom))}
+.bar .in{max-width:600px;margin:0 auto;display:flex;align-items:center;gap:14px}
+.bar small{display:block;font-size:12px;font-weight:600}
+.bar b{font-family:var(--display);font-size:27px;line-height:1}
+.ahorro{color:#8C1A1A}
+
+button,select,input,textarea{font-family:inherit}
+.btn{background:var(--jitomate);color:#fff;border:none;border-radius:6px;padding:15px 22px;
+  font-size:15px;font-weight:700;cursor:pointer;font-family:var(--texto)}
+.btn:hover{filter:brightness(1.1)}
+.btn:focus-visible{outline:3px solid var(--queso);outline-offset:2px}
+.btn.full{width:100%;display:block}
+.btn:disabled{background:var(--borde);color:var(--tenue);cursor:not-allowed}
+.btn.ghost{background:none;color:var(--masa);border:1px solid var(--borde)}
+.bar .btn{background:var(--noche);color:var(--queso);margin-left:auto;white-space:nowrap}
+
+/* Hoja inferior */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:flex-end;
+  justify-content:center;z-index:40}
 .ov.show{display:flex}
-.mo{background:var(--card);width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:18px;max-height:92vh;overflow:auto}
-.mo h3{margin:0 0 4px;font-size:19px}
-.grp{margin-top:14px}
-.grp-t{font-size:13px;font-weight:700;margin-bottom:6px}
-.op{display:flex;align-items:center;gap:9px;padding:10px;border:1px solid var(--line);border-radius:11px;margin-bottom:6px;cursor:pointer;font-size:14px}
-.op.sel{border-color:var(--accent);background:#fffaf2}
-.op .d{margin-left:auto;font-family:var(--mono);font-size:13px;color:var(--muted)}
-.f{margin-top:12px}
-.f label{display:block;font-size:12px;font-weight:700;margin-bottom:4px}
-.f input,.f textarea{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;font-size:15px;font-family:inherit}
-.f input:focus,.f textarea:focus{border-color:var(--accent);outline:none}
-.cant{display:flex;align-items:center;gap:14px;justify-content:center;margin-top:14px}
-.cant button{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:20px;cursor:pointer}
-.cant b{font-family:var(--mono);font-size:22px;min-width:34px;text-align:center}
-.it{display:flex;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
-.it .q{font-weight:700;color:var(--accent)}
-.it .x{margin-left:auto;color:var(--muted);cursor:pointer;font-size:18px;line-height:1}
-.it .m{font-size:12px;color:var(--muted)}
-.tot{display:flex;justify-content:space-between;font-weight:800;font-size:17px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
-.msg{font-size:13px;margin-top:8px;text-align:center;min-height:18px}
-.msg.mal{color:var(--red);font-weight:600}
-.msg.bien{color:var(--green);font-weight:600}
-.cod{font-family:var(--mono);font-size:28px;text-align:center;letter-spacing:10px}
-.ok{text-align:center;padding:30px 16px}
-.ok .big{font-size:52px}
-.ok h2{margin:12px 0 6px}
-.ok p{color:var(--muted);font-size:14px;line-height:1.5;margin:0}
-.ok a{display:inline-block;margin-top:18px;background:var(--ink);color:#f2ede2;text-decoration:none;padding:13px 22px;border-radius:12px;font-weight:700}
-.aviso{background:#fffaf2;border:1px solid var(--accent);border-radius:11px;padding:10px 12px;font-size:13px;margin-top:12px;line-height:1.45}
+.mo{background:var(--carbon);width:100%;max-width:600px;border-radius:16px 16px 0 0;
+  padding:22px 18px calc(22px + env(safe-area-inset-bottom));max-height:92vh;overflow:auto;
+  border-top:4px solid var(--queso)}
+.mo h3{font-family:var(--display);font-size:28px;text-transform:uppercase;margin:0 0 4px;letter-spacing:.01em}
+.sub{font-size:13.5px;color:var(--tenue);line-height:1.5}
 
-.paso{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);border-radius:13px;padding:13px;margin-top:12px;opacity:.55}
-.paso.activo{opacity:1;border-color:var(--accent);background:#fffaf2}
-.paso.hecho{opacity:.75;border-color:var(--green);background:#f7fbf8}
-.pn{flex:none;width:26px;height:26px;border-radius:50%;background:var(--ink);color:#f2ede2;display:grid;place-items:center;font-weight:700;font-size:13px}
-.paso.hecho .pn{background:var(--green)}
-.paso b{font-size:15px}
-.pd{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.4}
-.cod2{font-family:var(--mono);font-size:38px;letter-spacing:12px;text-align:center;margin:12px 0 0;font-weight:700}
+.grp{margin-top:20px}
+.grp-t{font-size:14px;font-weight:700;margin-bottom:8px}
+.op{display:flex;align-items:center;gap:10px;padding:13px;border:1px solid var(--borde);
+  border-radius:7px;margin-bottom:7px;cursor:pointer;font-size:14.5px}
+.op.sel{border-color:var(--queso);background:rgba(245,183,0,.1)}
+.op .d{margin-left:auto;font-family:var(--display);font-size:16px;color:var(--queso)}
 
-.pt-n{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.pt-b{flex:1 1 auto;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 8px;font-size:13px;font-weight:700;cursor:pointer}
-.pt-b.on{background:var(--ink);color:#f2ede2;border-color:var(--ink)}
-.f select{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;font-size:15px;font-family:inherit;background:var(--card)}
+.f{margin-top:14px}
+.f label{display:block;font-size:13px;font-weight:700;margin-bottom:5px}
+.f input,.f textarea,.f select{width:100%;padding:13px;background:var(--noche);color:var(--masa);
+  border:1px solid var(--borde);border-radius:7px;font-size:16px}
+.f input:focus,.f textarea:focus,.f select:focus{border-color:var(--queso);outline:none}
+.f input::placeholder,.f textarea::placeholder{color:#6B635A}
 
-.promo-row{display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;color:var(--green);font-weight:700}
-.promo-row .pm{margin-left:auto;font-family:var(--mono)}
-.promo-row .m{font-size:12px;color:var(--muted);font-weight:600;margin-top:2px}
+.cant{display:flex;align-items:center;gap:20px;justify-content:center;margin-top:20px}
+.cant button{width:46px;height:46px;border-radius:50%;border:1px solid var(--borde);
+  background:var(--noche);color:var(--masa);font-size:22px;cursor:pointer}
+.cant b{font-family:var(--display);font-size:26px;min-width:38px;text-align:center}
 
-.qq{display:flex;align-items:center;gap:6px;flex:none}
-.qq button{width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:15px;line-height:1;cursor:pointer;padding:0}
-.qq b{font-family:var(--mono);min-width:18px;text-align:center;color:var(--accent)}
+.it{display:flex;gap:10px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--borde);font-size:14.5px}
+.it .x{margin-left:6px;color:var(--tenue);cursor:pointer;font-size:20px;line-height:1;background:none;border:none;padding:0}
+.it .m{font-size:12px;color:var(--tenue);margin-top:3px}
+.qq{display:flex;align-items:center;gap:7px;flex:none}
+.qq button{width:28px;height:28px;border-radius:50%;border:1px solid var(--borde);
+  background:var(--noche);color:var(--masa);font-size:16px;line-height:1;cursor:pointer;padding:0}
+.qq b{font-family:var(--display);min-width:20px;text-align:center;color:var(--queso);font-size:17px}
+.promo-row{display:flex;align-items:flex-start;gap:10px;padding:13px 0;border-bottom:1px solid var(--borde);
+  font-size:14.5px;color:var(--queso);font-weight:700}
+.promo-row .pm{margin-left:auto;font-family:var(--display);font-size:19px}
+.promo-row .m{font-size:12px;color:var(--tenue);font-weight:400;margin-top:3px}
+.tot{display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding-top:14px;
+  border-top:2px solid var(--queso);font-family:var(--display);font-size:27px;text-transform:uppercase}
+
+.msg{font-size:13.5px;margin-top:10px;text-align:center;min-height:18px}
+.msg.mal{color:#FF8A7A;font-weight:600}
+.msg.bien{color:var(--albahaca);font-weight:600}
+.cod{font-family:var(--display);font-size:34px;text-align:center;letter-spacing:12px;
+  background:var(--noche);border-color:var(--borde)}
+.cod2{font-family:var(--display);font-size:46px;letter-spacing:14px;text-align:center;
+  margin:14px 0 0;color:var(--queso)}
+
+.paso{display:flex;gap:13px;align-items:flex-start;border:1px solid var(--borde);border-radius:9px;
+  padding:15px;margin-top:14px;opacity:.5}
+.paso.activo{opacity:1;border-color:var(--queso)}
+.paso.hecho{opacity:.8;border-color:var(--albahaca)}
+.pn{flex:none;width:27px;height:27px;border-radius:50%;background:var(--queso);color:var(--noche);
+  display:grid;place-items:center;font-weight:700;font-size:14px}
+.paso.hecho .pn{background:var(--albahaca);color:#fff}
+.paso b{font-size:15.5px}
+.pd{font-size:12.5px;color:var(--tenue);margin-top:4px;line-height:1.45}
+
+.pt-n{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}
+.pt-b{flex:1 1 auto;background:var(--noche);border:1px solid var(--borde);color:var(--masa);
+  border-radius:7px;padding:12px 9px;font-size:13px;font-weight:700;cursor:pointer}
+.pt-b.on{background:var(--queso);color:var(--noche);border-color:var(--queso)}
+
+.aviso{background:var(--noche);border-left:3px solid var(--queso);border-radius:0 7px 7px 0;
+  padding:12px 14px;font-size:13.5px;margin-top:14px;line-height:1.5;color:var(--tenue)}
+.aviso b{color:var(--masa)}
+
+/* Cierre */
+.ok{text-align:center;padding:54px 16px}
+.ok .big{font-size:62px;line-height:1}
+.ok h2{font-family:var(--display);font-size:34px;text-transform:uppercase;margin:16px 0 10px;line-height:1.05}
+.ok p{color:var(--tenue);font-size:14.5px;line-height:1.6;margin:0}
+.ok .folio{font-family:var(--display);font-size:24px;color:var(--queso);display:block;margin-bottom:6px}
+.ok a{display:inline-block;margin-top:24px;background:var(--queso);color:var(--noche);
+  text-decoration:none;padding:16px 30px;border-radius:6px;font-weight:700;font-size:15px}
+.pie{text-align:center;color:var(--tenue);font-size:12.5px;padding:34px 16px 10px;line-height:1.7}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:380px){.neg{font-size:34px}.p-n,.p-p{font-size:19px}}
 </style>
 </head>
 <body>
-<div class="wrap" id="app"><div class="msg">Cargando el menú…</div></div>
+<div class="wrap" id="app"><div class="msg" style="padding:70px 16px">Poniendo el horno a temperatura…</div></div>
 <div class="bar" id="bar" style="display:none"><div class="in">
-  <div><div style="font-size:11px;color:var(--muted);font-weight:700" id="barN">0 productos</div><b id="barT">$0.00</b></div>
-  <button class="btn" id="barB" style="margin-left:auto">Continuar</button>
+  <div><small id="barN">0 productos</small><b id="barT">$0.00</b></div>
+  <button class="btn" id="barB">Ver mi pedido</button>
 </div></div>
 <div class="ov" id="ov"><div class="mo" id="mo"></div></div>
 <script>
@@ -108,7 +179,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
   fetch('/pedir/'+ROW+'/'+SUC+'/menu').then(function(r){
     if(!r.ok)throw new Error('no disponible');return r.json();
   }).then(function(d){M=d;cat=(d.categorias[0]||{}).id;pintar();})
-   .catch(function(){$('#app').innerHTML='<div class="msg mal">No pudimos cargar el menú. Inténtalo más tarde.</div>';});
+   .catch(function(){$('#app').innerHTML='<div class="msg mal" style="padding:70px 16px">No cargó el menú. Revisa tu conexión y vuelve a intentar.</div>';});
 
   function pintar(){
     var ps=M.productos.filter(function(p){return p.categoriaId===cat;});
@@ -166,7 +237,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
                 (o.precioDelta?'<span class="d">+'+money(o.precioDelta)+'</span>':'')+'</div>';}).join('')+'</div>';}).join('')+
         '<div class="f"><label>¿Algo especial?</label><input id="pn" placeholder="Sin cebolla, bien cocida…" maxlength="80"></div>'+
         '<div class="cant"><button id="me">−</button><b id="cn">'+cant+'</b><button id="ma">+</button></div>'+
-        '<button class="btn full" id="add" style="margin-top:16px">Agregar · '+money(precio())+'</button>';
+        '<button class="btn full" id="add" style="margin-top:20px">Agregar '+money(precio())+'</button>';
       [].forEach.call(mo.querySelectorAll('[data-o]'),function(el){el.onclick=function(){
         var g=M.grupos.find(function(x){return x.id===el.dataset.g;});
         sel[el.dataset.g]=(sel[el.dataset.g]===el.dataset.o&&!g.obligatorio)?null:el.dataset.o;render();};});
@@ -225,7 +296,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
     b.style.display='';
     var pr=calcular2x1();
     $('#barN').innerHTML=piezas()+(piezas()===1?' producto':' productos')+
-      (pr?' · <span style="color:var(--green)">2x1 −'+money(pr.monto)+'</span>':'');
+      (pr?' <span class="ahorro">· ahorras '+money(pr.monto)+'</span>':'');
     $('#barT').textContent=money(total());
     $('#barB').onclick=verCarrito;
   }
@@ -246,9 +317,9 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
           '<span class="pm">−'+money(pr.monto)+'</span></div>';
       })()+
       '<div class="tot"><span>Total</span><span>'+money(total())+'</span></div>'+
-      '<button class="btn full" id="sig" style="margin-top:16px">Continuar</button>'+
-      '<button class="btn ghost full" id="mas" style="margin-top:8px">Seguir pidiendo</button>'+
-      '<button class="btn ghost full" id="vaciar" style="margin-top:8px;color:var(--red);border-color:#f0cdc4">Vaciar el carrito</button>';
+      '<button class="btn full" id="sig" style="margin-top:18px">Continuar con mis datos</button>'+
+      '<button class="btn ghost full" id="mas" style="margin-top:9px">Agregar algo más</button>'+
+      '<button class="btn ghost full" id="vaciar" style="margin-top:9px;color:#FF8A7A">Vaciar mi pedido</button>';
     [].forEach.call(mo.querySelectorAll('[data-k]'),function(el){el.onclick=function(){
       carrito.splice(+el.dataset.k,1);barra();if(carrito.length)verCarrito();else cerrar();};});
     [].forEach.call(mo.querySelectorAll('[data-menos]'),function(el){el.onclick=function(){
