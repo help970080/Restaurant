@@ -76,6 +76,10 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
 .pt-b{flex:1 1 auto;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 8px;font-size:13px;font-weight:700;cursor:pointer}
 .pt-b.on{background:var(--ink);color:#f2ede2;border-color:var(--ink)}
 .f select{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;font-size:15px;font-family:inherit;background:var(--card)}
+
+.promo-row{display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;color:var(--green);font-weight:700}
+.promo-row .pm{margin-left:auto;font-family:var(--mono)}
+.promo-row .m{font-size:12px;color:var(--muted);font-weight:600;margin-top:2px}
 </style>
 </head>
 <body>
@@ -190,13 +194,34 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
     render();ov.classList.add('show');
   }
 
-  function total(){return carrito.reduce(function(t,i){return t+i.importe;},0);}
+  function subtotal(){return carrito.reduce(function(t,i){return t+i.importe;},0);}
+  // Mismo cálculo que hace el servidor: se ordenan las piezas que participan
+  // de más cara a más barata y se regala la segunda de cada par.
+  function calcular2x1(){
+    if(!M.promo2x1||!M.promo2x1.categorias||!M.promo2x1.categorias.length)return null;
+    var piezas=[];
+    carrito.forEach(function(i){
+      var p=M.productos.find(function(x){return x.id===i.productoId;});
+      if(!p||M.promo2x1.categorias.indexOf(p.categoriaId)<0)return;
+      var unit=i.importe/i.cantidad;
+      for(var k=0;k<i.cantidad;k++)piezas.push({nombre:i.nombre,precio:unit});
+    });
+    if(piezas.length<2)return null;
+    piezas.sort(function(a,b){return b.precio-a.precio;});
+    var gratis=[];
+    for(var j=1;j<piezas.length;j+=2)gratis.push(piezas[j]);
+    var monto=gratis.reduce(function(t,x){return t+x.precio;},0);
+    return {monto:Math.round(monto*100)/100,gratis:gratis};
+  }
+  function total(){var p=calcular2x1();return subtotal()-(p?p.monto:0);}
   function piezas(){return carrito.reduce(function(t,i){return t+i.cantidad;},0);}
   function barra(){
     var b=$('#bar');
     if(!carrito.length){b.style.display='none';return;}
     b.style.display='';
-    $('#barN').textContent=piezas()+(piezas()===1?' producto':' productos');
+    var pr=calcular2x1();
+    $('#barN').innerHTML=piezas()+(piezas()===1?' producto':' productos')+
+      (pr?' · <span style="color:var(--green)">2x1 −'+money(pr.monto)+'</span>':'');
     $('#barT').textContent=money(total());
     $('#barB').onclick=verCarrito;
   }
@@ -208,8 +233,14 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
           (i.nombresMods.length?'<div class="m">'+esc(i.nombresMods.join(' · '))+'</div>':'')+
           (i.notas?'<div class="m">“'+esc(i.notas)+'”</div>':'')+'</span>'+
           '<span style="font-family:var(--mono)">'+money(i.importe)+'</span><span class="x" data-k="'+k+'">×</span></div>';}).join('')+
+      (function(){
+        var pr=calcular2x1();
+        if(!pr)return M.promo2x1?'<div class="aviso">Con dos pizzas o más se te aplica el '+esc(M.promo2x1.nombre)+' automáticamente.</div>':'';
+        return '<div class="it"><span></span><span>Subtotal</span><span style="margin-left:auto;font-family:var(--mono)">'+money(subtotal())+'</span></div>'+
+          '<div class="promo-row"><span>🍕 '+esc(M.promo2x1.nombre)+'<div class="m">Gratis: '+esc(pr.gratis.map(function(g){return g.nombre;}).join(', '))+'</div></span>'+
+          '<span class="pm">−'+money(pr.monto)+'</span></div>';
+      })()+
       '<div class="tot"><span>Total</span><span>'+money(total())+'</span></div>'+
-      (M.promo2x1?'<div class="aviso">El '+esc(M.promo2x1.nombre)+' se aplica al confirmar tu pedido. El total de arriba es sin descuento.</div>':'')+
       '<button class="btn full" id="sig" style="margin-top:16px">Continuar</button>'+
       '<button class="btn ghost full" id="mas" style="margin-top:8px">Seguir pidiendo</button>';
     [].forEach.call(mo.querySelectorAll('[data-k]'),function(el){el.onclick=function(){
@@ -309,6 +340,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
       '<div class="f"><label>Colonia y pueblo</label><input id="dcol" value="'+esc(datos.colonia||'')+'" placeholder="Centro, Tlayacapan"></div>'+
       '<div class="f"><label>Referencias</label><input id="dr" value="'+esc(datos.referencias||'')+'" placeholder="Portón azul, frente a la tienda"></div>'+
       '<div class="f"><label>Notas para la cocina</label><textarea id="dnot" rows="2" maxlength="200" placeholder="Opcional"></textarea></div>'+
+      (function(){var pr=calcular2x1();return pr?'<div class="aviso" style="background:#f2faf4;border-color:var(--green)">Tu '+esc(M.promo2x1.nombre)+' ya está aplicado: ahorras <b>'+money(pr.monto)+'</b>.</div>':'';})()+
       '<div class="aviso">Se paga <b>al recibir</b>. Te mandamos una liga para seguir tu pedido en vivo.</div>'+
       '<div class="msg" id="m3"></div>'+
       '<button class="btn full" id="env" style="margin-top:12px">Enviar pedido · '+money(total())+'</button>';
