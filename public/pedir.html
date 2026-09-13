@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#e0841a">
-<title>Pedir a domicilio</title>
+<meta name="theme-color" content="#0E0D0C">
+<title>Jefe Pizzas · Pedir a domicilio</title>
 <link rel="icon" type="image/png" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
 /* Jefe Pizzas — tomado del volante: negro, amarillo rótulo y rojo jitomate. */
 *{box-sizing:border-box}
@@ -36,18 +39,20 @@ body{margin:0;background:var(--noche);color:var(--masa);font-family:var(--texto)
 .banner span{font-size:13px;opacity:.92}
 
 /* Categorías: subrayado amarillo, no píldoras */
-.cats{display:flex;gap:22px;overflow-x:auto;padding:22px 0 0;position:sticky;top:0;
-  background:linear-gradient(var(--noche) 78%,transparent);z-index:5;scrollbar-width:none}
-.cats::-webkit-scrollbar{display:none}
-.cat{background:none;border:none;color:var(--tenue);font-family:var(--display);font-size:19px;
-  text-transform:uppercase;letter-spacing:.02em;padding:0 0 9px;white-space:nowrap;cursor:pointer;
-  border-bottom:3px solid transparent;font-weight:400}
-.cat.active{color:var(--masa);border-bottom-color:var(--queso)}
+.cats{display:flex;flex-wrap:wrap;gap:7px;padding:20px 0 14px;position:sticky;top:0;
+  background:var(--noche);z-index:5;border-bottom:1px solid var(--borde)}
+.cat{background:var(--carbon);border:1px solid var(--borde);color:var(--tenue);
+  font-family:var(--display);font-size:15px;text-transform:uppercase;letter-spacing:.02em;
+  padding:8px 13px;border-radius:5px;cursor:pointer;font-weight:400;line-height:1.1}
+.cat.active{background:var(--queso);color:var(--noche);border-color:var(--queso)}
+.cat:focus-visible{outline:2px solid var(--queso);outline-offset:2px}
 
 /* Productos: lista con filete, no tarjetas flotantes idénticas */
 .lista{border-top:1px solid var(--borde);margin-top:2px}
-.prod{display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;background:none;
-  border:none;border-bottom:1px solid var(--borde);color:inherit;padding:17px 2px;cursor:pointer;font:inherit}
+.prod{display:flex;gap:12px;align-items:baseline;width:100%;text-align:left;background:none;
+  border:none;border-bottom:1px solid var(--borde);color:inherit;padding:16px 2px;cursor:pointer;font:inherit}
+.p-i{flex:1;min-width:0}
+.p-n,.p-d,.p-div{display:block}
 .prod:hover,.prod:focus-visible{background:var(--carbon);outline:none}
 .p-n{font-family:var(--display);font-size:21px;text-transform:uppercase;letter-spacing:.01em;line-height:1.1}
 .p-d{font-size:13px;color:var(--tenue);margin-top:4px;line-height:1.45;max-width:46ch}
@@ -154,7 +159,28 @@ button,select,input,textarea{font-family:inherit}
 .pie{text-align:center;color:var(--tenue);font-size:12.5px;padding:34px 16px 10px;line-height:1.7}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-@media (max-width:380px){.neg{font-size:34px}.p-n,.p-p{font-size:19px}}
+@media (max-width:560px){
+  body{padding-bottom:100px}
+  .wrap{padding:0 13px}
+  .top{padding:22px 0 4px}
+  .top img{height:60px}
+  .neg{font-size:clamp(30px,9.5vw,42px)}
+  .banner{padding:11px 13px;box-shadow:4px 4px 0 rgba(245,183,0,.9)}
+  .banner b{font-size:20px}
+  .banner span{font-size:12px}
+  .cat{font-size:13px;padding:7px 11px}
+  .p-n{font-size:18px}
+  .p-p{font-size:18px}
+  .p-d{font-size:12.5px}
+  .mo{padding:18px 14px calc(18px + env(safe-area-inset-bottom))}
+  .mo h3{font-size:23px}
+  .bar b{font-size:23px}
+  .bar .btn{padding:13px 16px;font-size:14px}
+  .cod2{font-size:36px;letter-spacing:9px}
+  .tot{font-size:22px}
+  .ok{padding:40px 12px}
+  .ok h2{font-size:27px}
+}
 </style>
 </head>
 <body>
@@ -185,14 +211,19 @@ button,select,input,textarea{font-family:inherit}
     var ps=M.productos.filter(function(p){return p.categoriaId===cat;});
     $('#app').innerHTML=
       '<div class="top">'+(M.logo?'<img src="'+esc(M.logo)+'" alt="">':'')+
-      '<div class="neg">'+esc(M.negocio)+'</div><div class="sub">Pedido a domicilio · '+esc(M.sucursal.nombre)+'</div></div>'+
-      (M.promo2x1?'<div class="banner">🍕 '+esc(M.promo2x1.nombre)+' — pide dos y se descuenta la más barata</div>':'')+
+      '<h1 class="neg">'+esc(M.negocio)+'</h1>'+
+      '<div class="lema">El sabor que manda</div>'+
+      '<div class="donde">Te la llevamos a '+esc(M.sucursal.nombre)+' y alrededores</div></div>'+
+      (M.promo2x1?'<div class="banner"><b>'+esc(M.promo2x1.nombre)+'</b><span>Pide dos y la más barata va por nuestra cuenta</span></div>':'')+
       '<div class="cats">'+M.categorias.map(function(c){
         return '<button class="cat '+(c.id===cat?'active':'')+'" data-c="'+c.id+'">'+esc(c.nombre)+'</button>';}).join('')+'</div>'+
-      ps.map(function(p){
-        return '<div class="prod" data-p="'+p.id+'"><div><div class="p-n">'+esc(p.nombre)+'</div>'+
-          (p.descripcion?'<div class="p-d">'+esc(p.descripcion)+'</div>':'')+'</div>'+
-          '<div class="p-p">'+money(p.precioBase)+'</div></div>';}).join('');
+      '<div class="lista">'+ps.map(function(p){
+        var maxP=p.divisible?Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):0;
+        return '<button class="prod" data-p="'+p.id+'"><span class="p-i"><span class="p-n">'+esc(p.nombre)+'</span>'+
+          (p.descripcion?'<span class="p-d">'+esc(p.descripcion)+'</span>':'')+
+          (maxP?'<span class="p-div">hasta '+maxP+' sabores</span>':'')+'</span>'+
+          '<span class="p-p">'+money(p.precioBase)+'</span></button>';}).join('')+'</div>'+
+      '<div class="pie">Abierto todos los días de 12:00 a 22:00<br>Pagas al recibir</div>';
     [].forEach.call(document.querySelectorAll('[data-c]'),function(b){b.onclick=function(){cat=b.dataset.c;pintar();};});
     [].forEach.call(document.querySelectorAll('[data-p]'),function(b){b.onclick=function(){abrirProducto(b.dataset.p);};});
     barra();
@@ -456,10 +487,10 @@ button,select,input,textarea{font-family:inherit}
     cerrar();
     $('#bar').style.display='none';
     $('#app').innerHTML='<div class="ok"><div class="big">'+(r.confirmado?'🍕':'📨')+'</div>'+
-      '<h2>'+(r.confirmado?'¡Tu pedido va en camino a la cocina!':'Recibimos tu pedido')+'</h2>'+
-      '<p>'+esc(r.folio)+' · '+money(r.total)+'<br>'+
-      (r.confirmado?'Ya estamos preparándolo.':'En un momento te confirmamos por WhatsApp.')+'</p>'+
-      '<a href="'+esc(r.seguimiento)+'">Seguir mi pedido</a></div>';
+      '<h2>'+(r.confirmado?'Ya está en la cocina':'Recibimos tu pedido')+'</h2>'+
+      '<p><span class="folio">'+esc(r.folio)+'</span>'+money(r.total)+' al recibir<br>'+
+      (r.confirmado?'La estamos preparando en este momento.':'En un momento te lo confirmamos por WhatsApp.')+'</p>'+
+      '<a href="'+esc(r.seguimiento)+'">Ver dónde va mi pizza</a></div>';
     window.scrollTo(0,0);
   }
 })();
