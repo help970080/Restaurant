@@ -80,6 +80,10 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
 .promo-row{display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;color:var(--green);font-weight:700}
 .promo-row .pm{margin-left:auto;font-family:var(--mono)}
 .promo-row .m{font-size:12px;color:var(--muted);font-weight:600;margin-top:2px}
+
+.qq{display:flex;align-items:center;gap:6px;flex:none}
+.qq button{width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:15px;line-height:1;cursor:pointer;padding:0}
+.qq b{font-family:var(--mono);min-width:18px;text-align:center;color:var(--accent)}
 </style>
 </head>
 <body>
@@ -111,7 +115,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
     $('#app').innerHTML=
       '<div class="top">'+(M.logo?'<img src="'+esc(M.logo)+'" alt="">':'')+
       '<div class="neg">'+esc(M.negocio)+'</div><div class="sub">Pedido a domicilio · '+esc(M.sucursal.nombre)+'</div></div>'+
-      (M.promo2x1?'<div class="banner">🍕 '+esc(M.promo2x1.nombre)+' — se aplica solo al cobrar</div>':'')+
+      (M.promo2x1?'<div class="banner">🍕 '+esc(M.promo2x1.nombre)+' — pide dos y se descuenta la más barata</div>':'')+
       '<div class="cats">'+M.categorias.map(function(c){
         return '<button class="cat '+(c.id===cat?'active':'')+'" data-c="'+c.id+'">'+esc(c.nombre)+'</button>';}).join('')+'</div>'+
       ps.map(function(p){
@@ -229,7 +233,8 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
   function verCarrito(){
     mo.innerHTML='<h3>Tu pedido</h3>'+
       carrito.map(function(i,k){
-        return '<div class="it"><span class="q">'+i.cantidad+'×</span><span>'+esc(i.nombre)+
+        return '<div class="it"><span class="qq"><button data-menos="'+k+'">−</button><b>'+i.cantidad+'</b><button data-mas="'+k+'">+</button></span>'+
+          '<span>'+esc(i.nombre)+
           (i.nombresMods.length?'<div class="m">'+esc(i.nombresMods.join(' · '))+'</div>':'')+
           (i.notas?'<div class="m">“'+esc(i.notas)+'”</div>':'')+'</span>'+
           '<span style="font-family:var(--mono)">'+money(i.importe)+'</span><span class="x" data-k="'+k+'">×</span></div>';}).join('')+
@@ -242,9 +247,20 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system
       })()+
       '<div class="tot"><span>Total</span><span>'+money(total())+'</span></div>'+
       '<button class="btn full" id="sig" style="margin-top:16px">Continuar</button>'+
-      '<button class="btn ghost full" id="mas" style="margin-top:8px">Seguir pidiendo</button>';
+      '<button class="btn ghost full" id="mas" style="margin-top:8px">Seguir pidiendo</button>'+
+      '<button class="btn ghost full" id="vaciar" style="margin-top:8px;color:var(--red);border-color:#f0cdc4">Vaciar el carrito</button>';
     [].forEach.call(mo.querySelectorAll('[data-k]'),function(el){el.onclick=function(){
       carrito.splice(+el.dataset.k,1);barra();if(carrito.length)verCarrito();else cerrar();};});
+    [].forEach.call(mo.querySelectorAll('[data-menos]'),function(el){el.onclick=function(){
+      var i=carrito[+el.dataset.menos];
+      if(i.cantidad>1){i.importe=i.importe/i.cantidad*(i.cantidad-1);i.cantidad--;}
+      else carrito.splice(+el.dataset.menos,1);
+      barra();if(carrito.length)verCarrito();else cerrar();};});
+    [].forEach.call(mo.querySelectorAll('[data-mas]'),function(el){el.onclick=function(){
+      var i=carrito[+el.dataset.mas];
+      if(i.cantidad<20){i.importe=i.importe/i.cantidad*(i.cantidad+1);i.cantidad++;}
+      barra();verCarrito();};});
+    $('#vaciar').onclick=function(){carrito=[];barra();cerrar();};
     $('#mas').onclick=cerrar;
     $('#sig').onclick=pasoTelefono;
     ov.classList.add('show');
