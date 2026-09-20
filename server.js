@@ -12,6 +12,17 @@ const db = require('./db');
 const M = require('./model');
 const { als, firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache } = require('./context');
 const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
+const { aplicarMenuPizzeria } = require('./seed_pizzeria');
+
+// Catalogo inicial segun el giro. 'pizzeria' reusa buildTenantDoc (sucursales,
+// mesas, config) y solo le cambia el menu, los insumos y las promociones.
+function docDeTenant(nombre, plantilla) {
+  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
+  if (plantilla === 'pizzeria') aplicarMenuPizzeria(doc);
+  return doc;
+}
+const PLANTILLAS = ['restaurante', 'neveria', 'pizzeria'];
+const plantillaValida = (v) => (PLANTILLAS.includes(v) ? v : 'restaurante');
 
 const app = express();
 app.use(cors());
@@ -182,12 +193,13 @@ app.post('/api/admin/provision', wrap(async (req, res) => {
   const setup = process.env.SETUP_TOKEN;
   if (!setup) throw bad('SETUP_TOKEN no configurado', 500);
   if (req.headers['x-setup-token'] !== setup) throw bad('No autorizado', 401);
-  const { nombre = 'Jefe Pizzas', adminUser, adminPass, plantilla = 'restaurante' } = req.body || {};
+  const { nombre = 'Jefe Pizzas', adminUser, adminPass, plantilla: plantillaCruda = 'restaurante' } = req.body || {};
+  const plantilla = plantillaValida(plantillaCruda);
   if (!adminUser || !adminPass) throw bad('Falta adminUser/adminPass');
   const sys = await db.loadSys();
   if (sys.usuarios[adminUser]) throw bad('Ese usuario ya existe', 409);
   const row = sys.nextRow || 1;
-  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
+  const doc = docDeTenant(nombre, plantilla);
   await db.insertState(row, doc);
   invalidarCache(row);
   sys.tenants[row] = { nombre };
@@ -222,7 +234,8 @@ app.post('/api/super/provision', wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
   if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
-  const { row, plantilla = 'neveria', confirmar, conservarInsumos = false } = req.body || {};
+  const { row, plantilla: plantillaCruda = 'neveria', confirmar, conservarInsumos = false } = req.body || {};
+  const plantilla = plantillaValida(plantillaCruda);
   if (row == null) throw bad('Falta row');
   if (confirmar !== 'RECARGAR') throw bad("Falta confirmar:'RECARGAR' (reemplaza el menú completo)");
 
@@ -230,7 +243,7 @@ app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
   if (!est) throw bad('Ese restaurante no existe', 404);
 
   const abiertos = Object.values(est.pedidos || {}).filter((p) => p.estado === 'abierto').length;
-  const doc = plantilla === 'neveria' ? buildHawaiianDoc(est.meta.nombre) : buildTenantDoc(est.meta.nombre);
+  const doc = docDeTenant(est.meta.nombre, plantilla);
 
   const antes = {
     categorias: Object.keys(est.menu.categorias).length,
@@ -299,13 +312,13 @@ app.post('/api/super/tenants', soloSuper, wrap(async (req, res) => {
   const adminUser = (b.adminUser || b.adminUsuario || '').trim();
   let adminPass = b.adminPass || b.adminPassword || '';
   const adminNombre = (b.adminNombre || 'Administrador').trim();
-  const plantilla = b.plantilla === 'neveria' ? 'neveria' : 'restaurante'; // catalogo inicial del tenant
+  const plantilla = plantillaValida(b.plantilla); // catalogo inicial del tenant: restaurante | neveria | pizzeria
   if (!nombre || !adminUser) throw bad('Falta nombre del restaurante o usuario admin');
   if (!adminPass) adminPass = Math.random().toString(36).slice(2, 8) + Math.floor(10 + Math.random() * 89);
   const sys = await db.loadSys();
   if (sys.usuarios[adminUser]) throw bad('Ese usuario admin ya existe', 409);
   const row = sys.nextRow || 1;
-  const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
+  const doc = docDeTenant(nombre, plantilla);
   await db.insertState(row, doc);
   invalidarCache(row);
   sys.tenants[row] = { nombre, activo: true, creado: new Date().toISOString() };
