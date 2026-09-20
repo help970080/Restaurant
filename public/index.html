@@ -3946,13 +3946,14 @@ async function vSuperTenants(){
     </tbody></table>`:'<div class="empty">Aún no hay restaurantes. Crea el primero con el botón de arriba.</div>'}</div>`;
 }
 function modalNuevoTenant(){
-  modal.innerHTML=`<h3>Crear restaurante</h3><div class="sub">Se crea con su menú base, 2 sucursales y un usuario administrador</div>
+  modal.innerHTML=`<h3>Crear restaurante</h3><div class="sub">Se crea con el menú de su giro, sus sucursales y un usuario administrador</div>
    <div class="field"><label>Nombre del restaurante</label><input id="tNom" placeholder="Ej. Tacos El Güero"></div>
    <div class="field"><label>Usuario administrador</label><input id="tUser" autocomplete="off" placeholder="dueño"></div>
    <div class="field"><label>Contraseña</label><input id="tPass" type="text" autocomplete="off"></div>
+   <div class="field"><label>Giro</label><select id="tPlant"><option value="pizzeria">Pizzería</option><option value="restaurante">Restaurante</option><option value="neveria">Nevería / crepería</option></select><div class="sub" style="margin-top:6px">Define el menú con el que arranca. Después lo editan ellos desde Menú.</div></div>
    <div class="modal-foot"><button class="btn-ghost" id="tCancel">Cancelar</button><button class="btn-primary" id="tOk">Crear</button></div>`;
   ov.classList.add('show');$('#tCancel').onclick=closeModal;
-  $('#tOk').onclick=async()=>{const n=$('#tNom').value.trim(),u=$('#tUser').value.trim(),p=$('#tPass').value;if(!n||!u||!p){toast('Faltan datos');return;}try{await API.post('/api/super/tenants',{nombre:n,adminUser:u,adminPass:p});closeModal();toast('Restaurante creado');vSuperTenants();}catch(e){toast(e.message);}};
+  $('#tOk').onclick=async()=>{const n=$('#tNom').value.trim(),u=$('#tUser').value.trim(),p=$('#tPass').value,pl=$('#tPlant').value;if(!n||!u||!p){toast('Faltan datos');return;}try{await API.post('/api/super/tenants',{nombre:n,adminUser:u,adminPass:p,plantilla:pl});closeModal();toast('Restaurante creado');vSuperTenants();}catch(e){toast(e.message);}};
 }
 
 // ===========================================================================
