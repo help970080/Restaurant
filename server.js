@@ -13,15 +13,17 @@ const M = require('./model');
 const { als, firmarToken, auth, ctx, readState, withState, runPublic, invalidarCache } = require('./context');
 const { buildTenantDoc, buildHawaiianDoc } = require('./seed');
 const { aplicarMenuPizzeria } = require('./seed_pizzeria');
+const { aplicarMenuMarvin } = require('./seed_marvin');
 
 // Catalogo inicial segun el giro. 'pizzeria' reusa buildTenantDoc (sucursales,
 // mesas, config) y solo le cambia el menu, los insumos y las promociones.
 function docDeTenant(nombre, plantilla) {
   const doc = plantilla === 'neveria' ? buildHawaiianDoc(nombre) : buildTenantDoc(nombre);
   if (plantilla === 'pizzeria') aplicarMenuPizzeria(doc);
+  if (plantilla === 'marvin') aplicarMenuMarvin(doc);
   return doc;
 }
-const PLANTILLAS = ['restaurante', 'neveria', 'pizzeria'];
+const PLANTILLAS = ['restaurante', 'neveria', 'pizzeria', 'marvin'];
 const plantillaValida = (v) => (PLANTILLAS.includes(v) ? v : 'restaurante');
 
 const app = express();
@@ -234,7 +236,7 @@ app.post('/api/super/provision', wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
   if (req.headers['x-setup-token'] !== process.env.SETUP_TOKEN) throw bad('No autorizado', 401);
-  const { row, plantilla: plantillaCruda = 'neveria', confirmar, conservarInsumos = false } = req.body || {};
+  const { row, plantilla: plantillaCruda = 'neveria', confirmar, conservarInsumos = false, promociones = false } = req.body || {};
   const plantilla = plantillaValida(plantillaCruda);
   if (row == null) throw bad('Falta row');
   if (confirmar !== 'RECARGAR') throw bad("Falta confirmar:'RECARGAR' (reemplaza el menú completo)");
@@ -256,6 +258,12 @@ app.post('/api/admin/recargar-menu', wrap(async (req, res) => {
   if (!conservarInsumos) est.insumos = doc.insumos;
   if (doc.config && doc.config.tema) est.config.tema = doc.config.tema;
   est.meta.menuRecargado = new Date().toISOString();
+
+  // Las promociones del catalogo solo se aplican si se piden con promociones:true.
+  // Recargar el menu NO debe borrar las promociones que el negocio ya configuro.
+  if (promociones && doc.promociones && Object.keys(doc.promociones).length) {
+    est.promociones = doc.promociones;
+  }
 
   await db.saveState(Number(row), est);
   invalidarCache(Number(row));
