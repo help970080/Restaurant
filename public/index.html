@@ -3585,6 +3585,8 @@ async function vAjustes(){
   <div class="cols">
     <div class="panel"><h3>Marca del restaurante</h3>
       <div class="field"><label>Nombre</label><input id="cfgNom" value="${cfg.nombre||''}"></div>
+      <div class="field"><label>Lema</label><input id="cfgLema" maxlength="80" value="${(cfg.lema||'').replace(/"/g,'&quot;')}" placeholder="Ej. El sabor de siempre"><div style="color:var(--muted);font-size:12px;margin-top:4px">Aparece bajo el nombre en la página de pedidos. Déjalo vacío si no quieres ninguno.</div></div>
+      <div class="field"><label>Horario que ve el cliente</label><input id="cfgHorario" maxlength="120" value="${(cfg.horario||'').replace(/"/g,'&quot;')}" placeholder="Ej. Lunes a domingo de 8:30 a 23:55"><div style="color:var(--muted);font-size:12px;margin-top:4px">Se muestra al pie de la página de pedidos.</div></div>
       <div class="field"><label>Logo</label>
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
           <div style="width:80px;height:60px;border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--paper)"><img id="logoPrev" src="${cfg.logo||''}" style="max-width:100%;max-height:100%;${cfg.logo?'':'display:none'}"><span id="logoEmpty" style="color:var(--muted);font-size:12px;${cfg.logo?'display:none':''}">sin logo</span></div>
@@ -3616,7 +3618,7 @@ async function vAjustes(){
     <div id="limpiezaBox"><div class="empty">Cargando…</div></div>
   </div>
   <div class="panel" style="margin-top:16px"><h3>Pedido a domicilio en línea <span class="small">pégala en Facebook, WhatsApp o Instagram</span></h3>
-    <div class="small" style="color:var(--muted);margin-bottom:10px">El cliente arma su pedido, verifica su teléfono con un código y tú lo confirmas desde Caja antes de que entre a cocina. Los clientes con ${'$'}{3} entregas o más pasan directo.</div>
+    <div class="small" style="color:var(--muted);margin-bottom:10px">El cliente arma su pedido, verifica su teléfono con un código y tú lo confirmas desde Caja antes de que entre a cocina. Los clientes con 3 entregas o más pasan directo.</div>
     <table><tbody>${app.sucursales.map(s=>{const url=location.origin+'/pedir/'+app.row+'/'+s.id;return `<tr>
       <td style="font-weight:600">${s.nombre}</td><td class="mono" style="font-size:12px">${url}</td>
       <td class="num"><button class="btn" data-copiapedir="${url}" style="padding:6px 11px;font-size:12px;min-height:auto">Copiar</button></td>
@@ -3645,7 +3647,7 @@ async function vAjustes(){
     <div style="color:var(--muted);font-size:13px;margin-top:10px">Comisiones típicas 2026: DiDi Food 15–30%, Rappi 20–35%, Uber Eats 25–35%. Recibir pedidos en automático desde la app requiere convenio de socio con la plataforma.</div></div>`;
   let logoData=cfg.logo||null;
   $('#logoFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>700000){toast('La imagen es muy pesada (máx ~700KB)');return;}const rd=new FileReader();rd.onload=()=>{logoData=rd.result;$('#logoPrev').src=logoData;$('#logoPrev').style.display='';$('#logoEmpty').style.display='none';};rd.readAsDataURL(f);};
-  $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
+  $('#cfgSave').onclick=async()=>{try{const r=await API.patch('/api/config',{nombre:$('#cfgNom').value.trim(),logo:logoData,lema:$('#cfgLema').value.trim(),horario:$('#cfgHorario').value.trim()});app.tenant.nombre=r.nombre;app.tenant.logo=r.logo;$('#brand').innerHTML=brandSidebar();toast('Marca actualizada');}catch(e){toast(e.message);}};
   $('#addUser').onclick=modalNuevoUsuario;
   document.querySelectorAll('[data-copiapedir]').forEach(b=>b.onclick=async()=>{
     toast(await copiar(b.dataset.copiapedir)?'Liga copiada · pégala en tus redes':'Cópiala a mano',{tipo:'ok',ms:4000});
