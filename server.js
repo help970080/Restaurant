@@ -942,12 +942,20 @@ app.post('/api/caja/cerrar', puedeCaja, wrap(async (req, res) => {
     // Reparto propio: si una moto no ha liquidado, ese efectivo no esta en el
     // cajon y el corte saldria falseado. Se bloquea salvo cierre forzado.
     const pend = Object.values(e.pedidos).filter((p) => M.porLiquidar(p) && p.sucursalId === turno.sucursalId);
+    const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.sucursalId === turno.sucursalId);
+    // Una moto todavia en la calle trae dinero que NO esta en el cajon. Si se
+    // cierra sin esperarla, al volver y marcar entregado la venta cae en un
+    // turno nuevo: el corte de hoy queda corto y el de manana inflado, sin que
+    // nadie sepa por que. Por eso bloquea igual que las entregas sin liquidar.
+    if (enRuta.length && !forzar) {
+      const motos = [...new Set(enRuta.map((p) => (p.reparto && p.reparto.repartidorNombre) || '?'))].join(', ');
+      throw bad(`Hay ${enRuta.length} pedido(s) todavia en ruta (${motos}). Espera a que regresen y liquiden, o cierra con forzar:true`, 409);
+    }
     if (pend.length && !forzar) {
       const monto = M.r2(pend.reduce((s2, p) => s2 + M.efectivoDePedido(p), 0));
       const quienes = [...new Set(pend.map((p) => p.reparto.repartidorNombre || '?'))].join(', ');
       throw bad(`Hay ${pend.length} entrega(s) sin liquidar por $${monto} (${quienes}). Liquida en /api/reparto/liquidar o cierra con forzar:true`, 409);
     }
-    const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.sucursalId === turno.sucursalId);
     const out = M.cerrarTurno(turno, { usuario: c.username, conteoEfectivo });
     out.avisosReparto = { sinLiquidar: pend.length, enRuta: enRuta.length, forzado: !!forzar };
     return out;
@@ -1339,13 +1347,45 @@ app.post('/api/reparto/:folio/soltar', wrap(async (req, res) => {
   res.json(p);
 }));
 
+// Origen del viaje. Sin el, aprenderVelocidad() sale de inmediato y el sistema
+// nunca aprende cuanto tarda una entrega: el cliente jamas ve minutos de
+// llegada. Se prefiere la direccion fija del local; si la sucursal todavia no
+// tiene coordenadas se toma el GPS de la moto y de paso se propone como
+// ubicacion del local, para que a la siguiente ya haya origen fijo.
+function fijarOrigen(e, ped) {
+  const r = ped.reparto;
+  if (!r) return null;
+  const suc = e.sucursales[ped.sucursalId] || {};
+  if (suc.coordenadas) {
+    r.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
+    return r.origen;
+  }
+  const uo = M.ubicacionViva(e, r.repartidorId, 6);
+  if (uo) {
+    r.origen = { lat: uo.lat, lng: uo.lng, fuente: 'gps' };
+    const s2 = e.sucursales[ped.sucursalId];
+    if (s2 && !s2.coordenadas) { s2.coordenadas = { lat: uo.lat, lng: uo.lng }; s2.coordFuente = 'gps'; }
+    return r.origen;
+  }
+  return null;
+}
+
 // Salir con TODO lo que trae tomado, de un solo toque.
 app.post('/api/reparto/salir', wrap(async (req, res) => {
   const { sucursalId } = req.body || {};
   const out = await withState((e, c) => {
-    let emp = empleadoDeCtx(e, c);
-    if (!emp && req.body.repartidorId) emp = (e.empleados || {})[req.body.repartidorId];
-    if (!emp) throw bad('No se encontró tu ficha de empleado', 409);
+    // Dos caminos al mismo boton: el repartidor sale con lo suyo, y caja puede
+    // sacarlo mandando repartidorId. Si la moto no trae celular o su usuario no
+    // esta ligado a una ficha, la operacion no se detiene.
+    const despacha = ['admin', 'gerente', 'cajero'].includes(c.rol);
+    const propio = empleadoDeCtx(e, c);
+    let emp = null;
+    if (req.body.repartidorId && (despacha || !propio)) {
+      emp = (e.empleados || {})[req.body.repartidorId];
+      if (!emp) throw bad('Repartidor inexistente', 404);
+    }
+    if (!emp) emp = propio;
+    if (!emp) throw bad('No se encontró tu ficha de empleado. Pídele a caja que marque tu salida.', 409);
     const mios = Object.values(e.pedidos).filter((p) => M.esDomicilio(p) && p.estado === 'abierto'
       && p.reparto && p.reparto.estado === 'asignado' && p.reparto.repartidorId === emp.id
       && (!sucursalId || p.sucursalId === sucursalId));
@@ -1356,7 +1396,7 @@ app.post('/api/reparto/salir', wrap(async (req, res) => {
       M.recalcularPedido(p);
       M.marcarSalida(e, p);
       for (const l of p.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
-      if (suc.coordenadas) p.reparto.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
+      fijarOrigen(e, p);
       salidos.push(p.folio);
       if (!p.seguimiento || !p.seguimiento.token) p.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
       avisos.push({
@@ -1409,21 +1449,8 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
     const r = M.marcarSalida(e, ped);
     for (const l of ped.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
     // Si caja marca "salió", la moto está en la sucursal: el origen es la
-    // dirección fija del local, no una lectura de GPS que puede fallar o venir
-    // de una prueba hecha desde otro lugar.
-    const suc = e.sucursales[ped.sucursalId] || {};
-    if (suc.coordenadas) {
-      ped.reparto.origen = { lat: suc.coordenadas.lat, lng: suc.coordenadas.lng, fuente: 'sucursal' };
-    } else {
-      // Sin dirección capturada todavía: se toma el GPS como aproximación y se
-      // propone como ubicación del local.
-      const uo = M.ubicacionViva(e, ped.reparto.repartidorId, 6);
-      if (uo) {
-        ped.reparto.origen = { lat: uo.lat, lng: uo.lng, fuente: 'gps' };
-        const s2 = e.sucursales[ped.sucursalId];
-        if (s2 && !s2.coordenadas) { s2.coordenadas = { lat: uo.lat, lng: uo.lng }; s2.coordFuente = 'gps'; }
-      }
-    }
+    // dirección fija del local. Sin coordenadas, fijarOrigen toma el GPS.
+    fijarOrigen(e, ped);
     if (!ped.seguimiento || !ped.seguimiento.token) ped.seguimiento = { token: M.tokenSeguimiento(), creado: new Date().toISOString(), avisado: null };
     ped.seguimiento.avisado = new Date().toISOString();
     ped._avisoSalida = {
@@ -1916,6 +1943,9 @@ app.get('/api/avisos', wrap(async (req, res) => {
   const turno = sucursalId ? M.turnoAbierto(e, sucursalId) : null;
   res.json({
     ts: new Date().toISOString(),
+    // Sin coordenadas de la sucursal no hay origen del viaje, y sin origen el
+    // sistema nunca aprende cuanto tarda: el cliente no ve minutos de llegada.
+    sucursalSinUbicar: sucursalId ? !((e.sucursales[sucursalId] || {}).coordenadas) : false,
     cocina: { pendientes: enCocina, listos },
     reparto: {
       porAsignar: mio ? [] : dom.filter((p) => p.estado === 'abierto' && (!p.reparto || p.reparto.estado === 'por_asignar')).map((p) => p.folio),
