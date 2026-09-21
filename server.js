@@ -409,17 +409,22 @@ app.delete('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/config', wrap(async (req, res) => {
   const e = await readState();
-  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda, fiscal: e.config.fiscal || {} });
+  res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda, fiscal: e.config.fiscal || {},
+    lema: (e.config && e.config.lema) || '', horario: (e.config && e.config.horario) || '' });
 }));
 app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
-  const { nombre, logo, fiscal, cajaModo: modo } = req.body || {};
+  const { nombre, logo, fiscal, cajaModo: modo, lema, horario } = req.body || {};
   if (modo !== undefined && !['diario', 'turnos'].includes(modo)) throw bad('Modo de caja inválido');
   const out = await withState((e) => {
     if (nombre) e.meta.nombre = nombre;
     if (logo !== undefined) e.config.logo = logo;
     if (fiscal && typeof fiscal === 'object') e.config.fiscal = { ...(e.config.fiscal || {}), ...fiscal };
     if (modo !== undefined) e.config.cajaModo = modo;
-    return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {}, cajaModo: cajaModo(e) };
+    // Lema y horario: los ve el cliente en la pagina de pedido. Cada negocio el suyo.
+    if (lema !== undefined) e.config.lema = String(lema || '').slice(0, 80);
+    if (horario !== undefined) e.config.horario = String(horario || '').slice(0, 120);
+    return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {}, cajaModo: cajaModo(e),
+      lema: e.config.lema || '', horario: e.config.horario || '' };
   });
   res.json(out);
 }));
@@ -2711,6 +2716,7 @@ app.get('/pedir/:row/:suc/menu', (req, res) => {
       const usados = new Set(prods.flatMap((p) => p.gruposIds || []));
       res.json({
         negocio: (e.meta && e.meta.nombre) || '', logo: (e.config && e.config.logo) || null,
+        lema: (e.config && e.config.lema) || '', horario: (e.config && e.config.horario) || '',
         sucursal: { id: suc.id, nombre: suc.nombre, telefono: suc.telefono || null },
         categorias: cats.filter((c) => prods.some((p) => p.categoriaId === c.id)).map((c) => ({ id: c.id, nombre: c.nombre })),
         productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [], divisible: p.divisible || null })),
