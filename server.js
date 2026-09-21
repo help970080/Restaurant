@@ -2615,6 +2615,7 @@ app.get('/qr/:row/:suc/menu', (req, res) => {
       const categorias = Object.values(e.menu.categorias).map((c) => ({ id: c.id, nombre: c.nombre, orden: c.orden || 0 })).sort((a, b) => a.orden - b.orden);
       const productos = Object.values(e.menu.productos)
         .filter((p) => p.activo && p.disponible !== false)
+        .sort((a, b) => (a.orden || 0) - (b.orden || 0) || String(a.nombre).localeCompare(String(b.nombre), 'es'))
         .map((p) => ({ id: p.id, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, categoriaId: p.categoriaId, estacion: p.estacion || 'Cocina', icono: p.icono || '', gruposIds: p.gruposIds || [], conOpciones: (p.gruposIds || []).length > 0 }));
       // Solo los grupos que algun producto visible usa, para no exponer el menu completo.
       const usados = new Set(productos.flatMap((p) => p.gruposIds));
@@ -2712,14 +2713,17 @@ app.get('/pedir/:row/:suc/menu', (req, res) => {
       if (!suc) return res.status(404).json({ error: 'Sucursal no encontrada' });
       const cats = Object.values(e.menu.categorias).filter((c) => c.visible !== false)
         .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-      const prods = Object.values(e.menu.productos).filter((p) => p.activo !== false && p.disponible !== false);
+      const prods = Object.values(e.menu.productos)
+        .filter((p) => p.activo !== false && p.disponible !== false)
+        // Postgres no conserva el orden de las llaves del JSONB: hay que ordenar aqui.
+        .sort((a, b) => (a.orden || 0) - (b.orden || 0) || String(a.nombre).localeCompare(String(b.nombre), 'es'));
       const usados = new Set(prods.flatMap((p) => p.gruposIds || []));
       res.json({
         negocio: (e.meta && e.meta.nombre) || '', logo: (e.config && e.config.logo) || null,
         lema: (e.config && e.config.lema) || '', horario: (e.config && e.config.horario) || '',
         sucursal: { id: suc.id, nombre: suc.nombre, telefono: suc.telefono || null },
         categorias: cats.filter((c) => prods.some((p) => p.categoriaId === c.id)).map((c) => ({ id: c.id, nombre: c.nombre })),
-        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [], divisible: p.divisible || null })),
+        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [], divisible: p.divisible || null, orden: p.orden || 0 })),
         grupos: Object.values(e.menu.gruposModificadores).filter((g) => usados.has(g.id))
           .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio,
             opciones: g.opciones.filter((o) => o.activo !== false).map((o) => ({ id: o.id, nombre: o.nombre, precioDelta: o.precioDelta })) })),
