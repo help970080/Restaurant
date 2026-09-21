@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Jefe Pizzas — Consola</title>
+<title>ComandaPro — Consola</title>
 <meta name="theme-color" content="#e0841a">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Jefe Pizzas">
+<meta name="apple-mobile-web-app-title" content="ComandaPro">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1101,7 +1101,7 @@ function hidratarCacheOffline(){
 }
 function renderLogin(){
   $('#app').innerHTML=`<div class="login"><form class="login-card" id="lf">
-    <div class="logo">Jefe<b>Pizzas</b></div><div class="tg">Consola de operación</div>
+    <div class="logo">Comanda<b>Pro</b></div><div class="tg">Consola de operación</div>
     <label>Usuario</label><input id="lu" autocomplete="username" autofocus>
     <label>Contraseña</label><input id="lp" type="password" autocomplete="current-password">
     <button type="submit">Entrar</button><div class="err" id="le"></div></form></div>`;
@@ -3632,7 +3632,7 @@ async function vAjustes(){
     <div class="field" style="display:flex;align-items:flex-end"><div class="small" style="color:var(--muted)">Pon 0 para no desglosar IVA (ej. si estás en RIF/RESICO sin trasladar IVA).</div></div></div>
     <button class="btn accent" id="fxIvaSave">Guardar IVA</button></div>
   <div class="panel" style="margin-top:16px"><h3>Datos para contratos <span class="small">del comitente (restaurante) — se usan al generar contratos de comisión</span></h3>
-    <div class="cols2"><div class="field"><label>Razón social / nombre fiscal</label><input id="fxRazon" value="${fx.razonSocial||''}" placeholder="Ej. Jefe Pizzas SA de CV o tu nombre"></div>
+    <div class="cols2"><div class="field"><label>Razón social / nombre fiscal</label><input id="fxRazon" value="${fx.razonSocial||''}" placeholder="Ej. Pizzería La Esquina SA de CV o tu nombre"></div>
     <div class="field"><label>RFC</label><input id="fxRfc" value="${fx.rfc||''}" class="mono"></div></div>
     <div class="field"><label>Domicilio fiscal</label><input id="fxDom" value="${fx.domicilio||''}"></div>
     <div class="cols2"><div class="field"><label>Representante legal (si es empresa)</label><input id="fxRep" value="${fx.repLegal||''}"></div>
@@ -3884,9 +3884,9 @@ function renderSuper(){
         <h3>＋ Nuevo restaurante</h3>
         <div class="psub">Se crea con su menú base, 2 sucursales y un administrador. El admin se autogestiona y sus datos quedan aislados de los demás.</div>
         <div class="grid">
-          <div class="field"><label>Nombre del restaurante</label><input id="t-nombre" placeholder="Ej. Jefe Pizzas, Tacos El Güero"></div>
+          <div class="field"><label>Nombre del restaurante</label><input id="t-nombre" placeholder="Ej. Pizzería La Esquina, Tacos El Güero"></div>
           <div class="field"><label>Nombre del administrador</label><input id="t-admnom" value="Administrador"></div>
-          <div class="field"><label>Usuario del admin (único en el sistema)</label><input id="t-admuser" autocomplete="off" placeholder="ej. jefepizzas"></div>
+          <div class="field"><label>Usuario del admin (único en el sistema)</label><input id="t-admuser" autocomplete="off" placeholder="ej. laesquina"></div>
           <div class="field"><label>Contraseña (vacío = se genera una)</label><input id="t-admpass" autocomplete="off" placeholder="opcional"></div>
         </div>
         <button class="sbtn gold" style="margin-top:14px" id="sprCrear">Crear restaurante</button>
