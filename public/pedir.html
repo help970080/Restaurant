@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0E0D0C">
-<title>Jefe Pizzas · Pedir a domicilio</title>
+<title>Pedir a domicilio</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-/* Jefe Pizzas — tomado del volante: negro, amarillo rótulo y rojo jitomate. */
+/* Tema oscuro de fabrica: negro, amarillo rotulo y rojo jitomate. */
 *{box-sizing:border-box}
 :root{
   --noche:#0E0D0C; --carbon:#1B1917; --borde:#2E2A26;
@@ -208,11 +208,12 @@ button,select,input,textarea{font-family:inherit}
    .catch(function(){$('#app').innerHTML='<div class="msg mal" style="padding:70px 16px">No cargó el menú. Revisa tu conexión y vuelve a intentar.</div>';});
 
   function pintar(){
+    if(M.negocio)document.title=M.negocio+' · Pedir a domicilio';
     var ps=M.productos.filter(function(p){return p.categoriaId===cat;});
     $('#app').innerHTML=
       '<div class="top">'+(M.logo?'<img src="'+esc(M.logo)+'" alt="">':'')+
       '<h1 class="neg">'+esc(M.negocio)+'</h1>'+
-      '<div class="lema">El sabor que manda</div>'+
+      (M.lema?'<div class="lema">'+esc(M.lema)+'</div>':'')+
       '<div class="donde">Te la llevamos a '+esc(M.sucursal.nombre)+' y alrededores</div></div>'+
       (M.promo2x1?'<div class="banner"><b>'+esc(M.promo2x1.nombre)+'</b><span>Pide dos y la más barata va por nuestra cuenta</span></div>':'')+
       '<div class="cats">'+M.categorias.map(function(c){
@@ -223,7 +224,7 @@ button,select,input,textarea{font-family:inherit}
           (p.descripcion?'<span class="p-d">'+esc(p.descripcion)+'</span>':'')+
           (maxP?'<span class="p-div">hasta '+maxP+' sabores</span>':'')+'</span>'+
           '<span class="p-p">'+money(p.precioBase)+'</span></button>';}).join('')+'</div>'+
-      '<div class="pie">Abierto todos los días de 12:00 a 22:00<br>Pagas al recibir</div>';
+      '<div class="pie">'+(M.horario?esc(M.horario)+'<br>':'')+'Pagas al recibir</div>';
     [].forEach.call(document.querySelectorAll('[data-c]'),function(b){b.onclick=function(){cat=b.dataset.c;pintar();};});
     [].forEach.call(document.querySelectorAll('[data-p]'),function(b){b.onclick=function(){abrirProducto(b.dataset.p);};});
     barra();
@@ -370,7 +371,7 @@ button,select,input,textarea{font-family:inherit}
 
   function pasoTelefono(){
     mo.innerHTML='<h3>Tu teléfono</h3><div class="sub">Te mandamos un código por WhatsApp para confirmar que eres tú.</div>'+
-      '<div class="f"><label>Celular a 10 dígitos</label><input id="tel" type="tel" inputmode="numeric" maxlength="14" value="'+esc(tel)+'" placeholder="7771234567"></div>'+
+      '<div class="f"><label>Celular a 10 dígitos</label><input id="tel" type="tel" inputmode="numeric" maxlength="14" value="'+esc(tel)+'" placeholder="5512345678"></div>'+
       '<div class="msg" id="m1"></div>'+
       '<button class="btn full" id="ok" style="margin-top:8px">Mandarme el código</button>';
     $('#ok').onclick=function(){
@@ -455,7 +456,7 @@ button,select,input,textarea{font-family:inherit}
       '<div class="f"><label>¿Quién recibe?</label><input id="dn" value="'+esc(datos.nombre||'')+'" placeholder="Tu nombre"></div>'+
       '<div class="f"><label>Calle</label><input id="dc" value="'+esc(datos.calle||'')+'"></div>'+
       '<div class="f"><label>Número</label><input id="dnum" value="'+esc(datos.numero||'')+'"></div>'+
-      '<div class="f"><label>Colonia y pueblo</label><input id="dcol" value="'+esc(datos.colonia||'')+'" placeholder="Centro, Tlayacapan"></div>'+
+      '<div class="f"><label>Colonia y pueblo</label><input id="dcol" value="'+esc(datos.colonia||'')+'" placeholder="Centro"></div>'+
       '<div class="f"><label>Referencias</label><input id="dr" value="'+esc(datos.referencias||'')+'" placeholder="Portón azul, frente a la tienda"></div>'+
       '<div class="f"><label>Notas para la cocina</label><textarea id="dnot" rows="2" maxlength="200" placeholder="Opcional"></textarea></div>'+
       (function(){var pr=calcular2x1();return pr?'<div class="aviso" style="background:#f2faf4;border-color:var(--green)">Tu '+esc(M.promo2x1.nombre)+' ya está aplicado: ahorras <b>'+money(pr.monto)+'</b>.</div>':'';})()+
