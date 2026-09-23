@@ -1999,6 +1999,7 @@ function pintarTomar(tab){
   if($('#tmSalir'))$('#tmSalir').onclick=async()=>{
     try{
       const r=await API.post('/api/reparto/salir',{sucursalId:app.sucursalId});
+      if(r.enCocina&&r.enCocina.length)toast(`Se quedan esperando cocina: ${r.enCocina.join(', ')}`,{ms:5000});
       if(r.automatico){
         toast(`Saliste con ${r.salidos.length} pedido(s) · avisamos a los clientes`,{tipo:'ok',ms:4500});
         vReparto();
@@ -2099,7 +2100,7 @@ function tarjetaPedidoRep(p,tipo,caja){
     </div>`:''}
     <div class="rc-acts">
       ${tipo==='por_asignar'&&caja?`<button class="btn accent" data-asignar="${p.folio}">Asignar moto</button>`:''}
-      ${tipo==='asignado'&&caja?`<button class="btn accent" data-salida="${p.folio}">Salió</button><button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
+      ${tipo==='asignado'&&caja?(p.cocinaListo?`<button class="btn accent" data-salida="${p.folio}">Salió</button>`:`<button class="btn" disabled title="Cocina aún no lo marca listo">⏳ Esperando cocina</button>`)+`<button class="btn" data-asignar="${p.folio}">Cambiar</button>`:''}
       ${tipo==='asignado'&&!caja?`<button class="btn" data-soltar="${p.folio}">Soltar</button>`:''}
       ${tipo==='en_ruta'?`<button class="btn accent" data-entregar="${p.folio}">Entregar y cobrar</button>`:''}
       ${tipo==='en_ruta'&&caja?`<button class="btn" data-fallo="${p.folio}">No entregó</button>`:''}
