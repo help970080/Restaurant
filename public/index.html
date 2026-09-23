@@ -1445,7 +1445,7 @@ function vPOS(){
         <div class="trow"><span>Subtotal</span><span class="mono" id="tSub">$0.00</span></div>
         <div class="trow" id="tEnvioRow" style="display:none"><span>Envío</span><span class="mono" id="tEnvio">$0.00</span></div>
         <div class="trow" id="tDescRow" style="display:none;color:var(--green)"><span id="tDescLbl">Descuento</span><span class="mono" id="tDesc">$0.00</span></div>
-        <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
+        <div class="extra-btns"><button id="btnPromo">Promoción</button><button id="btnLibre" style="color:var(--accent-ink);border-color:var(--accent)">+ Venta libre</button><button id="btnNuevo">${enMesa?'Vaciar pantalla':'Nuevo'}</button></div>
         <div class="trow tot"><span>Total</span><span class="mono" id="tTotal">$0.00</span></div>
         ${(()=>{const pc=puedeCobrar();return `<div class="paymesa"><button class="pay amber" id="btnComanda">Mandar a cocina</button>${pc?`<button class="pay" id="btnCobrar">Cobrar${enMesa?' cuenta':''}</button>`:''}</div>${pc?'':`<div class="small" style="text-align:center;color:var(--muted);padding:8px">El cobro lo realiza caja</div>`}`;})()}
       </div></div></div>`;
@@ -1459,6 +1459,10 @@ function vPOS(){
   if($('#btnSegCopia'))$('#btnSegCopia').onclick=()=>copiarSeguimiento(app.pos.folio);
   if($('#btnNuevo'))$('#btnNuevo').onclick=()=>{app.pos.folio=null;app.pos.pedido=null;if(app.pos.tipoServicio==='mesa'){app.pos.tipoServicio='mostrador';app.pos.mesaId=null;}vPOS();};
   if($('#btnPromo'))$('#btnPromo').onclick=aplicarPromocion;
+  if($('#btnLibre'))$('#btnLibre').onclick=async()=>{
+    if(!app.turno){toast('Abre el turno antes de vender');return;}
+    try{await asegurarPedido();modalPrecioLibre({id:'prod_ventalibre',nombre:'Venta libre'});}catch(e){toast(e.message);}
+  };
   if($('#btnCobrar'))$('#btnCobrar').onclick=cobrar;
   if($('#btnComanda'))$('#btnComanda').onclick=mandarComanda;
   renderLines();
@@ -1651,7 +1655,7 @@ function modalModificadores(prod){
 // cuesta. El server lo guarda con quién lo capturó para auditarlo en Reportes.
 function modalPrecioLibre(prod){
   const tams=['Chica','Mediana','Grande','Familiar'];let tam='';
-  modal.innerHTML=`<h3>${prod.nombre}</h3><div class="sub">Precio libre · queda registrado quién lo captura</div>
+  modal.innerHTML=`<h3>${prod.nombre}</h3><div class="sub">Escribe qué lleva y cuánto cuesta · queda registrado quién lo captura</div>
     <div class="field"><label>Tamaño (opcional)</label><div class="pt-n">${tams.map(t=>`<button class="pt-b" data-tam="${t}">${t}</button>`).join('')}</div></div>
     <div class="field"><label>¿Qué lleva?</label><textarea id="plDesc" rows="3" maxlength="200" placeholder="Ej. mitad hawaiana, mitad pepperoni con jalapeño, orilla rellena" style="width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;resize:vertical"></textarea></div>
     <div class="field"><label>Precio</label><input id="plPre" type="number" inputmode="decimal" step="1" min="1" class="mono" placeholder="0.00" style="font-size:20px"></div>
@@ -1665,7 +1669,7 @@ function modalPrecioLibre(prod){
   $('#plNo').onclick=closeModal;
   $('#plOk').onclick=async()=>{
     const v=+$('#plPre').value;
-    if(v>=2000&&!confirm(`¿Seguro? Vas a cobrar ${money(v)} por una ${prod.nombre}.`))return;
+    if(v>=2000&&!confirm(`¿Seguro? Vas a cobrar ${money(v)} en ${prod.nombre}.`))return;
     $('#plOk').disabled=true;
     try{app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,
         precioManual:v,descripcionLibre:$('#plDesc').value.trim(),tamanoLibre:tam,notas:$('#plNota').value.trim()});
