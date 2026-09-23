@@ -787,6 +787,56 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
   res.json(p);
 }));
 
+// ---- Fotos de productos -----------------------------------------------------
+//  El celular recorta y comprime antes de subir (~60 KB). Aquí se valida que
+//  de verdad sea una imagen y se guarda en su propia tabla. En el producto solo
+//  queda la ruta corta /f/<id>.jpg.
+const FOTO_MAX = 700 * 1024;
+const idFotoDe = (url) => { const m = /^\/f\/([a-z0-9_]+)\.(jpg|png|webp)$/.exec(String(url || '')); return m ? m[1] : null; };
+function tipoImagen(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return ['image/jpeg', 'jpg'];
+  if (buf.length > 8 && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return ['image/png', 'png'];
+  if (buf.length > 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return ['image/webp', 'webp'];
+  return null;
+}
+app.post('/api/menu/productos/:id/foto', soloAdmin, wrap(async (req, res) => {
+  const { dataUrl } = req.body || {};
+  const m = /^data:image\/[a-z+.-]+;base64,(.+)$/i.exec(String(dataUrl || ''));
+  if (!m) throw bad('Manda la foto como imagen');
+  const buf = Buffer.from(m[1], 'base64');
+  if (buf.length > FOTO_MAX) throw bad('La foto pesa demasiado (máximo 700 KB)', 413);
+  const tipo = tipoImagen(buf);
+  if (!tipo) throw bad('Ese archivo no es una foto válida (JPG, PNG o WEBP)');
+  const row = ctx().row;
+  const e0 = await readState();
+  if (!e0.menu.productos[req.params.id]) throw bad('Producto inexistente', 404);
+  const id = row + '_' + crypto.randomBytes(8).toString('hex');
+  await db.saveFoto(row, id, tipo[0], buf);
+  let anterior = null;
+  const prod = await withState((e) => {
+    const p = e.menu.productos[req.params.id];
+    if (!p) throw bad('Producto inexistente', 404);
+    anterior = idFotoDe(p.foto);
+    p.foto = `/f/${id}.${tipo[1]}`;
+    return p;
+  });
+  if (anterior) db.delFoto(row, anterior).catch(() => {});
+  res.json(prod);
+}));
+app.delete('/api/menu/productos/:id/foto', soloAdmin, wrap(async (req, res) => {
+  const row = ctx().row;
+  let anterior = null;
+  const prod = await withState((e) => {
+    const p = e.menu.productos[req.params.id];
+    if (!p) throw bad('Producto inexistente', 404);
+    anterior = idFotoDe(p.foto);
+    p.foto = null;
+    return p;
+  });
+  if (anterior) db.delFoto(row, anterior).catch(() => {});
+  res.json(prod);
+}));
+
 app.get('/api/sucursales', wrap(async (req, res) => { const e = await readState(); res.json(Object.values(e.sucursales)); }));
 
 // Acepta "18.9145, -98.9760" o cualquier liga de Google Maps pegada tal cual.
@@ -2765,10 +2815,17 @@ app.get('/t/:row/:token/estado', (req, res) => {
       const eta = enCamino
         ? M.estimarLlegada(e, p, { ubicacion: ubi, promedioMin: M.promedioEnRuta(e, p.sucursalId) })
         : { min: null, base: null, distanciaKm: null };
-      res.json(M.vistaSeguimiento(e, p, {
+      const vista = M.vistaSeguimiento(e, p, {
         repartidor: enCamino ? emp : null, ubicacion: ubi,
         etaMin: eta.min, etaBase: eta.base, distanciaKm: eta.distanciaKm,
-      }));
+      });
+      vista.logo = (e.config && e.config.logo) || null;
+      // Calificación real del repartidor; solo se muestra con 3 o más.
+      if (enCamino && emp) {
+        const cs = Object.values(e.pedidos).map((x) => x.reparto && x.reparto.calificacion).filter((c) => c && c.repartidorId === emp.id);
+        vista.repartidorEstrellas = cs.length >= 3 ? M.r2(cs.reduce((t, c) => t + c.estrellas, 0) / cs.length) : null;
+      }
+      res.json(vista);
     } catch (err) {
       console.error('[seguimiento]', err && err.message);
       res.status(500).json({ error: 'Error al consultar el pedido' });
@@ -2804,6 +2861,22 @@ app.post('/t/:row/:token/calificar', express.json(), (req, res) => {
 //    4. Un teléfono marcado como fantasma queda bloqueado.
 // ===========================================================================
 const PEDIR_PAGE = path.join(__dirname, 'public', 'pedir.html');
+// Fotos públicas (carta en línea, QR y consola). El id cambia con cada foto
+// nueva, así que el navegador puede guardarla para siempre.
+app.get('/f/:archivo', async (req, res) => {
+  try {
+    const id = String(req.params.archivo || '').replace(/\.(jpg|png|webp)$/, '');
+    if (!/^[0-9]+_[a-f0-9]{16}$/.test(id)) return res.status(404).end();
+    const f = await db.getFoto(id);
+    if (!f) return res.status(404).end();
+    res.set('Content-Type', f.mime);
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(f.data);
+  } catch (err) {
+    console.error('[foto]', err && err.message);
+    res.status(500).end();
+  }
+});
 const ENTREGAS_PARA_CONFIAR = +(process.env.ENTREGAS_PARA_CONFIAR || 3);
 const MONTO_REVISION = +(process.env.MONTO_REVISION || 800);
 
@@ -2829,9 +2902,20 @@ app.get('/pedir/:row/:suc/menu', (req, res) => {
         lema: (e.config && e.config.lema) || '', horario: (e.config && e.config.horario) || '',
         sucursal: { id: suc.id, nombre: suc.nombre, telefono: suc.telefono || null },
         categorias: cats.filter((c) => prods.some((p) => p.categoriaId === c.id)).map((c) => ({ id: c.id, nombre: c.nombre })),
-        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [], divisible: p.divisible || null, orden: p.orden || 0 })),
+        productos: prods.map((p) => ({ id: p.id, categoriaId: p.categoriaId, nombre: p.nombre, descripcion: p.descripcion || '', precioBase: p.precioBase, gruposIds: p.gruposIds || [], divisible: p.divisible || null, orden: p.orden || 0, foto: p.foto || null })),
+        // "Más pedidos": los 6 con más piezas vendidas en 30 días. Dato real, no adorno.
+        masPedidos: (() => {
+          const desde = Date.now() - 30 * 864e5, cuenta = {};
+          for (const x of Object.values(e.pedidos)) {
+            if (x.estado !== 'cobrado' || new Date(x.creado).getTime() < desde) continue;
+            for (const l of x.lineas || []) cuenta[l.productoId] = (cuenta[l.productoId] || 0) + (l.cantidad || 0);
+          }
+          const vivos = new Set(prods.map((p) => p.id));
+          return Object.entries(cuenta).filter(([id, n]) => vivos.has(id) && n >= 3)
+            .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([id]) => id);
+        })(),
         grupos: Object.values(e.menu.gruposModificadores).filter((g) => usados.has(g.id))
-          .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio,
+          .map((g) => ({ id: g.id, nombre: g.nombre, tipo: g.tipo, obligatorio: !!g.obligatorio, max: g.max || null,
             opciones: g.opciones.filter((o) => o.activo !== false).map((o) => ({ id: o.id, nombre: o.nombre, precioDelta: o.precioDelta })) })),
         promo2x1: (() => { const p = M.promo2x1Activa(e); return p ? { nombre: p.nombre, categorias: p.categorias } : null; })(),
       });
