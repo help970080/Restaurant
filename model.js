@@ -113,7 +113,7 @@ const PRECIO_LIBRE_MAX = 20000;   // tope de cordura contra un dedazo (2450 -> 2
 function validarPrecioLibre(prod, { precioManual, descripcionLibre }) {
   const precio = r2(+precioManual);
   const desc = String(descripcionLibre == null ? '' : descripcionLibre).trim().slice(0, 200);
-  if (!desc) { const x = new Error(`Escribe qué lleva la ${prod.nombre}`); x.status = 400; throw x; }
+  if (!desc) { const x = new Error(`Escribe qué lleva (${prod.nombre})`); x.status = 400; throw x; }
   if (!(precio > 0)) { const x = new Error('Captura el precio'); x.status = 400; throw x; }
   if (precio > PRECIO_LIBRE_MAX) { const x = new Error(`Precio fuera de rango (máximo ${PRECIO_LIBRE_MAX})`); x.status = 400; throw x; }
   return { precio, desc };
