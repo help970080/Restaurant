@@ -1178,7 +1178,9 @@ app.get('/api/cocina', wrap(async (req, res) => {
   // `estacion` elige la pantalla (Barra, Creperia, Cocina...). Sin el parametro, devuelve todas.
   const esDeEstacion = (l) => !estacion || (l.estacion || 'Cocina') === estacion;
   const arr = Object.values(e.pedidos)
-    .filter((p) => (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado' && esDeEstacion(l)))
+    // Un pedido cancelado (caja, mesa liberada, en línea rechazado) sale de cocina
+    // aunque sus líneas sigan en 'enviado': si no, se queda pegado en el KDS.
+    .filter((p) => p.estado !== 'cancelado' && (!sucursalId || p.sucursalId === sucursalId) && p.lineas.some((l) => l.cocina === 'enviado' && esDeEstacion(l)))
     .sort((a, b) => new Date(a.tiemposCocina.recibido) - new Date(b.tiemposCocina.recibido))
     .map((p) => ({ folio: p.folio, codigo: p.codigoEntrega || null, colonia: (p.cliente && p.cliente.colonia) || null, tipoServicio: p.tipoServicio, mesaId: p.mesaId, recibido: p.tiemposCocina.recibido, listo: !!p._kdsListo, items: p.lineas.filter((l) => l.cocina === 'enviado' && esDeEstacion(l)).map((l) => ({ cantidad: l.cantidad, nombre: l.nombre, partes: l.partes || null, fraccion: l.fraccion || null, estacion: l.estacion || 'Cocina', modificadores: l.modificadores.map((m) => m.opcionNombre), notas: l.notas })) }));
   res.json(arr);
