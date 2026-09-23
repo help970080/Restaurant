@@ -1558,6 +1558,7 @@ app.post('/api/reparto/:folio/fallido', puedeCaja, wrap(async (req, res) => {
 }));
 
 // La moto reporta su posicion. Solo se guarda la ultima; no hay recorrido.
+const PRECISION_MAX_M = 500;   // más allá de esto la moto aparece en otra colonia
 app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
   const { lat, lng, precision = null, empleadoId = null } = req.body || {};
   const out = await withState((e, c) => {
@@ -1567,6 +1568,12 @@ app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
     else emp = Object.values(e.empleados || {}).find((x) => x.username && x.username === c.username);
     if (!emp) throw bad('No se encontró tu ficha de empleado. Pide que te den de alta en Personal con tu usuario.', 404);
     if (!M.esRepartidor(emp)) throw bad('Tu puesto no es de repartidor', 403);
+    // Una lectura de ±1-2 km (permiso "ubicación aproximada" o GPS apagado) pinta
+    // la moto en otra colonia con toda confianza: mejor no guardarla y decirle
+    // al repartidor qué activar.
+    if (precision != null && +precision > PRECISION_MAX_M) {
+      throw bad(`Tu teléfono da ubicación aproximada (±${Math.round(+precision)} m). Activa "Ubicación precisa" para el navegador y prende el GPS.`, 422);
+    }
     const u = M.guardarUbicacion(e, emp.id, { lat, lng, precision });
     const enRuta = Object.values(e.pedidos).filter((p) => M.enRuta(p) && p.reparto.repartidorId === emp.id).length;
     return { ok: true, ts: u.ts, enRuta };
