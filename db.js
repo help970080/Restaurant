@@ -59,6 +59,16 @@ async function initDB() {
     data JSONB NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT now()
   )`);
+  // Fotos de productos: tabla aparte para que el documento JSONB del tenant
+  // (que se lee y reescribe completo en cada pedido) no cargue con imágenes.
+  await query(`CREATE TABLE IF NOT EXISTS comandapro_fotos (
+    id TEXT PRIMARY KEY,
+    tenant INTEGER NOT NULL,
+    mime TEXT NOT NULL,
+    data BYTEA NOT NULL,
+    bytes INTEGER NOT NULL,
+    creado TIMESTAMPTZ DEFAULT now()
+  )`);
   // Asegurar fila SYS
   const { rows } = await query('SELECT 1 FROM comandapro_state WHERE id = 0');
   if (!rows.length) {
@@ -78,8 +88,21 @@ async function insertState(row, data) {
   await query('INSERT INTO comandapro_state (id, data) VALUES ($1, $2)', [row, data]);
 }
 
+// ---- Fotos -------------------------------------------------------------------
+async function saveFoto(tenant, id, mime, buf) {
+  await query('INSERT INTO comandapro_fotos (id, tenant, mime, data, bytes) VALUES ($1, $2, $3, $4, $5)', [id, tenant, mime, buf, buf.length]);
+}
+async function getFoto(id) {
+  const { rows } = await query('SELECT tenant, mime, data FROM comandapro_fotos WHERE id = $1', [id]);
+  return rows.length ? rows[0] : null;
+}
+// Solo borra si la foto es de ese tenant: nadie borra fotos ajenas.
+async function delFoto(tenant, id) {
+  await query('DELETE FROM comandapro_fotos WHERE id = $1 AND tenant = $2', [id, tenant]);
+}
+
 // SYS helpers
 const loadSys = () => loadState(0);
 const saveSys = (data) => saveState(0, data);
 
-module.exports = { setPool, getPool, query, initDB, loadState, saveState, insertState, loadSys, saveSys };
+module.exports = { setPool, getPool, query, initDB, loadState, saveState, insertState, loadSys, saveSys, saveFoto, getFoto, delFoto };
