@@ -760,7 +760,17 @@ function pintarInstalar(){
 // --- GPS del repartidor -----------------------------------------------------
 // Se reporta cada 25s mientras traiga pedidos en ruta. Solo la última posición:
 // el servidor no guarda recorrido. El repartidor lo prende y lo apaga.
-let geoTimer=null;
+let geoTimer=null,geoWatch=null,wakeLock=null,geoUltEnvio=0;
+// Con la pantalla apagada Android congela los timers de la página y la moto
+// "desaparece". Mientras el GPS esté prendido se pide mantener la pantalla
+// encendida; si el sistema la suelta (cambió de app), se vuelve a pedir al regresar.
+async function pedirPantallaEncendida(){
+  try{if('wakeLock' in navigator&&!wakeLock&&document.visibilityState==='visible'){
+    wakeLock=await navigator.wakeLock.request('screen');wakeLock.addEventListener('release',()=>{wakeLock=null;});}}catch{}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&gpsOn()&&geoTimer){pedirPantallaEncendida();if(app._gpsMandar)app._gpsMandar(true);}
+});
 const gpsOn=()=>localStorage.getItem('cp_gps')==='1';
 // Un fallo de ubicación tiene tres causas muy distintas y el mensaje tiene que
 // decir cuál es: el permiso del sitio, el permiso de la app en Android, o el
@@ -797,7 +807,26 @@ function iniciarGPS(silencioso){
   if(!window.isSecureContext){app._gpsErr='La página no va por HTTPS';app._gpsCodigo=0;pintarBannerGPS();return;}
   localStorage.setItem('cp_gps','1');
   if(geoTimer)clearInterval(geoTimer);
-  const mandar=async()=>{
+  const enviar=async(pos)=>{
+    geoUltEnvio=Date.now();app._gpsErr=null;app._gpsCodigo=null;
+    try{
+      const r=await API.post('/api/reparto/ubicacion',{lat:pos.coords.latitude,lng:pos.coords.longitude,precision:pos.coords.accuracy});
+      app._gpsUlt=new Date().toISOString();app._gpsRuta=r.enRuta;app._gpsPrec=Math.round(pos.coords.accuracy||0);
+    }catch(e){
+      if(/no es de repartidor|ficha de empleado/i.test(e.message||'')){detenerGPS();return;}
+      app._gpsErr=e.message;app._gpsCodigo=null;
+    }
+    if(app.vista==='reparto')pintarBannerGPS();
+  };
+  // Seguimiento continuo: el teléfono avisa cuando se mueve. Se manda como
+  // máximo cada 15 s para no saturar el server.
+  if(geoWatch!=null){try{navigator.geolocation.clearWatch(geoWatch);}catch{}}
+  geoWatch=navigator.geolocation.watchPosition(
+    (pos)=>{if(Date.now()-geoUltEnvio>=15000)enviar(pos);},
+    ()=>{},{enableHighAccuracy:true,maximumAge:10000,timeout:30000});
+  pedirPantallaEncendida();
+  const mandar=async(forzar)=>{
+    if(!forzar&&Date.now()-geoUltEnvio<20000)return; // el watch ya mandó hace poco
     let pos;
     try{pos=await posicionConReintento();}
     catch(err){
@@ -805,24 +834,17 @@ function iniciarGPS(silencioso){
       if(app.vista==='reparto')pintarBannerGPS();
       return;
     }
-    app._gpsErr=null;app._gpsCodigo=null;
-    try{
-      const r=await API.post('/api/reparto/ubicacion',{lat:pos.coords.latitude,lng:pos.coords.longitude,precision:pos.coords.accuracy});
-      app._gpsUlt=new Date().toISOString();app._gpsRuta=r.enRuta;app._gpsPrec=Math.round(pos.coords.accuracy||0);
-    }catch(e){
-      // 403/404: este usuario no tiene ficha de repartidor. No tiene caso seguir
-      // intentando ni enseñarle el error a caja.
-      if(/no es de repartidor|ficha de empleado/i.test(e.message||'')){detenerGPS();return;}
-      app._gpsErr=e.message;app._gpsCodigo=null;
-    }
-    if(app.vista==='reparto')pintarBannerGPS();
+    await enviar(pos);
   };
-  mandar();geoTimer=setInterval(mandar,25000);
+  app._gpsMandar=mandar;
+  mandar(true);geoTimer=setInterval(()=>mandar(false),25000);
   if(!silencioso)toast('Buscando tu ubicación…');
 }
 function detenerGPS(){
   localStorage.removeItem('cp_gps');
   if(geoTimer){clearInterval(geoTimer);geoTimer=null;}
+  if(geoWatch!=null){try{navigator.geolocation.clearWatch(geoWatch);}catch{}geoWatch=null;}
+  if(wakeLock){try{wakeLock.release();}catch{}wakeLock=null;}
   app._gpsUlt=null;app._gpsErr=null;
   if(app.vista==='reparto')pintarBannerGPS();
 }
@@ -843,6 +865,7 @@ function pintarBannerGPS(){
     detalle=`Última señal ${new Date(app._gpsUlt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}${app._gpsPrec?` · precisión ${app._gpsPrec} m`:''}${app._gpsRuta?` · ${app._gpsRuta} pedido(s) en ruta`:''}`;
   }
   else{titulo='Buscando señal…';detalle='Dale unos segundos. No cierres esta pantalla.';}
+  if(on&&!fallando)detalle+=' · <b>deja esta pantalla abierta</b>: si bloqueas el teléfono o cambias de app, deja de mandar';
   c.innerHTML=`<div class="gps-card ${clase}">
     <div><div class="gps-t">${titulo}</div><div class="gps-s">${detalle}</div></div>
     <button class="btn ${on?'':'accent'}" id="gpsTog">${on?'Apagar':'Prender'}</button></div>`;
@@ -1146,7 +1169,7 @@ function abrirComandaOffline(){
 }
 function renderComandaOffline(){
   const o=app._off;const cats=Object.values(app.menu.categorias).sort((a,b)=>(a.orden||0)-(b.orden||0));
-  const prods=Object.values(app.menu.productos).filter(p=>p.activo&&p.disponible!==false&&p.categoriaId===o.cat);
+  const prods=Object.values(app.menu.productos).filter(p=>p.activo&&p.disponible!==false&&!p.precioLibre&&p.categoriaId===o.cat);
   const total=o.lineas.reduce((s,l)=>s+l.precioBase*l.cantidad,0);
   $('#view').innerHTML=`<div class="panel" style="border-color:var(--accent)"><h3>Comanda offline <span class="small">se guarda en este equipo y se envía a cocina al reconectar</span></h3>
     <div class="small" style="color:var(--muted);margin-bottom:8px">Offline solo captura productos a precio base (sin modificadores) y como mostrador: un domicilio necesita dirección validada. Anota el detalle en la nota.</div>
@@ -1407,7 +1430,7 @@ function vPOS(){
   const cat=app.menu.categorias[app.pos.cat];
   $('#view').innerHTML=`<div class="pos">
     <div class="pos-menu"><div id="cuentasAbiertas"></div><div class="cats">${cats().map(c=>`<button class="cat ${c.id===app.pos.cat?'active':''}" data-cat="${c.id}">${c.nombre}</button>`).join('')}</div>
-      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>{const ago=p.disponible===false;return `<button class="prod${ago?' agotado':''}" data-prod="${p.id}"${ago?' disabled':''}>${prodArt(p,cat.nombre)}${ago?'<span class="ago-badge">Agotado</span>':''}<div class="meta"><div class="nm">${p.nombre}</div>${p.descripcion?`<div class="pdesc">${p.descripcion}</div>`:''}<div class="row"><span class="pr">${money(p.precioBase)}${p.gruposIds.length?'+':''}</span><span class="dest">${p.destino}</span></div></div></button>`;}).join('')}</div></div>
+      <div class="pgrid">${prodsDe(app.pos.cat).map(p=>{const ago=p.disponible===false;return `<button class="prod${ago?' agotado':''}" data-prod="${p.id}"${ago?' disabled':''}>${prodArt(p,cat.nombre)}${ago?'<span class="ago-badge">Agotado</span>':''}<div class="meta"><div class="nm">${p.nombre}</div>${p.descripcion?`<div class="pdesc">${p.descripcion}</div>`:''}<div class="row"><span class="pr">${p.precioLibre?'Precio libre':money(p.precioBase)+(p.gruposIds.length?'+':'')}</span><span class="dest">${p.destino}</span></div></div></button>`;}).join('')}</div></div>
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}</button>`).join('')}</div>`:''}
@@ -1514,6 +1537,7 @@ async function onProducto(prod){
   if(!app.turno){toast('Abre el turno antes de vender');return;}
   try{
     await asegurarPedido();
+    if(prod.precioLibre){modalPrecioLibre(prod);return;}
     if(prod.divisible){modalPartes(prod);return;}
     if(prod.gruposIds.length){modalModificadores(prod);return;}
     app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1});
@@ -1622,6 +1646,33 @@ function modalModificadores(prod){
   $('#mCancel').onclick=closeModal;
   $('#mAdd').onclick=async()=>{const mods=[];document.querySelectorAll('#modal .grp[data-grp]').forEach(gd=>{const g=app.menu.gruposModificadores[gd.dataset.grp];gd.querySelectorAll('input:checked').forEach(c=>mods.push({grupoId:g.id,opcionId:c.value}));});
     try{app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,modsElegidos:mods,notas:$('#lnNota').value.trim()});closeModal();renderLines();}catch(e){toast(e.message);}};
+}
+// Producto de precio libre ("Pizza especial"): caja escribe qué lleva y cuánto
+// cuesta. El server lo guarda con quién lo capturó para auditarlo en Reportes.
+function modalPrecioLibre(prod){
+  const tams=['Chica','Mediana','Grande','Familiar'];let tam='';
+  modal.innerHTML=`<h3>${prod.nombre}</h3><div class="sub">Precio libre · queda registrado quién lo captura</div>
+    <div class="field"><label>Tamaño (opcional)</label><div class="pt-n">${tams.map(t=>`<button class="pt-b" data-tam="${t}">${t}</button>`).join('')}</div></div>
+    <div class="field"><label>¿Qué lleva?</label><textarea id="plDesc" rows="3" maxlength="200" placeholder="Ej. mitad hawaiana, mitad pepperoni con jalapeño, orilla rellena" style="width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;resize:vertical"></textarea></div>
+    <div class="field"><label>Precio</label><input id="plPre" type="number" inputmode="decimal" step="1" min="1" class="mono" placeholder="0.00" style="font-size:20px"></div>
+    <div class="field"><label>Notas para cocina (opcional)</label><input id="plNota" class="nota" placeholder="Ej. bien dorada"></div>
+    <div class="modal-foot"><button class="btn-ghost" id="plNo">Cancelar</button><button class="btn-primary" id="plOk" disabled>Agregar — <span id="plTot">${money(0)}</span></button></div>`;
+  ov.classList.add('show');
+  const rec=()=>{const v=+$('#plPre').value;const ok=v>0&&$('#plDesc').value.trim().length>0;$('#plTot').textContent=money(v>0?v:0);$('#plOk').disabled=!ok;};
+  modal.querySelectorAll('[data-tam]').forEach(b=>b.onclick=()=>{tam=tam===b.dataset.tam?'':b.dataset.tam;
+    modal.querySelectorAll('[data-tam]').forEach(x=>x.classList.toggle('on',x.dataset.tam===tam));});
+  $('#plDesc').oninput=rec;$('#plPre').oninput=rec;
+  $('#plNo').onclick=closeModal;
+  $('#plOk').onclick=async()=>{
+    const v=+$('#plPre').value;
+    if(v>=2000&&!confirm(`¿Seguro? Vas a cobrar ${money(v)} por una ${prod.nombre}.`))return;
+    $('#plOk').disabled=true;
+    try{app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,
+        precioManual:v,descripcionLibre:$('#plDesc').value.trim(),tamanoLibre:tam,notas:$('#plNota').value.trim()});
+      closeModal();renderLines();}
+    catch(e){toast(e.message);$('#plOk').disabled=false;}
+  };
+  setTimeout(()=>$('#plDesc').focus(),50);
 }
 async function mandarComanda(){
   if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
@@ -1833,7 +1884,7 @@ function pintarReparto(){
       ${reps.length?`<div class="rep-motos">${reps.map(r=>`
         <div class="rep-moto">
           <div class="rm-top"><b>${r.nombre}</b>${r.telefono?`<a class="ent-tel" href="tel:${r.telefono}">${r.telefono}</a>`:''}</div>
-          <div class="rm-sub">${r.enRuta} en ruta · ${r.porLiquidar} por liquidar${r.estrellas?` · <span title="${r.calificaciones} calificación(es)" style="color:var(--accent)">${estrellasTxt(r.estrellas)} ${r.estrellas}</span>`:''}${r.ubicacion?'':' · sin GPS'}</div>
+          <div class="rm-sub">${r.enRuta} en ruta · ${r.porLiquidar} por liquidar${r.estrellas?` · <span title="${r.calificaciones} calificación(es)" style="color:var(--accent)">${estrellasTxt(r.estrellas)} ${r.estrellas}</span>`:''}${gpsTxtRep(r)}</div>
           ${r.username?'':'<div class="rm-warn">Sin usuario del sistema: no puede entrar ni compartir ubicación. Ligalo en Personal.</div>'}
           <div class="rm-cash ${r.efectivoPendiente>0?'hay':''}">${money(r.efectivoPendiente)}</div>
           ${pedidosDeMoto(tab,r.id)}
@@ -1902,6 +1953,14 @@ function pedidosDeMoto(tab,repId){
     return `<div class="rm-ped" data-irped="${esc(p.folio)}" title="Ver pedido en el tablero">
       ${et}<b>${p.codigo?esc(p.codigo)+' · ':''}${esc(c.nombre||'—')}</b><span class="mono">${money(p.total)}</span>
       <span class="ds">${esc(c.colonia||c.direccion||'')}${extra?' · '+extra:''}</span></div>`;}).join('')}</div>`;
+}
+// "±20 m · hace 10 s" si reporta; "sin GPS · última hace 14 min" si dejó de reportar.
+function gpsTxtRep(r){
+  const hace=(ts)=>{const s=Math.round((Date.now()-new Date(ts))/1000);return s<60?`${s} s`:s<3600?`${Math.round(s/60)} min`:`${Math.round(s/3600)} h`;};
+  const prec=(u)=>u.precision!=null?` · <span style="color:${u.precision>150?'var(--red)':'inherit'}" title="${u.precision>150?'Ubicación aproximada (sin GPS fino)':'Precisión'}">±${Math.round(u.precision)} m</span>`:'';
+  if(r.ubicacion)return ` · 📍 hace ${hace(r.ubicacion.ts)}${prec(r.ubicacion)}`;
+  if(r.ultimaUbicacion)return ` · <span style="color:var(--red)">sin GPS · última señal hace ${hace(r.ultimaUbicacion.ts)}</span>`;
+  return ' · <span style="color:var(--red)">nunca ha mandado ubicación</span>';
 }
 function estrellasTxt(n){return n?'★'.repeat(Math.round(n))+'☆'.repeat(5-Math.round(n)):'';}
 // Abrir la navegación del teléfono. Si ya conocemos las coordenadas del
@@ -2444,13 +2503,21 @@ async function vMenu(){
     <button class="btn" data-delcat="${c.id}" data-nom="${c.nombre.replace(/"/g,'&quot;')}" data-n="${ps.length}" style="padding:5px 10px;font-size:12px;min-height:auto;color:var(--muted);font-weight:600">Quitar categoría</button></h3>
     <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
     <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th><th></th></tr></thead><tbody>
-    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num"><input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima"></td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td>
-      <td class="num"><button class="btn" data-divide="${p.id}" title="¿Se puede pedir con varios sabores?" style="padding:6px 10px;font-size:12px;min-height:auto;${p.divisible?'background:var(--blue);color:#fff;border-color:var(--blue)':'color:var(--muted)'}">${p.divisible?'÷'+Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):'÷'}</button></td>
+    ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${p.precioLibre?'<span class="chip" title="Caja captura el precio al vender">Libre</span>':`<input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima">`}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td>
+      <td class="num"><button class="btn" data-libre="${p.id}" data-on="${p.precioLibre?1:0}" title="Precio libre: caja captura qué lleva y cuánto cuesta" style="padding:6px 10px;font-size:12px;min-height:auto;margin-right:4px;${p.precioLibre?'background:var(--accent);color:#fff;border-color:var(--accent)':'color:var(--muted)'}">$?</button><button class="btn" data-divide="${p.id}" title="¿Se puede pedir con varios sabores?" style="padding:6px 10px;font-size:12px;min-height:auto;${p.divisible?'background:var(--blue);color:#fff;border-color:var(--blue)':'color:var(--muted)'}">${p.divisible?'÷'+Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):'÷'}</button></td>
       <td class="num"><button class="btn" data-delprod="${p.id}" data-nom="${p.nombre.replace(/"/g,'&quot;')}" title="Quitar del menú" style="padding:6px 10px;font-size:12px;min-height:auto;color:var(--muted)">🗑</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}
   ${editorGrupos()}`;
   $('#addProd').onclick=modalNuevoProducto;
   document.querySelectorAll('[data-divide]').forEach(b=>b.onclick=()=>modalDivisible(b.dataset.divide));
+  document.querySelectorAll('[data-libre]').forEach(b=>b.onclick=async()=>{
+    const on=b.dataset.on!=='1';const pr=app.menu.productos[b.dataset.libre];
+    if(on&&!confirm(`${pr.nombre}: caja capturará qué lleva y el precio en cada venta. ¿Activar precio libre?`))return;
+    if(!on&&!(pr.precioBase>0)){toast('Primero ponle precio: desactívalo y captura el precio en la tabla');}
+    try{const r=await API.patch('/api/menu/productos/'+b.dataset.libre,{precioLibre:on});app.menu.productos[r.id]=r;
+      toast(on?`${r.nombre}: precio libre`:`${r.nombre}: precio fijo ${money(r.precioBase)}`,{tipo:'ok'});vMenu();}
+    catch(e){toast(e.message);}
+  });
   document.querySelectorAll('[data-delprod]').forEach(b=>b.onclick=()=>borrarDelMenu('productos',b.dataset.delprod,b.dataset.nom));
   document.querySelectorAll('[data-delcat]').forEach(b=>b.onclick=()=>borrarDelMenu('categorias',b.dataset.delcat,b.dataset.nom,+b.dataset.n));
   document.querySelectorAll('[data-precio]').forEach(inp=>inp.onchange=async()=>{
@@ -2570,12 +2637,14 @@ function modalNuevoProducto(){
     <div class="field"><label>Nombre</label><input id="npNom" placeholder="Ej. Doble queso"></div>
     <div class="field"><label>Categoría</label><select id="npCat">${cats().map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('')}</select></div>
     <div class="field"><label>Precio base</label><input id="npPre" type="number" class="mono" placeholder="0.00"></div>
+    <label class="cm-o"><input type="checkbox" id="npLibre"><div><b>Precio libre</b><div class="small" style="color:var(--muted)">Caja escribe qué lleva y cuánto cuesta al venderlo (p. ej. Pizza especial).</div></div></label>
     <div class="field"><label>Destino</label><select id="npDest"><option value="cocina">Cocina</option><option value="barra">Barra</option></select></div>
     <div class="field"><label>URL de foto (opcional)</label><input id="npFoto" placeholder="https://… (si la dejas vacía usa ilustración)"></div>
     <div class="modal-foot"><button class="btn-ghost" id="npCancel">Cancelar</button><button class="btn-primary" id="npOk">Crear</button></div>`;
   ov.classList.add('show');$('#npCancel').onclick=closeModal;
-  $('#npOk').onclick=async()=>{const nom=$('#npNom').value.trim(),pre=+$('#npPre').value;if(!nom||!pre){toast('Falta nombre o precio');return;}
-    try{const p=await API.post('/api/menu/productos',{categoriaId:$('#npCat').value,nombre:nom,precioBase:pre,destino:$('#npDest').value});
+  $('#npLibre').onchange=()=>{$('#npPre').disabled=$('#npLibre').checked;if($('#npLibre').checked)$('#npPre').value='';};
+  $('#npOk').onclick=async()=>{const nom=$('#npNom').value.trim(),pre=+$('#npPre').value,libre=$('#npLibre').checked;if(!nom||(!pre&&!libre)){toast('Falta nombre o precio');return;}
+    try{const p=await API.post('/api/menu/productos',{categoriaId:$('#npCat').value,nombre:nom,precioBase:libre?0:pre,precioLibre:libre,destino:$('#npDest').value});
       const foto=$('#npFoto').value.trim();if(foto)await API.patch('/api/menu/productos/'+p.id,{foto});
       closeModal();toast('Producto creado');vMenu();}catch(e){toast(e.message);}};
 }
@@ -3283,7 +3352,8 @@ async function vReportes(){
   const preset=app.repRango||'todo';
   const r=rangoPeriodo(preset);
   const prev=periodoAnterior(r.desde,r.hasta);
-  const [res,cortes]=await Promise.all([API.get('/api/reportes/resumen'+qsRango(app.sucursalId,r)),API.get('/api/caja/cortes?sucursalId='+app.sucursalId)]);
+  const [res,cortes,libre]=await Promise.all([API.get('/api/reportes/resumen'+qsRango(app.sucursalId,r)),API.get('/api/caja/cortes?sucursalId='+app.sucursalId),
+    API.get('/api/reportes/precio-libre'+qsRango(app.sucursalId,r)).catch(()=>null)]);
   let resPrev=null;if(r.desde){try{resPrev=await API.get('/api/reportes/resumen'+qsRango(app.sucursalId,prev));}catch{}}
   app._repRes=res;app._repRango=r;
   const crecVenta=resPrev?crecimiento(res.venta,resPrev.venta):null;
@@ -3299,6 +3369,13 @@ async function vReportes(){
   <div class="panel" style="margin-bottom:16px"><h3>Ventas por producto</h3><table><thead><tr><th>Producto</th><th class="num">Piezas</th><th class="num">Importe</th><th class="num">% total</th></tr></thead><tbody>
     ${rows.map(([n,d])=>`<tr><td>${n}</td><td class="num">${d.q}</td><td class="num">${money(d.total)}</td><td class="num">${(d.total/res.venta*100||0).toFixed(1)}%</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--muted)">Sin ventas</td></tr>'}
   </tbody></table></div>
+  ${libre&&libre.detalle.length?`<div class="panel" style="margin-bottom:16px"><h3>Ventas con precio libre <span class="small">${libre.piezas} pza(s) cobradas · ${money(libre.total)} · quién capturó cada precio</span></h3>
+    ${libre.porUsuario.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${libre.porUsuario.map(u=>`<span class="chip">${u.usuario}: ${u.ventas} · ${money(u.total)}</span>`).join('')}</div>`:''}
+    <table><thead><tr><th>Fecha</th><th>Folio</th><th>Capturó</th><th>Lleva</th><th class="num">Precio</th><th>Estado</th></tr></thead><tbody>
+    ${libre.detalle.map(x=>`<tr${x.estado==='cancelado'?' style="opacity:.6"':''}><td class="small">${new Date(x.fecha).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td class="mono small">${x.folio}</td><td>${x.capturadoPor||'—'}</td>
+      <td class="small">${x.cantidad>1?x.cantidad+'× ':''}${x.producto}${x.tamano?' ('+x.tamano+')':''}<div style="color:var(--muted)">${String(x.descripcion||'').replace(/</g,'&lt;')}</div></td>
+      <td class="num">${money(x.importe)}</td><td><span class="chip ${x.estado==='cancelado'?'low':x.estado==='cobrado'?'ok':''}">${x.estado}</span></td></tr>`).join('')}
+    </tbody></table></div>`:''}
   <div class="cols">
     <div class="panel"><h3>Por servicio</h3>${['mostrador','domicilio','mesa'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porServicio[k]/(res.venta||1)*100}%"></div></div><div class="bv">${money(res.porServicio[k])}</div></div>`).join('')}</div>
     <div class="panel"><h3>Por método de pago</h3>${['efectivo','tarjeta','transferencia'].map(k=>`<div class="bar-row"><div class="bn" style="text-transform:capitalize">${k}</div><div class="bt"><div class="bf" style="width:${res.porPago[k]/(res.venta||1)*100}%;background:${k==='efectivo'?'var(--green)':k==='tarjeta'?'var(--blue)':'var(--accent)'}"></div></div><div class="bv">${money(res.porPago[k])}</div></div>`).join('')}</div></div>
