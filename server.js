@@ -1024,6 +1024,19 @@ app.post('/api/pedidos', wrap(async (req, res) => {
   res.json(ped);
 }));
 
+// "Venta libre" del punto de venta: un producto del sistema, oculto (sin
+// categoría, no sale en el menú ni en línea), que se crea solo la primera vez.
+const ID_VENTA_LIBRE = 'prod_ventalibre';
+function productoVentaLibre(e) {
+  let p = e.menu.productos[ID_VENTA_LIBRE];
+  if (!p) {
+    p = M.crearProducto({ categoriaId: null, nombre: 'Venta libre', precioBase: 0, destino: 'cocina', estacion: 'Cocina', precioLibre: true });
+    p.id = ID_VENTA_LIBRE; p.sistema = true;
+    e.menu.productos[ID_VENTA_LIBRE] = p;
+  }
+  p.precioLibre = true; p.activo = true; p.disponible = true;
+  return p;
+}
 app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
   const { folio } = req.params;
   const { productoId, cantidad = 1, modsElegidos = [], notas = '', partes = null, precioManual = null, descripcionLibre = '', tamanoLibre = '' } = req.body || {};
@@ -1031,7 +1044,7 @@ app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
     const p = e.pedidos[folio];
     if (!p) throw bad('Pedido inexistente', 404);
     if (p.estado !== 'abierto') throw bad('El pedido ya está cerrado');
-    const prod = e.menu.productos[productoId];
+    const prod = productoId === ID_VENTA_LIBRE ? productoVentaLibre(e) : e.menu.productos[productoId];
     if (!prod) throw bad('Producto inexistente');
     // precioManual solo se respeta si el producto es de precio libre: a un
     // producto normal nadie le puede cambiar el precio desde caja.
