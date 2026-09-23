@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
 <title>ComandaPro — Consola</title>
 <meta name="theme-color" content="#e0841a">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -439,6 +439,38 @@
   .paytabs{flex-wrap:wrap}
   .paytabs button{flex:1 1 30%}
 }
+/* ===== Celular: ventanas como hoja inferior y botones siempre alcanzables ===== */
+@media(max-width:820px){
+  .ov{align-items:flex-end;padding:0}
+  .modal{max-width:none;border-radius:20px 20px 0 0;padding:16px 16px 0;
+    max-height:calc(var(--vvh,100dvh) - 12px);overscroll-behavior:contain}
+  /* El botón de confirmar se queda pegado abajo aunque el contenido sea largo
+     o el teclado esté abierto. */
+  .modal-foot{position:sticky;bottom:0;background:var(--card);margin:14px -16px 0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--line);box-shadow:0 -8px 18px rgba(20,18,12,.06);z-index:2}
+  .kpis{grid-template-columns:repeat(2,1fr)!important}
+  .kpi .val{font-size:21px!important}
+  /* Menú: cada producto como tarjeta; precio y botones a la vista sin deslizar */
+  .tmenu thead{display:none}
+  .tmenu,.tmenu tbody{display:block;width:100%}
+  .tmenu tr{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .tmenu td{display:block;padding:0!important;border:none!important;text-align:left!important}
+  .tmenu td:first-child{flex:1 1 100%}
+  .tmenu td:nth-child(2),.tmenu td:nth-child(4){display:none}
+  .tmenu td:nth-child(3) input{width:110px!important}
+  .tmenu td:nth-child(6)::before{content:'FC ';font-size:10px;color:var(--muted)}
+  .tmenu td:last-child{margin-left:auto}
+  .tmenu .pr-ed{width:88px}
+  /* Editor de modificadores sin salirse de la pantalla */
+  .ge-op{flex-wrap:nowrap}
+  .ge-onom,.ge-nnom{flex:1 1 auto;min-width:0;width:auto}
+  .ge-od,.ge-nd{width:70px;flex:none}
+  .ge-head{flex-wrap:wrap;gap:6px}
+  .ge-nom{min-width:0;flex:1 1 100%}
+  .ge-grid{grid-template-columns:minmax(0,1fr)!important}
+  .ge-card{min-width:0}
+  .ge-fin{flex:none}
+}
 @media(max-width:360px){
   .pgrid{grid-template-columns:1fr}
   .kpi .val{font-size:22px}
@@ -671,6 +703,15 @@ function badgeCrec(pct){if(pct==null)return '';const up=pct>=0;return `<span sty
 const $=s=>document.querySelector(s);
 const ov=$('#ov'),modal=$('#modal');
 function closeModal(){ov.classList.remove('show');modal.innerHTML='';}
+// Altura visible real: en el celular el teclado tapa la mitad de la pantalla y
+// 100vh no se entera. Con esto la ventana se encoge y el botón sigue a la vista.
+(function(){
+  const vv=window.visualViewport;if(!vv)return;
+  const ajustar=()=>document.documentElement.style.setProperty('--vvh',Math.round(vv.height)+'px');
+  vv.addEventListener('resize',ajustar);ajustar();
+})();
+// En pantalla táctil no se abre el teclado solo: tapa los botones de la ventana.
+const esTactil=matchMedia('(pointer:coarse)').matches;
 ov.addEventListener('click',e=>{if(e.target===ov)closeModal();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 let tt;function toast(m,opts){opts=opts||{};const t=$('#toast');t.textContent=m;t.classList.toggle('ok',opts.tipo==='ok');t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),opts.ms||2400);}
@@ -1584,7 +1625,7 @@ function modalEntrega(actual,onOk){
     <div class="modal-foot"><button class="btn-ghost" id="enCancel">Cancelar</button><button class="btn-primary" id="enOk">Guardar</button></div>`;
   ov.classList.add('show');
   $('#enCancel').onclick=closeModal;
-  setTimeout(()=>{const i=$('#enTel');if(i)i.focus();},50);
+  if(!esTactil)setTimeout(()=>{const i=$('#enTel');if(i)i.focus();},50);
   // Directorio: con el teléfono se llena solo el resto. Ahorra la mitad de la
   // llamada y evita que la misma casa quede escrita de tres formas distintas.
   let buscando=null;
@@ -1676,7 +1717,7 @@ function modalPrecioLibre(prod){
       closeModal();renderLines();}
     catch(e){toast(e.message);$('#plOk').disabled=false;}
   };
-  setTimeout(()=>$('#plDesc').focus(),50);
+  if(!esTactil)setTimeout(()=>$('#plDesc').focus(),50);
 }
 async function mandarComanda(){
   if(!app.pos.pedido||!app.pos.pedido.lineas.length){toast('Agrega productos primero');return;}
@@ -1747,7 +1788,7 @@ function cobrar(){
     if($('#btnDividir'))$('#btnDividir').onclick=()=>modalDividir(ped);
     modal.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>{tipPct=+b.dataset.tip;tipMonto=0;render();});
     const tcInp=$('#tipC');if(tcInp)tcInp.oninput=()=>{tipPct=null;tipMonto=+tcInp.value||0;const t=totalCon();$('#cobTit').textContent='Cobrar '+money(t);$('#cobSub').textContent=ped.folio+(propina()>0?' · propina '+money(propina()):'');const ri=$('#recib');if(ri)ri.placeholder=t;const bn=modal.querySelector('.bignum');if(bn)bn.textContent=money(t);actualizaCambio();};
-    if(metodo==='efectivo'){const ri=$('#recib');ri.addEventListener('input',actualizaCambio);setTimeout(()=>ri.focus(),50);}
+    if(metodo==='efectivo'){const ri=$('#recib');ri.addEventListener('input',actualizaCambio);if(!esTactil)setTimeout(()=>ri.focus(),50);}
     $('#pCancel').onclick=closeModal;
     $('#pOk').onclick=async()=>{const pr=propina(),tc=totalCon();let recibido=0,pagos;
       if(metodo==='efectivo'){recibido=+($('#recib').value)||tc;if(recibido<tc){toast('El efectivo no alcanza');return;}pagos=[{metodo:'efectivo',monto:ped.total}];}
@@ -2370,7 +2411,7 @@ function modalCancelarPedido(folio){
     <div class="field"><label>Motivo</label><input id="cpMot" placeholder="El cliente ya no lo quiso, dirección equivocada…"></div>
     <div class="modal-foot"><button class="btn-ghost" id="cpNo">Cerrar</button><button class="btn-primary" id="cpOk">Cancelar pedido</button></div>`;
   ov.classList.add('show');
-  setTimeout(()=>{const i=$('#cpMot');if(i)i.focus();},50);
+  if(!esTactil)setTimeout(()=>{const i=$('#cpMot');if(i)i.focus();},50);
   $('#cpNo').onclick=closeModal;
   $('#cpOk').onclick=async()=>{
     const m=$('#cpMot').value.trim();
@@ -2413,7 +2454,7 @@ async function modalEntregar(folio){
     modal.querySelectorAll('.paytabs button').forEach(b=>b.onclick=()=>{metodo=b.dataset.m;render();});
     modal.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>{tipPct=+b.dataset.tip;tipMonto=0;render();});
     const ti=$('#enTip');if(ti)ti.oninput=()=>{tipPct=null;tipMonto=+ti.value||0;const t=totalCon();$('#enTit').textContent='Entregar '+money(t);const ri=$('#enRecib');if(ri)ri.placeholder=t;const bn=modal.querySelector('.bignum');if(bn)bn.textContent=money(t);actCambio();};
-    if(metodo==='efectivo'){const ri=$('#enRecib');ri.addEventListener('input',actCambio);setTimeout(()=>ri.focus(),50);}
+    if(metodo==='efectivo'){const ri=$('#enRecib');ri.addEventListener('input',actCambio);if(!esTactil)setTimeout(()=>ri.focus(),50);}
     $('#enCanc').onclick=closeModal;
     $('#enConf').onclick=async()=>{
       const pr=propina(),tc=totalCon();let recibido=0;
@@ -2506,7 +2547,7 @@ async function vMenu(){
   ${cats().map(c=>{const ps=prodsDe(c.id);return `<div class="panel" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>${c.nombre} <span class="small">${ps.length} productos</span></span>
     <button class="btn" data-delcat="${c.id}" data-nom="${c.nombre.replace(/"/g,'&quot;')}" data-n="${ps.length}" style="padding:5px 10px;font-size:12px;min-height:auto;color:var(--muted);font-weight:600">Quitar categoría</button></h3>
     <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
-    <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th><th></th></tr></thead><tbody>
+    <table class="tmenu"><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th><th></th></tr></thead><tbody>
     ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${p.precioLibre?'<span class="chip" title="Caja captura el precio al vender">Libre</span>':`<input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima">`}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td>
       <td class="num"><button class="btn" data-foto="${p.id}" title="${p.foto?'Cambiar o quitar la foto':'Subir foto (aparece en la carta en línea)'}" style="padding:6px 10px;font-size:12px;min-height:auto;margin-right:4px;${p.foto?'background:var(--green);color:#fff;border-color:var(--green)':'color:var(--muted)'}">📷</button><button class="btn" data-libre="${p.id}" data-on="${p.precioLibre?1:0}" title="Precio libre: caja captura qué lleva y cuánto cuesta" style="padding:6px 10px;font-size:12px;min-height:auto;margin-right:4px;${p.precioLibre?'background:var(--accent);color:#fff;border-color:var(--accent)':'color:var(--muted)'}">$?</button><button class="btn" data-divide="${p.id}" title="¿Se puede pedir con varios sabores?" style="padding:6px 10px;font-size:12px;min-height:auto;${p.divisible?'background:var(--blue);color:#fff;border-color:var(--blue)':'color:var(--muted)'}">${p.divisible?'÷'+Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):'÷'}</button></td>
       <td class="num"><button class="btn" data-delprod="${p.id}" data-nom="${p.nombre.replace(/"/g,'&quot;')}" title="Quitar del menú" style="padding:6px 10px;font-size:12px;min-height:auto;color:var(--muted)">🗑</button></td></tr>`;}).join('')}
@@ -2977,7 +3018,7 @@ function modalInsumo(ins){
     <div class="cols2"><div class="field"><label>Stock actual</label><input id="inStock" type="number" class="mono" inputmode="decimal" value="${ed?ins.stock:0}"></div>
     <div class="field"><label>Stock mínimo</label><input id="inMin" type="number" class="mono" inputmode="decimal" value="${ed?ins.stockMin:0}"></div></div>
     <div class="modal-foot">${ed?`<button class="btn-ghost" id="inDel" style="color:var(--red);margin-right:auto">Eliminar</button>`:''}<button class="btn-ghost" id="inCancel">Cancelar</button><button class="btn-primary" id="inOk">${ed?'Guardar':'Crear'}</button></div>`;
-  ov.classList.add('show');setTimeout(()=>$('#inNom').focus(),50);
+  ov.classList.add('show');if(!esTactil)setTimeout(()=>$('#inNom').focus(),50);
   $('#inCancel').onclick=closeModal;
   if(ed&&$('#inDel'))$('#inDel').onclick=async()=>{if(!confirm('¿Eliminar '+ins.nombre+'?'))return;try{await API.del('/api/inventario/insumos/'+ins.id);closeModal();toast('Insumo eliminado');vInventario();}catch(e){toast(e.message);}};
   $('#inOk').onclick=async()=>{const body={nombre:$('#inNom').value.trim(),unidad:$('#inUni').value.trim(),costoUnitario:+$('#inCost').value||0,stock:+$('#inStock').value||0,stockMin:+$('#inMin').value||0};
@@ -3022,7 +3063,7 @@ function modalEntrada(id,nombre){
   modal.innerHTML=`<h3>Entrada de stock</h3><div class="sub">${nombre||''}</div>
     <div class="field"><label>¿Cuántas unidades entran?</label><input id="entCant" type="number" class="mono" inputmode="decimal" placeholder="0"></div>
     <div class="modal-foot"><button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">Agregar al stock</button></div>`;
-  ov.classList.add('show');setTimeout(()=>$('#entCant').focus(),50);
+  ov.classList.add('show');if(!esTactil)setTimeout(()=>$('#entCant').focus(),50);
   $('#eCancel').onclick=closeModal;
   $('#eOk').onclick=async()=>{const n=parseFloat($('#entCant').value);if(!n){toast('Captura una cantidad');return;}try{await API.post(`/api/inventario/insumos/${id}/entrada`,{cantidad:n});closeModal();toast('Stock actualizado');vInventario();}catch(e){toast(e.message);}};
 }
@@ -3150,7 +3191,7 @@ function modalMovimiento(tipo){
     <div class="field"><label>Monto</label><input id="movMonto" type="number" class="mono" placeholder="0.00"></div>
     <div class="field"><label>Motivo</label><input id="movMot" placeholder="${ent?'Ej. fondo adicional':'Ej. pago de hielo'}"></div>
     <div class="modal-foot"><button class="btn-ghost" id="movCancel">Cancelar</button><button class="btn-primary" id="movOk">Registrar</button></div>`;
-  ov.classList.add('show');setTimeout(()=>$('#movMonto').focus(),50);
+  ov.classList.add('show');if(!esTactil)setTimeout(()=>$('#movMonto').focus(),50);
   $('#movCancel').onclick=closeModal;
   $('#movOk').onclick=async()=>{const monto=+$('#movMonto').value||0;if(monto<=0){toast('Captura un monto');return;}
     try{await API.post('/api/caja/movimiento',{sucursalId:app.sucursalId,tipo,monto,motivo:$('#movMot').value.trim()});closeModal();toast(ent?'Entrada registrada':'Retiro registrado');refrescarVistaCaja();}catch(e){toast(e.message);}};
@@ -3396,7 +3437,7 @@ function modalReserva(r){
     <div class="field"><label>Mesa (opcional)</label><select id="rMesa"><option value="">— sin asignar —</option>${mesasOpts}</select></div>
     <div class="field"><label>Notas (opcional)</label><input id="rNot" value="${ed?r.notas||'':''}" placeholder="Ej. cumpleaños, junto a ventana"></div>
     <div class="modal-foot">${ed?`<button class="btn-ghost" id="rDel" style="margin-right:auto;color:var(--red)">Eliminar</button>`:''}<button class="btn-ghost" id="rCancel">Cancelar</button><button class="btn-primary" id="rOk">${ed?'Guardar':'Crear reserva'}</button></div>`;
-  ov.classList.add('show');setTimeout(()=>$('#rNom').focus(),50);
+  ov.classList.add('show');if(!esTactil)setTimeout(()=>$('#rNom').focus(),50);
   $('#rCancel').onclick=closeModal;
   if(ed&&$('#rDel'))$('#rDel').onclick=async()=>{try{await API.del('/api/reservas/'+r.id);closeModal();toast('Reserva eliminada');vReservas();}catch(e){toast(e.message);}};
   $('#rOk').onclick=async()=>{
@@ -4238,7 +4279,7 @@ function modalEmpleado(emp){
       ${us.length?'':'<div class="small" style="color:var(--red);margin-top:4px">Aún no hay usuarios. Créalo primero en Ajustes → Usuarios.</div>'}
     </div></div>
     <div class="modal-foot">${ed?`<button class="btn-ghost" id="eContrato" style="margin-right:auto">📄 Contrato de comisión</button>`:''}${ed?`<button class="btn-ghost" id="eBaja" style="color:${emp.activo?'var(--red)':'var(--green)'}">${emp.activo?'Dar de baja':'Reactivar'}</button>`:''}<button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">${ed?'Guardar':'Crear'}</button></div>`;
-  ov.classList.add('show');setTimeout(()=>$('#eNom').focus(),50);
+  ov.classList.add('show');if(!esTactil)setTimeout(()=>$('#eNom').focus(),50);
   $('#eCancel').onclick=closeModal;
   if(ed&&$('#eContrato'))$('#eContrato').onclick=()=>generarContrato(emp);
   if(ed&&$('#eBaja'))$('#eBaja').onclick=async()=>{try{await API.patch('/api/rh/empleados/'+emp.id,{activo:!emp.activo});closeModal();toast(emp.activo?'Empleado dado de baja':'Empleado reactivado');vRH();}catch(e){toast(e.message);}};
