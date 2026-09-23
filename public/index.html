@@ -2508,12 +2508,13 @@ async function vMenu(){
     <datalist id="estDL"><option>Cocina</option><option>Parrilla</option><option>Pizzas</option><option>Cocina fría</option><option>Barra</option><option>Postres</option></datalist>
     <table><thead><tr><th>Producto</th><th>Destino</th><th>Estación</th><th>Modificadores</th><th class="num">Precio</th><th class="num">Food cost</th><th></th><th></th><th></th></tr></thead><tbody>
     ${ps.map(p=>{const fc=fcMap[p.id];const ago=p.disponible===false;return `<tr${ago?' style="opacity:.55"':''}><td><span class="thumb">${prodArt(p,c.nombre)}</span><span style="vertical-align:middle">${p.nombre}${ago?' <b style="color:var(--red)">· Agotado</b>':''}${p.descripcion?`<div style="font-size:12px;color:var(--muted);font-weight:400;max-width:340px">${p.descripcion}</div>`:''}</span></td><td><span class="chip ${p.destino}">${p.destino}</span></td><td>${p.destino==='cocina'?`<input list="estDL" value="${p.estacion||'Cocina'}" data-estprod="${p.id}" style="width:120px;padding:5px 8px;font-size:12px">`:'<span class="small" style="color:var(--muted)">—</span>'}</td><td style="font-size:12px;color:var(--muted)">${p.gruposIds.map(id=>app.menu.gruposModificadores[id]?.nombre).filter(Boolean).join(', ')||'—'}</td><td class="num">${p.precioLibre?'<span class="chip" title="Caja captura el precio al vender">Libre</span>':`<input type="number" step="1" class="pr-ed mono" data-precio="${p.id}" value="${p.precioBase}" title="Precio base — los tamaños suman su ajuste encima">`}</td><td class="num" style="color:${fc&&fc.foodCostPct>40?'var(--red)':fc&&fc.foodCostPct>35?'var(--accent-ink)':'var(--green)'}">${fc?fc.foodCostPct.toFixed(0)+'%':'—'}</td><td class="num"><button class="btn" data-86="${p.id}" data-disp="${ago?1:0}" style="padding:6px 11px;font-size:12px;min-height:auto;${ago?'background:var(--green);color:#fff':'color:var(--red)'}">${ago?'Reactivar':'Agotar'}</button></td>
-      <td class="num"><button class="btn" data-libre="${p.id}" data-on="${p.precioLibre?1:0}" title="Precio libre: caja captura qué lleva y cuánto cuesta" style="padding:6px 10px;font-size:12px;min-height:auto;margin-right:4px;${p.precioLibre?'background:var(--accent);color:#fff;border-color:var(--accent)':'color:var(--muted)'}">$?</button><button class="btn" data-divide="${p.id}" title="¿Se puede pedir con varios sabores?" style="padding:6px 10px;font-size:12px;min-height:auto;${p.divisible?'background:var(--blue);color:#fff;border-color:var(--blue)':'color:var(--muted)'}">${p.divisible?'÷'+Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):'÷'}</button></td>
+      <td class="num"><button class="btn" data-foto="${p.id}" title="${p.foto?'Cambiar o quitar la foto':'Subir foto (aparece en la carta en línea)'}" style="padding:6px 10px;font-size:12px;min-height:auto;margin-right:4px;${p.foto?'background:var(--green);color:#fff;border-color:var(--green)':'color:var(--muted)'}">📷</button><button class="btn" data-libre="${p.id}" data-on="${p.precioLibre?1:0}" title="Precio libre: caja captura qué lleva y cuánto cuesta" style="padding:6px 10px;font-size:12px;min-height:auto;margin-right:4px;${p.precioLibre?'background:var(--accent);color:#fff;border-color:var(--accent)':'color:var(--muted)'}">$?</button><button class="btn" data-divide="${p.id}" title="¿Se puede pedir con varios sabores?" style="padding:6px 10px;font-size:12px;min-height:auto;${p.divisible?'background:var(--blue);color:#fff;border-color:var(--blue)':'color:var(--muted)'}">${p.divisible?'÷'+Math.min(4,Math.max(2,+p.divisible.maxPartes||2)):'÷'}</button></td>
       <td class="num"><button class="btn" data-delprod="${p.id}" data-nom="${p.nombre.replace(/"/g,'&quot;')}" title="Quitar del menú" style="padding:6px 10px;font-size:12px;min-height:auto;color:var(--muted)">🗑</button></td></tr>`;}).join('')}
     </tbody></table></div>`;}).join('')}
   ${editorGrupos()}`;
   $('#addProd').onclick=modalNuevoProducto;
   document.querySelectorAll('[data-divide]').forEach(b=>b.onclick=()=>modalDivisible(b.dataset.divide));
+  document.querySelectorAll('[data-foto]').forEach(b=>b.onclick=()=>modalFoto(b.dataset.foto));
   document.querySelectorAll('[data-libre]').forEach(b=>b.onclick=async()=>{
     const on=b.dataset.on!=='1';const pr=app.menu.productos[b.dataset.libre];
     if(on&&!confirm(`${pr.nombre}: caja capturará qué lleva y el precio en cada venta. ¿Activar precio libre?`))return;
@@ -2538,6 +2539,62 @@ async function vMenu(){
   document.querySelectorAll('[data-estprod]').forEach(inp=>inp.onchange=async()=>{const est=inp.value.trim()||'Cocina';try{await API.patch('/api/menu/productos/'+inp.dataset.estprod,{estacion:est});const pr=app.menu.productos[inp.dataset.estprod];if(pr)pr.estacion=est;toast('Estación: '+est);}catch(e){toast(e.message);}});
 }
 const M2=n=>Math.round((+n||0)*100)/100;
+// ---- Foto del producto ------------------------------------------------------
+// El teléfono recorta a 4:3 y comprime antes de subir: una foto de 4 MB de la
+// cámara queda en ~60-120 KB y sube rápido aun con datos móviles.
+function prepararFoto(file){
+  return new Promise((ok,mal)=>{
+    const url=URL.createObjectURL(file);const im=new Image();
+    im.onload=()=>{
+      const W=960,H=720,rS=im.naturalWidth/im.naturalHeight,rD=W/H;
+      let sw=im.naturalWidth,sh=im.naturalHeight,sx=0,sy=0;
+      if(rS>rD){sw=sh*rD;sx=(im.naturalWidth-sw)/2;}else{sh=sw/rD;sy=(im.naturalHeight-sh)/2;}
+      const cv=document.createElement('canvas');cv.width=W;cv.height=H;
+      const g=cv.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(im,sx,sy,sw,sh,0,0,W,H);
+      URL.revokeObjectURL(url);
+      let q=.82,d=cv.toDataURL('image/jpeg',q);
+      while(d.length>600*1024*1.37&&q>.45){q-=.1;d=cv.toDataURL('image/jpeg',q);}
+      ok(d);
+    };
+    im.onerror=()=>{URL.revokeObjectURL(url);mal(new Error('No se pudo leer esa imagen. Prueba con otra foto.'));};
+    im.src=url;
+  });
+}
+function modalFoto(id){
+  const p=app.menu.productos[id];const cat=(app.menu.categorias[p.categoriaId]||{}).nombre||'';
+  let nueva=null;
+  const render=()=>{
+    modal.innerHTML=`<h3>Foto · ${p.nombre}</h3><div class="sub">Sale en la carta en línea y en el punto de venta. Tómala de frente o desde arriba, con buena luz.</div>
+      <div style="margin:14px 0;border-radius:14px;overflow:hidden;aspect-ratio:4/3;background:var(--paper);border:1px solid var(--line)" id="ftPrev">
+        ${nueva?`<img src="${nueva}" style="width:100%;height:100%;object-fit:cover;display:block">`:prodArt(p,cat).replace('class="art"','class="art" style="width:100%;height:100%;object-fit:cover;display:block"')}</div>
+      <input type="file" id="ftIn" accept="image/*" style="display:none">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="ftElegir" style="flex:1">📷 ${p.foto||nueva?'Cambiar foto':'Tomar o elegir foto'}</button>
+        ${p.foto&&!nueva?'<button class="btn" id="ftQuitar" style="color:var(--red)">Quitar</button>':''}
+      </div>
+      <div class="small" id="ftMsg" style="margin-top:8px;color:var(--muted);min-height:16px">${nueva?'Así se va a ver. Si te gusta, guárdala.':''}</div>
+      <div class="modal-foot"><button class="btn-ghost" id="ftNo">Cerrar</button><button class="btn-primary" id="ftOk" ${nueva?'':'disabled'}>Guardar foto</button></div>`;
+    $('#ftNo').onclick=closeModal;
+    $('#ftElegir').onclick=()=>$('#ftIn').click();
+    $('#ftIn').onchange=async()=>{
+      const f=$('#ftIn').files[0];if(!f)return;
+      $('#ftMsg').textContent='Preparando la foto…';
+      try{nueva=await prepararFoto(f);render();}catch(e){$('#ftMsg').textContent=e.message;}
+    };
+    if($('#ftQuitar'))$('#ftQuitar').onclick=async()=>{
+      if(!confirm(`¿Quitar la foto de ${p.nombre}?`))return;
+      try{const r=await API.del('/api/menu/productos/'+id+'/foto');app.menu.productos[id]=r;closeModal();toast('Foto quitada');vMenu();}
+      catch(e){toast(e.message);}
+    };
+    $('#ftOk').onclick=async()=>{
+      $('#ftOk').disabled=true;$('#ftOk').textContent='Subiendo…';
+      try{const r=await API.post('/api/menu/productos/'+id+'/foto',{dataUrl:nueva});app.menu.productos[id]=r;
+        closeModal();toast(`Foto de ${r.nombre} guardada`,{tipo:'ok'});vMenu();}
+      catch(e){toast(e.message);$('#ftOk').disabled=false;$('#ftOk').textContent='Guardar foto';}
+    };
+  };
+  render();ov.classList.add('show');
+}
 // Quitar del menú. Los tickets viejos guardan copia del nombre y del precio,
 // así que borrar no altera ninguna venta ya cobrada.
 // La Mega y la Barra se venden con varias especialidades al mismo precio.
