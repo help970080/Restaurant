@@ -1268,7 +1268,7 @@ app.get('/api/reparto', wrap(async (req, res) => {
     const etaMin = eta.min;
     return {
       folio: p.folio, codigo: p.codigoEntrega || null, sucursalId: p.sucursalId, estado: p.estado, total: p.total,
-      creado: p.creado, cocinaListo: !!(p.tiemposCocina && p.tiemposCocina.listo),
+      creado: p.creado, cocinaListo: cocinaTermino(p),
       items: p.lineas.reduce((t, l) => t + l.cantidad, 0),
       cliente: p.cliente || null,
       reparto: r,
@@ -1372,6 +1372,14 @@ function fijarOrigen(e, ped) {
   return null;
 }
 
+// La moto solo sale cuando cocina terminó: si el pedido lleva algo de cocina,
+// tiene que estar marcado "Listo" en el KDS. Si solo lleva bebidas/empacados
+// (ninguna línea pasa por cocina), puede salir directo.
+function cocinaTermino(p) {
+  const llevaCocina = (p.lineas || []).some((l) => l.cocina != null);
+  return !llevaCocina || !!(p.tiemposCocina && p.tiemposCocina.listo);
+}
+
 // Salir con TODO lo que trae tomado, de un solo toque.
 app.post('/api/reparto/salir', wrap(async (req, res) => {
   const { sucursalId } = req.body || {};
@@ -1392,9 +1400,13 @@ app.post('/api/reparto/salir', wrap(async (req, res) => {
       && p.reparto && p.reparto.estado === 'asignado' && p.reparto.repartidorId === emp.id
       && (!sucursalId || p.sucursalId === sucursalId));
     if (!mios.length) throw bad('No traes pedidos tomados', 409);
-    const suc = e.sucursales[mios[0].sucursalId] || {};
+    // Sale solo con lo que cocina ya terminó; lo demás se queda esperando.
+    const enCocina = mios.filter((p) => !cocinaTermino(p)).map((p) => p.codigoEntrega || p.folio);
+    const listos = mios.filter(cocinaTermino);
+    if (!listos.length) throw bad('Cocina aún no termina: ' + enCocina.join(', ') + '. Espera a que lo marquen listo.', 409);
+    const suc = e.sucursales[listos[0].sucursalId] || {};
     const salidos = [], avisos = [];
-    for (const p of mios) {
+    for (const p of listos) {
       M.recalcularPedido(p);
       M.marcarSalida(e, p);
       for (const l of p.lineas) if (l.cocina === 'enviado') l.cocina = 'servido';
@@ -1408,7 +1420,7 @@ app.post('/api/reparto/salir', wrap(async (req, res) => {
       });
       p.seguimiento.avisado = new Date().toISOString();
     }
-    return { salidos, avisos, negocio: (e.meta && e.meta.nombre) || '' };
+    return { salidos, avisos, enCocina, negocio: (e.meta && e.meta.nombre) || '' };
   });
   const row = ctx().row;
   const lista = out.avisos.map((a) => Object.assign(a, {
@@ -1417,7 +1429,7 @@ app.post('/api/reparto/salir', wrap(async (req, res) => {
   }));
   // Con webhook se manda solo; sin él, el panel ofrece abrir WhatsApp.
   if (HAY_WEBHOOK()) for (const a of lista) avisarCliente({ telefono: a.telefono, nombre: a.nombre, negocio: out.negocio, folio: a.folio, url: a.url, momento: 'salida' });
-  res.json({ salidos: out.salidos, automatico: HAY_WEBHOOK(), avisos: HAY_WEBHOOK() ? [] : lista });
+  res.json({ salidos: out.salidos, enCocina: out.enCocina, automatico: HAY_WEBHOOK(), avisos: HAY_WEBHOOK() ? [] : lista });
 }));
 
 // Asignar moto. De paso dispara a cocina lo que siga pendiente.
@@ -1446,6 +1458,7 @@ app.post('/api/reparto/:folio/salida', puedeCaja, wrap(async (req, res) => {
     if (!ped) throw bad('Pedido inexistente', 404);
     if (!M.esDomicilio(ped)) throw bad('El pedido no es a domicilio');
     if (ped.estado === 'cancelado') throw bad('El pedido está cancelado', 409);
+    if (!cocinaTermino(ped)) throw bad('Cocina aún no marca listo este pedido', 409);
     M.calcular2x1(e, ped);
     M.recalcularPedido(ped);
     const r = M.marcarSalida(e, ped);
