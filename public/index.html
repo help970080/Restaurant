@@ -294,6 +294,14 @@
 .rm-cash{font-family:var(--mono);font-size:18px;font-weight:700;margin-top:6px;color:var(--muted)}
 .rm-cash.hay{color:var(--accent)}
 .rep-moto .btn{margin-top:8px;width:100%}
+.rm-peds{margin-top:8px;border-top:1px dashed var(--line);padding-top:6px;display:flex;flex-direction:column;gap:4px}
+.rm-ped{display:grid;grid-template-columns:auto 1fr auto;gap:2px 8px;align-items:center;padding:5px 6px;border-radius:8px;background:#faf8f4;cursor:pointer;font-size:12px}
+.rm-ped:hover{background:#f3efe6}
+.rm-ped .st{font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:6px;background:#e8eef7;color:#2d5a8c}
+.rm-ped .st.ruta{background:#fff1e0;color:#b8650f}.rm-ped .st.liq{background:#e6f4ea;color:#1e7b3a}
+.rm-ped .st.tarde{background:#fde8e4;color:#c0392b}
+.rm-ped .ds{grid-column:2/4;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rep-card.flash{box-shadow:0 0 0 3px var(--accent);transition:box-shadow .3s}
 .rep-board{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;align-items:start}
 .rep-col{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;min-height:90px}
 .rep-col-h{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:8px}
@@ -1828,6 +1836,7 @@ function pintarReparto(){
           <div class="rm-sub">${r.enRuta} en ruta · ${r.porLiquidar} por liquidar${r.estrellas?` · <span title="${r.calificaciones} calificación(es)" style="color:var(--accent)">${estrellasTxt(r.estrellas)} ${r.estrellas}</span>`:''}${r.ubicacion?'':' · sin GPS'}</div>
           ${r.username?'':'<div class="rm-warn">Sin usuario del sistema: no puede entrar ni compartir ubicación. Ligalo en Personal.</div>'}
           <div class="rm-cash ${r.efectivoPendiente>0?'hay':''}">${money(r.efectivoPendiente)}</div>
+          ${pedidosDeMoto(tab,r.id)}
           ${caja&&r.porLiquidar>0?`<button class="btn accent" data-liq="${r.id}" data-nom="${r.nombre}">Liquidar</button>`:''}
         </div>`).join('')}</div>`
         :'<div class="empty">No hay empleados con puesto “Repartidor”. Dalos de alta en Personal.</div>'}
@@ -1863,6 +1872,11 @@ function pintarReparto(){
     const r=((app._rep&&app._rep.reps)||[]).find(x=>x.id===b.dataset.liq);
     if(r)modalLiquidar(r,vReparto);
   });
+  document.querySelectorAll('[data-irped]').forEach(b=>b.onclick=()=>{
+    const t=document.querySelector(`.rep-card[data-folio="${b.dataset.irped}"]`);
+    if(!t)return;t.scrollIntoView({behavior:'smooth',block:'center'});
+    t.classList.add('flash');setTimeout(()=>t.classList.remove('flash'),1600);
+  });
   document.querySelectorAll('[data-asignar]').forEach(b=>b.onclick=()=>modalAsignar(b.dataset.asignar));
   document.querySelectorAll('[data-salida]').forEach(b=>b.onclick=()=>accionReparto(b.dataset.salida,'salida','Salió a ruta'));
   document.querySelectorAll('[data-entregar]').forEach(b=>b.onclick=()=>modalEntregar(b.dataset.entregar));
@@ -1871,6 +1885,23 @@ function pintarReparto(){
   document.querySelectorAll('[data-ticketrep]').forEach(b=>b.onclick=async()=>{
     try{ticketFinal(await API.get('/api/pedidos/'+b.dataset.ticketrep));}catch(e){toast(e.message);}
   });
+}
+// Lo que trae cada moto: asignados, en ruta y entregados sin liquidar.
+function pedidosDeMoto(tab,repId){
+  const de=(arr,tipo)=>(arr||[]).filter(p=>p.reparto&&p.reparto.repartidorId===repId).map(p=>({p,tipo}));
+  const l=[...de(tab.enRuta,'en_ruta'),...de(tab.asignados,'asignado'),...de(tab.porLiquidar,'entregado')];
+  if(!l.length)return '<div class="rm-peds"><div class="small" style="color:var(--muted)">Sin pedidos ahora</div></div>';
+  const esc=(v)=>String(v==null?'':v).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+  return `<div class="rm-peds">${l.map(({p,tipo})=>{
+    const r=p.reparto||{};const c=p.cliente||{};
+    const min=tipo==='en_ruta'?minsDesde(r.salida):tipo==='asignado'?minsDesde(r.asignado||p.creado):null;
+    const tarde=tipo==='en_ruta'&&min!=null&&min>=Math.max(25,Math.round((p.promedioMin||22)*1.5));
+    const et=tipo==='en_ruta'?(tarde?'<span class="st tarde">va tarde</span>':'<span class="st ruta">en ruta</span>')
+      :tipo==='asignado'?'<span class="st">asignado</span>':'<span class="st liq">entregado</span>';
+    const extra=tipo==='entregado'?`efectivo ${money(p.efectivo||0)}`:(min!=null?`${min} min`:'');
+    return `<div class="rm-ped" data-irped="${esc(p.folio)}" title="Ver pedido en el tablero">
+      ${et}<b>${p.codigo?esc(p.codigo)+' · ':''}${esc(c.nombre||'—')}</b><span class="mono">${money(p.total)}</span>
+      <span class="ds">${esc(c.colonia||c.direccion||'')}${extra?' · '+extra:''}</span></div>`;}).join('')}</div>`;
 }
 function estrellasTxt(n){return n?'★'.repeat(Math.round(n))+'☆'.repeat(5-Math.round(n)):'';}
 // Abrir la navegación del teléfono. Si ya conocemos las coordenadas del
@@ -2055,7 +2086,7 @@ function tarjetaPedidoRep(p,tipo,caja){
       ${(p.reparto&&p.reparto.salida)?`<span class="rc-cron mono" data-cron="${p.reparto.salida}" title="tiempo transcurrido desde que salió">--:--</span>`:''}
     </div>`:'';
   const califica=r.calificacion?`<div class="rc-cal" title="${(r.calificacion.comentario||'').replace(/"/g,'')}">${estrellasTxt(r.calificacion.estrellas)}${r.calificacion.comentario?' <span class="rc-com">“'+r.calificacion.comentario.slice(0,60)+'”</span>':''}</div>`:'';
-  return `<div class="rep-card ${tarde?'tarde':''}">
+  return `<div class="rep-card ${tarde?'tarde':''}" data-folio="${p.folio}">
     <div class="rc-top"><span class="rc-folio">${p.codigo?`<b class="rc-cod">${p.codigo}</b> `:''}${p.folio}</span><span class="rc-tot">${money(p.total)}</span></div>
     <div class="rc-cli"><b>${c.nombre||'—'}</b>${c.telefono?` · <a class="ent-tel" href="tel:${c.telefono}">${c.telefono}</a>`:''}</div>
     <div class="rc-dir">${c.direccion||[c.calle,c.numero,c.colonia].filter(Boolean).join(' ')||'Sin dirección'}</div>
