@@ -761,13 +761,13 @@ app.delete('/api/menu/categorias/:id', soloAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/menu/productos', soloAdmin, wrap(async (req, res) => {
-  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '', estacion = 'Cocina' } = req.body || {};
-  if (!categoriaId || !nombre || precioBase == null) throw bad('Faltan datos del producto');
+  const { categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], componentes = null, foto = null, descripcion = '', estacion = 'Cocina', precioLibre = false } = req.body || {};
+  if (!categoriaId || !nombre || (precioBase == null && !precioLibre)) throw bad('Faltan datos del producto');
   const p = await withState((e) => {
     if (!e.menu.categorias[categoriaId]) throw bad('Categoría inexistente');
     let finalReceta = receta, esCombo = false;
     if (componentes && componentes.length) { finalReceta = M.recetaDeCombo(e, componentes); esCombo = true; }
-    const prod = M.crearProducto({ categoriaId, nombre, precioBase, gruposIds, destino, receta: finalReceta, descripcion, estacion });
+    const prod = M.crearProducto({ categoriaId, nombre, precioBase: precioLibre ? 0 : precioBase, gruposIds, destino, receta: finalReceta, descripcion, estacion, precioLibre });
     if (esCombo) { prod.esCombo = true; prod.componentes = componentes; }
     if (foto) prod.foto = foto;
     e.menu.productos[prod.id] = prod; return prod;
@@ -781,6 +781,7 @@ app.patch('/api/menu/productos/:id', soloAdmin, wrap(async (req, res) => {
     const prod = e.menu.productos[id];
     if (!prod) throw bad('Producto inexistente', 404);
     for (const k of ['nombre', 'precioBase', 'destino', 'gruposIds', 'receta', 'activo', 'categoriaId', 'disponible', 'descripcion', 'estacion', 'divisible']) if (k in patch) prod[k] = patch[k];
+    if ('precioLibre' in patch) prod.precioLibre = !!patch.precioLibre;
     return prod;
   });
   res.json(p);
@@ -1025,14 +1026,17 @@ app.post('/api/pedidos', wrap(async (req, res) => {
 
 app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
   const { folio } = req.params;
-  const { productoId, cantidad = 1, modsElegidos = [], notas = '', partes = null } = req.body || {};
-  const ped = await withState((e) => {
+  const { productoId, cantidad = 1, modsElegidos = [], notas = '', partes = null, precioManual = null, descripcionLibre = '', tamanoLibre = '' } = req.body || {};
+  const ped = await withState((e, c) => {
     const p = e.pedidos[folio];
     if (!p) throw bad('Pedido inexistente', 404);
     if (p.estado !== 'abierto') throw bad('El pedido ya está cerrado');
     const prod = e.menu.productos[productoId];
     if (!prod) throw bad('Producto inexistente');
-    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas, partes }));
+    // precioManual solo se respeta si el producto es de precio libre: a un
+    // producto normal nadie le puede cambiar el precio desde caja.
+    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas, partes,
+      precioManual, descripcionLibre, tamanoLibre, usuario: (c || {}).username || null }));
     p.actualizado = new Date().toISOString();
     M.calcular2x1(e, p);
     return M.recalcularPedido(p);
@@ -1238,6 +1242,10 @@ app.get('/api/reparto/repartidores', wrap(async (req, res) => {
       // Sin usuario ligado no puede entrar al sistema ni compartir su GPS
       username: emp.username || null,
       ubicacion: M.ubicacionViva(e, emp.id),
+      // La última que mandó, aunque sea vieja: caja necesita saber "hace cuánto"
+      // dejó de reportar, no solo que ya no reporta.
+      ultimaUbicacion: (() => { const u = (e.repartoUbicaciones || {})[emp.id];
+        return u ? { lat: u.lat, lng: u.lng, precision: u.precision, ts: u.ts } : null; })(),
       estrellas: prom, calificaciones: califs.length,
       enRuta: ruta.length, foliosEnRuta: ruta.map((p) => p.folio),
       porLiquidar: pend.length,
@@ -2457,6 +2465,39 @@ function pedsCobrados(e, sucursalId, desde, hasta) {
     return (!d1 || d >= d1) && (!d2 || d <= d2);
   });
 }
+// Auditoría de precio libre: cada venta donde caja puso el precio a mano.
+// Incluye las canceladas: también se quiere ver quién capturó y luego canceló.
+app.get('/api/reportes/precio-libre', puedeCaja, wrap(async (req, res) => {
+  const e = await readState();
+  const { sucursalId, desde, hasta } = req.query;
+  const tz = tzTenant(e);
+  const d1 = diaParam(desde, tz), d2 = diaParam(hasta, tz);
+  const out = [];
+  for (const p of Object.values(e.pedidos)) {
+    if (sucursalId && p.sucursalId !== sucursalId) continue;
+    for (const l of p.lineas || []) {
+      if (!l.precioLibre) continue;
+      const d = diaLocal(l.precioLibre.fecha || p.creado, tz);
+      if ((d1 && d < d1) || (d2 && d > d2)) continue;
+      out.push({ folio: p.folio, estado: p.estado, tipoServicio: p.tipoServicio, producto: l.nombre, cantidad: l.cantidad,
+        precio: l.precioUnitario, importe: l.importe, descripcion: l.precioLibre.descripcion, tamano: l.precioLibre.tamano,
+        capturadoPor: l.precioLibre.capturadoPor, fecha: l.precioLibre.fecha });
+    }
+  }
+  out.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+  const cobradas = out.filter((x) => x.estado === 'cobrado');
+  const porUsuario = {};
+  for (const x of cobradas) {
+    const k = x.capturadoPor || '(sin usuario)';
+    porUsuario[k] = porUsuario[k] || { usuario: k, ventas: 0, piezas: 0, total: 0 };
+    porUsuario[k].ventas++; porUsuario[k].piezas += x.cantidad; porUsuario[k].total = M.r2(porUsuario[k].total + x.importe);
+  }
+  res.json({
+    total: M.r2(cobradas.reduce((s, x) => s + x.importe, 0)), piezas: cobradas.reduce((s, x) => s + x.cantidad, 0),
+    porUsuario: Object.values(porUsuario).sort((a, b) => b.total - a.total),
+    detalle: out.slice(0, 300),
+  });
+}));
 app.get('/api/reportes/resumen', wrap(async (req, res) => {
   const e = await readState();
   const { sucursalId, desde, hasta } = req.query;
@@ -2759,7 +2800,7 @@ app.get('/pedir/:row/:suc/menu', (req, res) => {
       const cats = Object.values(e.menu.categorias).filter((c) => c.visible !== false)
         .sort((a, b) => (a.orden || 0) - (b.orden || 0));
       const prods = Object.values(e.menu.productos)
-        .filter((p) => p.activo !== false && p.disponible !== false)
+        .filter((p) => p.activo !== false && p.disponible !== false && !p.precioLibre)
         // Postgres no conserva el orden de las llaves del JSONB: hay que ordenar aqui.
         .sort((a, b) => (a.orden || 0) - (b.orden || 0) || String(a.nombre).localeCompare(String(b.nombre), 'es'));
       const usados = new Set(prods.flatMap((p) => p.gruposIds || []));
@@ -2865,7 +2906,7 @@ app.post('/pedir/:row/:suc/pedido', express.json(), (req, res) => {
         p.notasCliente = String(notas || '').trim().slice(0, 200);
         for (const it of items) {
           const prod = e.menu.productos[it.productoId];
-          if (!prod || prod.activo === false) continue;
+          if (!prod || prod.activo === false || prod.precioLibre) continue;
           const cant = Math.max(1, Math.min(20, parseInt(it.cantidad, 10) || 1));
           p.lineas.push(M.crearLinea(prod, e, { cantidad: cant, modsElegidos: it.modsElegidos || [],
             partes: Array.isArray(it.partes) && it.partes.length ? it.partes.slice(0, 4) : null,
