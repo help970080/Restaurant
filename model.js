@@ -103,8 +103,21 @@ const crearOpcion = ({ nombre, precioDelta = 0, porDefecto = false }) => ({ id: 
 const crearGrupo = ({ nombre, tipo = 'unico', obligatorio = false, max = null, opciones = [] }) => ({ id: uid('grp'), nombre, tipo, obligatorio, max, opciones });
 // divisible: { maxPartes, excluirCategorias } — para la Mega y la Barra, que
 // se pueden pedir con varias especialidades sin que cambie el precio.
-const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], descripcion = '', estacion = 'Cocina', icono = '', divisible = null }) =>
-  ({ id: uid('prod'), categoriaId, nombre, descripcion, precioBase, gruposIds, destino, estacion, icono, receta, divisible, activo: true, disponible: true });
+// precioLibre: el producto no tiene precio fijo; caja captura qué lleva y cuánto
+// cuesta al venderlo (p. ej. "Pizza especial"). Queda auditado en la línea.
+const crearProducto = ({ categoriaId, nombre, precioBase, gruposIds = [], destino = 'cocina', receta = [], descripcion = '', estacion = 'Cocina', icono = '', divisible = null, precioLibre = false }) =>
+  ({ id: uid('prod'), categoriaId, nombre, descripcion, precioBase, gruposIds, destino, estacion, icono, receta, divisible, precioLibre: !!precioLibre, activo: true, disponible: true });
+
+const PRECIO_LIBRE_MAX = 20000;   // tope de cordura contra un dedazo (2450 -> 24500)
+// Valida lo capturado en caja para un producto de precio libre.
+function validarPrecioLibre(prod, { precioManual, descripcionLibre }) {
+  const precio = r2(+precioManual);
+  const desc = String(descripcionLibre == null ? '' : descripcionLibre).trim().slice(0, 200);
+  if (!desc) { const x = new Error(`Escribe qué lleva la ${prod.nombre}`); x.status = 400; throw x; }
+  if (!(precio > 0)) { const x = new Error('Captura el precio'); x.status = 400; throw x; }
+  if (precio > PRECIO_LIBRE_MAX) { const x = new Error(`Precio fuera de rango (máximo ${PRECIO_LIBRE_MAX})`); x.status = 400; throw x; }
+  return { precio, desc };
+}
 
 const FRACCION = { 1: 'entera', 2: 'mitad', 3: 'un tercio', 4: 'un cuarto' };
 // Valida los sabores elegidos para una pizza dividida y devuelve sus nombres.
@@ -137,7 +150,26 @@ function folioPedido(e, sucId, codigo = 'SUC') {
 
 // ---- Línea del pedido (resuelve modificadores y snapshot de precio) ---------
 //  prod: producto del menú.  modsElegidos: [{ grupoId, opcionId }]
-function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', partes = null } = {}) {
+function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', partes = null, precioManual = null, descripcionLibre = '', tamanoLibre = '', usuario = null } = {}) {
+  if (prod.precioLibre) {
+    const { precio, desc } = validarPrecioLibre(prod, { precioManual, descripcionLibre });
+    const tam = String(tamanoLibre || '').trim().slice(0, 30);
+    // Tamaño y descripción viajan como modificadores sin costo: así cocina, el
+    // ticket y la pantalla de caja los muestran sin tocar ningún otro código.
+    const modificadores = [];
+    if (tam) modificadores.push({ grupoId: null, grupoNombre: 'Tamaño', opcionId: null, opcionNombre: tam, precioDelta: 0 });
+    modificadores.push({ grupoId: null, grupoNombre: 'Lleva', opcionId: null, opcionNombre: desc, precioDelta: 0 });
+    const cant = Math.max(1, parseInt(cantidad, 10) || 1);
+    return {
+      id: uid('ln'), productoId: prod.id, nombre: prod.nombre, partes: null, fraccion: null,
+      destino: prod.destino, estacion: prod.estacion || 'Cocina', cantidad: cant,
+      precioUnitario: precio, modificadores, notas,
+      cocina: prod.destino === 'cocina' ? 'pendiente' : null,
+      importe: r2(precio * cant),
+      // Auditoría: quién puso el precio, cuándo y qué capturó
+      precioLibre: { precio, descripcion: desc, tamano: tam || null, capturadoPor: usuario || null, fecha: new Date().toISOString() },
+    };
+  }
   const trozos = partes ? armarPartes(e, prod, partes) : null;
   const modificadores = [];
   for (const sel of modsElegidos) {
@@ -854,7 +886,7 @@ function descontarInventario(e, ped) {
 
 module.exports = {
   uid, r2, estadoInicial,
-  crearCategoria, crearOpcion, crearGrupo, crearProducto, armarPartes, FRACCION, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
+  crearCategoria, crearOpcion, crearGrupo, crearProducto, validarPrecioLibre, PRECIO_LIBRE_MAX, armarPartes, FRACCION, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
   promo2x1Activa, calcular2x1,
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
