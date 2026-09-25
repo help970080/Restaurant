@@ -1670,6 +1670,83 @@ app.get('/api/clientes', puedeCaja, wrap(async (req, res) => {
   res.json(M.buscarClientes(e, q));
 }));
 
+// ---- GPS con el teléfono bloqueado (app Traccar Client) --------------------
+//  Una página web deja de mandar ubicación en cuanto se bloquea la pantalla o
+//  se cambia de app: así funciona Android/iOS y no se puede evitar desde el
+//  navegador. Traccar Client (gratis, Play Store / App Store) corre como servicio
+//  en segundo plano y manda la ubicación a una URL. Esa URL es /gps/<row> y el
+//  "identificador de dispositivo" es un token secreto por repartidor.
+//  Acepta los dos formatos de Traccar Client: query/form (id, lat, lon…) y el
+//  JSON de la app nueva ({ device_id, location: { coords: {…}, timestamp } }).
+const GPS_MAX_ATRASO_MS = 3 * 60000;   // puntos guardados sin señal: si son viejos no se pintan como "ahora"
+function leerPuntoTraccar(req) {
+  const q = Object.assign({}, req.query || {}, (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {});
+  let id = q.id || q.deviceid || q.device_id || null;
+  let loc = q.location;
+  if (Array.isArray(loc)) loc = loc[loc.length - 1];              // lote: el último es el más reciente
+  if (loc && typeof loc === 'object') {
+    const c = loc.coords || {};
+    return { id, lat: +c.latitude, lng: +c.longitude, precision: c.accuracy != null ? +c.accuracy : null, ts: loc.timestamp || null };
+  }
+  let lat = q.lat, lng = q.lon;
+  if ((lat == null || lng == null) && typeof loc === 'string' && loc.includes(',')) [lat, lng] = loc.split(',');
+  return { id, lat: +lat, lng: +lng, precision: q.accuracy != null ? +q.accuracy : null, ts: q.timestamp || null };
+}
+function tsTraccar(ts) {
+  if (ts == null || ts === '') return null;
+  if (/^\d+(\.\d+)?$/.test(String(ts))) { const n = +ts; return n < 1e12 ? n * 1000 : n; }   // segundos o ms
+  const d = Date.parse(ts); return isNaN(d) ? null : d;
+}
+app.all('/gps/:row', express.urlencoded({ extended: false }), (req, res) => {
+  const row = Number(req.params.row);
+  if (!Number.isInteger(row) || row <= 0) return res.status(404).end();
+  runPublic(row, async () => {
+    try {
+      const pt = leerPuntoTraccar(req);
+      const token = String(pt.id || '').trim();
+      if (!token) return res.status(400).send('falta id');
+      if (!isFinite(pt.lat) || !isFinite(pt.lng)) return res.status(400).send('sin coordenadas');
+      const t = tsTraccar(pt.ts);
+      // Se responde 200 aunque se ignore: si no, la app reintenta ese punto para siempre.
+      if (t && Date.now() - t > GPS_MAX_ATRASO_MS) return res.status(200).send('viejo');
+      if (pt.precision != null && pt.precision > PRECISION_MAX_M) return res.status(200).send('impreciso');
+      const aplicar = GPS_EN_MEMORIA
+        ? async (fn) => { const e = await readState(); if (!e) { const x = new Error('nf'); x.status = 404; throw x; } return fn(e); }
+        : withState;
+      await aplicar((e) => {
+        const emp = Object.values(e.empleados || {}).find((x) => x.gpsToken && x.gpsToken === token);
+        if (!emp || !M.esRepartidor(emp)) { const x = new Error('nf'); x.status = 404; throw x; }
+        M.guardarUbicacion(e, emp.id, { lat: pt.lat, lng: pt.lng, precision: pt.precision });
+      });
+      res.status(200).send('ok');
+    } catch (err) {
+      if (err && err.status === 404) return res.status(404).send('dispositivo no registrado');
+      console.error('[gps traccar]', err && err.message);
+      res.status(500).send('error');
+    }
+  });
+});
+
+// Genera (o regenera) el identificador de Traccar de un repartidor.
+// Regenerar desconecta el teléfono anterior: sirve si alguien deja la empresa.
+app.post('/api/rh/empleados/:id/gps-token', soloAdmin, wrap(async (req, res) => {
+  const row = ctx().row;
+  const out = await withState((e) => {
+    const emp = (e.empleados || {})[req.params.id];
+    if (!emp) throw bad('Empleado inexistente', 404);
+    if (!M.esRepartidor(emp)) throw bad('Solo aplica a repartidores (puesto "Repartidor")');
+    if (!emp.gpsToken || (req.body && req.body.regenerar)) {
+      const usados = new Set(Object.values(e.empleados).map((x) => x.gpsToken).filter(Boolean));
+      let tk; do { tk = String(10000000 + (crypto.randomBytes(4).readUInt32BE(0) % 90000000)); } while (usados.has(tk));
+      emp.gpsToken = tk;
+    }
+    return { token: emp.gpsToken };
+  });
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+  res.json({ token: out.token, url: `${proto}://${host}/gps/${row}` });
+}));
+
 // Liga de seguimiento para mandarle al cliente. Genera el token si el pedido es
 // anterior a esta versión.
 app.get('/api/pedidos/:folio/seguimiento', wrap(async (req, res) => {
