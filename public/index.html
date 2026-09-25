@@ -1040,7 +1040,9 @@ function iniciarGPS(silencioso){
       const r=await API.post('/api/reparto/ubicacion',{lat:pos.coords.latitude,lng:pos.coords.longitude,precision:pos.coords.accuracy});
       app._gpsUlt=new Date().toISOString();app._gpsRuta=r.enRuta;app._gpsPrec=Math.round(pos.coords.accuracy||0);
     }catch(e){
-      if(/no es de repartidor|ficha de empleado/i.test(e.message||'')){detenerGPS();return;}
+      // Antes se apagaba en silencio: el repartidor volvía a prender, se apagaba
+      // otra vez y nadie sabía por qué. Ahora el motivo queda a la vista.
+      if(/no es de repartidor|ficha de empleado/i.test(e.message||'')){detenerGPS();app._gpsBloqueo=e.message;toast(e.message,{ms:9000});if(app.vista==='reparto')pintarBannerGPS();return;}
       app._gpsErr=e.message;app._gpsCodigo=null;
     }
     if(app.vista==='reparto')pintarBannerGPS();
@@ -1082,7 +1084,8 @@ function pintarBannerGPS(){
   const fallando=on&&!!app._gpsErr;
   const clase=fallando?'err':(on&&app._gpsUlt?'on':'');
   let titulo,detalle;
-  if(!on){titulo='Ubicación apagada';detalle='Préndela para que el cliente vea dónde va su pedido';}
+  if(!on&&app._gpsBloqueo){titulo='No se puede compartir la ubicación';detalle=`<b style="color:var(--red)">${app._gpsBloqueo}</b> Pide al encargado que lo corrija en Personal.`;}
+  else if(!on){titulo='Ubicación apagada';detalle='Préndela para que el cliente vea dónde va su pedido';}
   else if(fallando){
     titulo='No se está compartiendo';
     detalle=`<b style="color:var(--red)">${app._gpsErr}</b> <button class="lnk-gps" id="gpsAyuda">¿Cómo lo arreglo?</button>`;
@@ -1096,7 +1099,7 @@ function pintarBannerGPS(){
   c.innerHTML=`<div class="gps-card ${clase}">
     <div><div class="gps-t">${titulo}</div><div class="gps-s">${detalle}</div></div>
     <button class="btn ${on?'':'accent'}" id="gpsTog">${on?'Apagar':'Prender'}</button></div>`;
-  $('#gpsTog').onclick=()=>{if(on){detenerGPS();}else{app._gpsErr=null;app._gpsCodigo=null;iniciarGPS();}pintarBannerGPS();};
+  $('#gpsTog').onclick=()=>{if(on){detenerGPS();}else{app._gpsErr=null;app._gpsCodigo=null;app._gpsBloqueo=null;iniciarGPS();}pintarBannerGPS();};
   if($('#gpsAyuda'))$('#gpsAyuda').onclick=modalArreglarGPS;
 }
 // Diagnóstico real: dice en qué capa está el problema y da los pasos del
@@ -4521,14 +4524,40 @@ function modalEmpleado(emp){
       <div class="small" style="color:var(--muted);margin-top:6px" id="eUsrHint">Liga esta ficha con la cuenta con la que entra al sistema. Un <b>repartidor sin usuario</b> puede recibir pedidos, pero no puede entrar a la app ni compartir su ubicación.</div>
       ${us.length?'':'<div class="small" style="color:var(--red);margin-top:4px">Aún no hay usuarios. Créalo primero en Ajustes → Usuarios.</div>'}
     </div></div>
+    ${ed&&/repartidor|motoriz|moto\b/i.test(emp.puesto||'')?`<button class="btn" id="eGps" style="width:100%;margin-top:10px">📍 GPS con el teléfono bloqueado</button>`:''}
     <div class="modal-foot">${ed?`<button class="btn-ghost" id="eContrato" style="margin-right:auto">📄 Contrato de comisión</button>`:''}${ed?`<button class="btn-ghost" id="eBaja" style="color:${emp.activo?'var(--red)':'var(--green)'}">${emp.activo?'Dar de baja':'Reactivar'}</button>`:''}<button class="btn-ghost" id="eCancel">Cancelar</button><button class="btn-primary" id="eOk">${ed?'Guardar':'Crear'}</button></div>`;
   ov.classList.add('show');if(!esTactil)setTimeout(()=>$('#eNom').focus(),50);
   $('#eCancel').onclick=closeModal;
   if(ed&&$('#eContrato'))$('#eContrato').onclick=()=>generarContrato(emp);
+  if(ed&&$('#eGps'))$('#eGps').onclick=()=>modalGpsTraccar(emp);
   if(ed&&$('#eBaja'))$('#eBaja').onclick=async()=>{try{await API.patch('/api/rh/empleados/'+emp.id,{activo:!emp.activo});closeModal();toast(emp.activo?'Empleado dado de baja':'Empleado reactivado');vRH();}catch(e){toast(e.message);}};
   $('#eOk').onclick=async()=>{const body={nombre:$('#eNom').value.trim(),puesto:$('#ePue').value.trim(),sucursalId:$('#eSuc').value||null,salarioBase:+$('#eSal').value||0,comisionPct:+$('#eCom').value||0,cumple:$('#eCum').value||'',ingreso:$('#eIng').value||'',telefono:$('#eTel').value.trim(),pin:$('#ePin').value.trim(),rfc:$('#eRfc').value.trim(),domicilio:$('#eDom').value.trim(),username:$('#eUsr').value||''};
     if(!body.nombre){toast('Falta el nombre');return;}
     try{if(ed)await API.patch('/api/rh/empleados/'+emp.id,body);else await API.post('/api/rh/empleados',body);closeModal();toast(ed?'Empleado actualizado':'Empleado agregado');vRH();}catch(e){toast(e.message);}};
+}
+// GPS en segundo plano: el navegador deja de mandar ubicación al bloquear el
+// teléfono. Traccar Client (gratis) sí lo hace y le manda al server directo.
+async function modalGpsTraccar(emp,regenerar){
+  let d;try{d=await API.post('/api/rh/empleados/'+emp.id+'/gps-token',regenerar?{regenerar:true}:{});}catch(e){toast(e.message);return;}
+  const esc=(v)=>String(v==null?'':v).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+  const fila=(lbl,val,id)=>`<div class="field"><label>${lbl}</label><div style="display:flex;gap:6px"><input class="mono" readonly value="${val}" style="flex:1"><button class="btn" data-cp="${val}" style="padding:6px 12px">Copiar</button></div></div>`;
+  modal.innerHTML=`<h3>GPS de ${esc(emp.nombre)}</h3><div class="sub">Manda la ubicación aunque el teléfono vaya bloqueado en la moto</div>
+    <ol style="padding-left:18px;line-height:1.55;font-size:14px;margin:10px 0">
+      <li>En el teléfono de ${esc(emp.nombre)} instala <b>Traccar Client</b> (Play Store o App Store, es gratis).</li>
+      <li>Ábrela y en <b>Ajustes</b> pon estos dos datos:</li></ol>
+    ${fila('Identificador del dispositivo (Device identifier)',d.token)}
+    ${fila('URL del servidor (Server URL)',d.url)}
+    <ol start="3" style="padding-left:18px;line-height:1.55;font-size:14px;margin:6px 0">
+      <li><b>Precisión:</b> Alta. <b>Frecuencia / intervalo:</b> 20 segundos. <b>Distancia:</b> 0.</li>
+      <li>Dale permiso de ubicación <b>"Permitir todo el tiempo"</b>.</li>
+      <li>Android: Ajustes → Apps → Traccar Client → Batería → <b>Sin restricciones</b>. Si no, el teléfono la duerme.</li>
+      <li>Prende el interruptor <b>Seguimiento / Service status</b> al empezar el turno y apágalo al terminar.</li></ol>
+    <div class="small" style="color:var(--muted)">En menos de un minuto la moto aparece en Reparto y en la liga del cliente. No necesita tener abierto este sistema.</div>
+    <div class="modal-foot"><button class="btn-ghost" id="gtReg" style="margin-right:auto;color:var(--red)">Cambiar identificador</button><button class="btn-primary" id="gtOk">Listo</button></div>`;
+  ov.classList.add('show');
+  modal.querySelectorAll('[data-cp]').forEach(b=>b.onclick=async()=>toast(await copiar(b.dataset.cp)?'Copiado':'Cópialo a mano',{tipo:'ok'}));
+  $('#gtOk').onclick=closeModal;
+  $('#gtReg').onclick=()=>{if(confirm('El teléfono que tenga el identificador actual dejará de mandar ubicación. ¿Continuar?'))modalGpsTraccar(emp,true);};
 }
 async function generarContrato(emp){
   let fx=app._fiscal;
