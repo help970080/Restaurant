@@ -71,20 +71,41 @@ function promo2x1Activa(e) {
 function calcular2x1(e, p) {
   const promo = promo2x1Activa(e);
   if (!promo || !promo.categorias.length) { p.promo2x1 = null; return null; }
-  const piezas = [];
+  // Solo se emparejan pizzas del MISMO tamaño. Y lo que se regala es la pizza
+  // con su tamaño: orilla, cargo gourmet, mitad más cara y demás extras se
+  // cobran siempre, aunque la pizza vaya gratis.
+  const grupos = {};
   for (const l of p.lineas || []) {
     const prod = e.menu.productos[l.productoId];
     if (!prod || !promo.categorias.includes(prod.categoriaId)) continue;
-    for (let i = 0; i < l.cantidad; i++) piezas.push({ nombre: l.nombre, precio: l.precioUnitario });
+    const tam = (l.modificadores || []).find(esModTamano);
+    const llave = tam ? String(tam.opcionNombre || '').trim().toLowerCase() : '';
+    const extras = (l.modificadores || []).reduce((t, m) => t + (m === tam ? 0 : (m.precioDelta || 0)), 0);
+    const precio = r2(l.precioUnitario - extras);
+    const g = grupos[llave] || (grupos[llave] = { tamano: tam ? tam.opcionNombre : '', piezas: [] });
+    for (let i = 0; i < l.cantidad; i++) g.piezas.push({ nombre: l.nombre, precio, tamano: g.tamano });
   }
-  if (piezas.length < 2) { p.promo2x1 = null; return null; }
-  piezas.sort((a, b) => b.precio - a.precio);      // de la más cara a la más barata
-  const gratis = [];
-  for (let i = 1; i < piezas.length; i += 2) gratis.push(piezas[i]);   // la 2ª de cada par
+  const todas = Object.values(grupos).reduce((t, g) => t + g.piezas.length, 0);
+  if (todas < 2) { p.promo2x1 = null; return null; }
+  const gratis = [], sinPar = [];
+  for (const g of Object.values(grupos)) {
+    g.piezas.sort((a, b) => b.precio - a.precio);    // de la más cara a la más barata
+    for (let i = 1; i < g.piezas.length; i += 2) gratis.push(g.piezas[i]);   // la 2ª de cada par
+    if (g.piezas.length % 2) sinPar.push(g.piezas[g.piezas.length - 1]);
+  }
   const monto = r2(gratis.reduce((t, x) => t + x.precio, 0));
-  p.promo2x1 = { promoId: promo.id, nombre: promo.nombre, monto, gratis: gratis.map((x) => ({ nombre: x.nombre, importe: x.precio })) };
+  const nom = (x) => x.nombre + (x.tamano ? ' ' + x.tamano : '');
+  p.promo2x1 = {
+    promoId: promo.id, nombre: promo.nombre, monto,
+    gratis: gratis.map((x) => ({ nombre: nom(x), importe: x.precio })),
+    // Pizzas que se quedaron sin pareja de su tamaño: se cobran completas
+    sinPar: sinPar.map((x) => ({ nombre: nom(x), importe: x.precio })),
+  };
   return p.promo2x1;
 }
+
+// Modificador de tamaño (Chica, Mediana, Familiar…): el grupo se llama "Tamaño".
+const esModTamano = (m) => !!m && /tama[ñn]o/i.test(String(m.grupoNombre || ''));
 
 // Receta agregada de un combo: suma las recetas de sus productos componentes
 function recetaDeCombo(e, componentes = []) {
@@ -123,7 +144,7 @@ const FRACCION = { 1: 'entera', 2: 'mitad', 3: 'un tercio', 4: 'un cuarto' };
 // Valida los sabores elegidos para una pizza dividida y devuelve sus nombres.
 function armarPartes(e, prod, partes = []) {
   const d = prod.divisible;
-  if (!d || !Array.isArray(partes) || partes.length < 2) return null;
+  if (!d || !Array.isArray(partes) || partes.length < 1) return null;
   const max = Math.min(4, Math.max(2, +d.maxPartes || 2));
   if (partes.length > max) { const x = new Error(`${prod.nombre} se divide en máximo ${max} partes`); x.status = 400; throw x; }
   const excluir = d.excluirCategorias || [];
@@ -135,9 +156,55 @@ function armarPartes(e, prod, partes = []) {
       const cat = (e.menu.categorias[p.categoriaId] || {}).nombre || '';
       const x = new Error(`${p.nombre} (${cat}) no se puede combinar en ${prod.nombre}`); x.status = 400; throw x;
     }
-    out.push({ productoId: p.id, nombre: p.nombre });
+    out.push({ productoId: p.id, nombre: p.nombre, categoriaId: p.categoriaId });
   }
   return out;
+}
+
+// Cargo extra de una pizza dividida: cada parte de una categoría con cargo
+// (p. ej. Gourmet en la Mega) suma d.extraMonto al precio.
+function cargoPartes(prod, trozos) {
+  const d = prod.divisible || {};
+  const cats = Array.isArray(d.extraCategorias) ? d.extraCategorias : [];
+  const monto = r2(+d.extraMonto || 0);
+  if (!trozos || !cats.length || !(monto > 0)) return null;
+  const n = trozos.filter((t) => cats.includes(t.categoriaId)).length;
+  if (!n) return null;
+  return { grupoId: null, grupoNombre: 'Extra', opcionId: null,
+    opcionNombre: n > 1 ? `Especialidad con cargo ×${n}` : 'Especialidad con cargo', precioDelta: r2(monto * n) };
+}
+
+// Mitad y mitad en una pizza normal (Hawaiana con mitad Costillas BBQ).
+// La otra mitad se toma en el mismo tamaño. Cobro según config.mitadCobro:
+//   'mas_cara' (default) -> se cobra como la mitad más cara
+//   'no'                 -> sin cargo extra
+function precioEnTamano(e, prod, tamNombre) {
+  if (!tamNombre) return prod.precioBase;
+  const t = String(tamNombre).trim().toLowerCase();
+  for (const gid of prod.gruposIds || []) {
+    const g = e.menu.gruposModificadores[gid];
+    if (!g || !/tama[ñn]o/i.test(g.nombre)) continue;
+    const o = g.opciones.find((x) => String(x.nombre).trim().toLowerCase() === t);
+    if (o) return r2(prod.precioBase + (o.precioDelta || 0));
+  }
+  return null;   // ese sabor no se hace en ese tamaño
+}
+function armarMitad(e, prod, mitadConId, modificadores) {
+  const otro = e.menu.productos[mitadConId];
+  if (!otro || otro.activo === false || otro.precioLibre || otro.id === prod.id) {
+    const x = new Error('El sabor de la otra mitad no existe'); x.status = 400; throw x;
+  }
+  if (otro.disponible === false) { const x = new Error(`${otro.nombre} está agotado`); x.status = 400; throw x; }
+  const tam = modificadores.find(esModTamano);
+  const tamNom = tam ? tam.opcionNombre : '';
+  const pOtro = precioEnTamano(e, otro, tamNom);
+  if (pOtro == null) { const x = new Error(`${otro.nombre} no se prepara en tamaño ${tamNom}`); x.status = 400; throw x; }
+  const pEste = precioEnTamano(e, prod, tamNom);
+  const cobro = (e.config && e.config.mitadCobro) === 'no' ? 'no' : 'mas_cara';
+  const dif = cobro === 'mas_cara' ? r2(Math.max(0, pOtro - (pEste == null ? prod.precioBase : pEste))) : 0;
+  const partes = [{ productoId: prod.id, nombre: prod.nombre }, { productoId: otro.id, nombre: otro.nombre }];
+  const mod = dif > 0 ? { grupoId: null, grupoNombre: 'Extra', opcionId: null, opcionNombre: `Mitad ${otro.nombre} (diferencia)`, precioDelta: dif } : null;
+  return { partes, mod };
 }
 const crearInsumo = ({ nombre, unidad, stock = 0, costoUnitario = 0, stockMin = 0 }) => ({ id: uid('ins'), nombre, unidad, stock, costoUnitario, stockMin });
 const crearMesa = ({ nombre, sucursalId }) => ({ id: uid('mesa'), nombre, sucursalId, estado: 'libre', pedidoFolio: null });
@@ -150,7 +217,7 @@ function folioPedido(e, sucId, codigo = 'SUC') {
 
 // ---- Línea del pedido (resuelve modificadores y snapshot de precio) ---------
 //  prod: producto del menú.  modsElegidos: [{ grupoId, opcionId }]
-function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', partes = null, precioManual = null, descripcionLibre = '', tamanoLibre = '', usuario = null } = {}) {
+function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', partes = null, mitadCon = null, precioManual = null, descripcionLibre = '', tamanoLibre = '', usuario = null } = {}) {
   if (prod.precioLibre) {
     const { precio, desc } = validarPrecioLibre(prod, { precioManual, descripcionLibre });
     const tam = String(tamanoLibre || '').trim().slice(0, 30);
@@ -170,7 +237,7 @@ function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', part
       precioLibre: { precio, descripcion: desc, tamano: tam || null, capturadoPor: usuario || null, fecha: new Date().toISOString() },
     };
   }
-  const trozos = partes ? armarPartes(e, prod, partes) : null;
+  let trozos = partes ? armarPartes(e, prod, partes) : null;
   const modificadores = [];
   for (const sel of modsElegidos) {
     const g = e.menu.gruposModificadores[sel.grupoId];
@@ -179,13 +246,23 @@ function crearLinea(prod, e, { cantidad = 1, modsElegidos = [], notas = '', part
     if (!o) continue;
     modificadores.push({ grupoId: g.id, grupoNombre: g.nombre, opcionId: o.id, opcionNombre: o.nombre, precioDelta: o.precioDelta });
   }
+  if (trozos) {
+    const c = cargoPartes(prod, trozos);
+    if (c) modificadores.push(c);
+    trozos = trozos.map(({ productoId, nombre }) => ({ productoId, nombre }));
+  } else if (mitadCon && !prod.divisible) {
+    const m = armarMitad(e, prod, mitadCon, modificadores);
+    trozos = m.partes;
+    if (m.mod) modificadores.push(m.mod);
+  }
   const deltas = modificadores.reduce((s, m) => s + (m.precioDelta || 0), 0);
   const precioUnitario = r2(prod.precioBase + deltas);
   return {
     id: uid('ln'),
     productoId: prod.id,
     nombre: prod.nombre,            // SNAPSHOT
-    // Sabores de una pizza dividida. El precio NO cambia: es el del producto.
+    // Sabores de una pizza dividida (o mitad y mitad). Los cargos extra van
+    // como modificadores "Extra" para que se vean en ticket y no los regale el 2x1.
     partes: trozos,
     fraccion: trozos ? (FRACCION[trozos.length] || `1/${trozos.length}`) : null,
     destino: prod.destino,
@@ -888,7 +965,7 @@ module.exports = {
   uid, r2, estadoInicial,
   crearCategoria, crearOpcion, crearGrupo, crearProducto, validarPrecioLibre, PRECIO_LIBRE_MAX, armarPartes, FRACCION, crearInsumo, crearMesa, crearPromocion, recetaDeCombo, canalesDefault, crearCanal, crearEmpleado, crearReserva,
   folioPedido, crearLinea, recalcularPedido, crearPedido, mandarComanda, registrarPago,
-  promo2x1Activa, calcular2x1,
+  promo2x1Activa, calcular2x1, esModTamano, cargoPartes, precioEnTamano, armarMitad,
   nuevoReparto, normalizarEntrega, esRepartidor, repartidoresDe, esDomicilio, enRuta, porLiquidar,
   efectivoDePedido, asignarReparto, marcarSalida, marcarEntregado, marcarFallido, tiemposReparto, crearLiquidacion,
   tokenSeguimiento, codigoEntrega, pedidoPorCodigo, guardarUbicacion, ubicacionViva, promedioEnRuta, pasoCliente, vistaSeguimiento,
