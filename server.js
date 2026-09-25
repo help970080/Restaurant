@@ -1627,9 +1627,19 @@ app.post('/api/reparto/:folio/fallido', puedeCaja, wrap(async (req, res) => {
 
 // La moto reporta su posicion. Solo se guarda la ultima; no hay recorrido.
 const PRECISION_MAX_M = 500;   // más allá de esto la moto aparece en otra colonia
+// La ubicación de la moto es volátil: se sobrescribe cada 25 s y se descarta a
+// los 4 min. Guardarla con withState reescribía el documento COMPLETO del
+// restaurante en Postgres por cada moto cada 25 s, y como las escrituras van en
+// fila, la caja esperaba detrás de ellas en cada movimiento (el lag).
+// Con la caché encendida se actualiza solo en memoria; la próxima escritura
+// normal la persiste de paso. Si se pierde en un reinicio, a los 25 s llega otra.
+const GPS_EN_MEMORIA = process.env.ESTADO_EN_MEMORIA !== '0';
 app.post('/api/reparto/ubicacion', wrap(async (req, res) => {
   const { lat, lng, precision = null, empleadoId = null } = req.body || {};
-  const out = await withState((e, c) => {
+  const aplicar = GPS_EN_MEMORIA
+    ? async (fn) => { const e = await readState(); if (!e) throw new Error('Tenant sin estado'); return fn(e, ctx()); }
+    : withState;
+  const out = await aplicar((e, c) => {
     // Un repartidor solo puede reportar la suya; caja/gerente puede reportar por otro.
     let emp = null;
     if (empleadoId && ['admin', 'gerente', 'cajero'].includes(c.rol)) emp = (e.empleados || {})[empleadoId];
