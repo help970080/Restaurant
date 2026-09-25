@@ -1235,7 +1235,10 @@ function arrancarLatido(){
   if(latidoTimer)clearInterval(latidoTimer);
   latido();
   latidoTimer=setInterval(latido,15000);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)latido();});
+  // Un solo listener aunque el latido se reinicie (antes se acumulaban y al
+  // volver a la pestaña salían varias peticiones de golpe).
+  if(!arrancarLatido._vis){arrancarLatido._vis=true;
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)latido();});}
 }
 const setDe=a=>new Set(a||[]);
 const nuevosEn=(antes,ahora)=>(ahora||[]).filter(x=>!antes.has(x));
