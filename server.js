@@ -410,11 +410,13 @@ app.delete('/api/usuarios/:username', soloAdmin, wrap(async (req, res) => {
 app.get('/api/config', wrap(async (req, res) => {
   const e = await readState();
   res.json({ nombre: e.meta.nombre, logo: (e.config && e.config.logo) || null, moneda: e.config.moneda, fiscal: e.config.fiscal || {},
-    lema: (e.config && e.config.lema) || '', horario: (e.config && e.config.horario) || '' });
+    lema: (e.config && e.config.lema) || '', horario: (e.config && e.config.horario) || '',
+    mitadCobro: (e.config && e.config.mitadCobro) === 'no' ? 'no' : 'mas_cara' });
 }));
 app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
-  const { nombre, logo, fiscal, cajaModo: modo, lema, horario } = req.body || {};
+  const { nombre, logo, fiscal, cajaModo: modo, lema, horario, mitadCobro } = req.body || {};
   if (modo !== undefined && !['diario', 'turnos'].includes(modo)) throw bad('Modo de caja inválido');
+  if (mitadCobro !== undefined && !['mas_cara', 'no'].includes(mitadCobro)) throw bad('Cobro de mitades inválido');
   const out = await withState((e) => {
     if (nombre) e.meta.nombre = nombre;
     if (logo !== undefined) e.config.logo = logo;
@@ -423,8 +425,11 @@ app.patch('/api/config', soloAdmin, wrap(async (req, res) => {
     // Lema y horario: los ve el cliente en la pagina de pedido. Cada negocio el suyo.
     if (lema !== undefined) e.config.lema = String(lema || '').slice(0, 80);
     if (horario !== undefined) e.config.horario = String(horario || '').slice(0, 120);
+    // Mitad y mitad en pizzas normales: 'mas_cara' cobra la diferencia, 'no' la regala.
+    // Solo afecta lo que se agregue de aquí en adelante.
+    if (mitadCobro !== undefined) e.config.mitadCobro = mitadCobro;
     return { nombre: e.meta.nombre, logo: e.config.logo || null, fiscal: e.config.fiscal || {}, cajaModo: cajaModo(e),
-      lema: e.config.lema || '', horario: e.config.horario || '' };
+      lema: e.config.lema || '', horario: e.config.horario || '', mitadCobro: e.config.mitadCobro === 'no' ? 'no' : 'mas_cara' };
   });
   res.json(out);
 }));
@@ -1089,7 +1094,7 @@ function productoVentaLibre(e) {
 }
 app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
   const { folio } = req.params;
-  const { productoId, cantidad = 1, modsElegidos = [], notas = '', partes = null, precioManual = null, descripcionLibre = '', tamanoLibre = '' } = req.body || {};
+  const { productoId, cantidad = 1, modsElegidos = [], notas = '', partes = null, mitadCon = null, precioManual = null, descripcionLibre = '', tamanoLibre = '' } = req.body || {};
   const ped = await withState((e, c) => {
     const p = e.pedidos[folio];
     if (!p) throw bad('Pedido inexistente', 404);
@@ -1098,7 +1103,7 @@ app.post('/api/pedidos/:folio/lineas', wrap(async (req, res) => {
     if (!prod) throw bad('Producto inexistente');
     // precioManual solo se respeta si el producto es de precio libre: a un
     // producto normal nadie le puede cambiar el precio desde caja.
-    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas, partes,
+    p.lineas.push(M.crearLinea(prod, e, { cantidad, modsElegidos, notas, partes, mitadCon,
       precioManual, descripcionLibre, tamanoLibre, usuario: (c || {}).username || null }));
     p.actualizado = new Date().toISOString();
     M.calcular2x1(e, p);
@@ -3014,6 +3019,7 @@ app.post('/pedir/:row/:suc/pedido', express.json(), (req, res) => {
           const cant = Math.max(1, Math.min(20, parseInt(it.cantidad, 10) || 1));
           p.lineas.push(M.crearLinea(prod, e, { cantidad: cant, modsElegidos: it.modsElegidos || [],
             partes: Array.isArray(it.partes) && it.partes.length ? it.partes.slice(0, 4) : null,
+            mitadCon: it.mitadCon || null,
             notas: String(it.notas || '').slice(0, 80) }));
         }
         if (!p.lineas.length) { const x = new Error('Ninguno de esos productos está disponible'); x.status = 400; throw x; }
