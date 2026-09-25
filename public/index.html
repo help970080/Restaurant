@@ -1661,8 +1661,7 @@ function vPOS(){
     <div class="ticket">
       ${enMesa?`<div class="thead"><span>${mesaNombre(app.pos.mesaId)} · cuenta abierta</span><a id="salirMesa">salir</a></div>`:`<div class="svc">${['mostrador','domicilio','mesa'].map(s=>`<button data-svc="${s}" class="${app.pos.tipoServicio===s?'active':''}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div class="canalsel">${(app.canales||[]).filter(c=>c.activo).map(c=>`<button data-canal="${c.id}" class="canalchip ${(app.pos.canalId||'local')===c.id?'active':''}">${c.nombre}</button>`).join('')}</div>`:''}
-      ${(ped&&ped.promo2x1)?`<div class="promo-2x1"><div class="p2-h"><b>${ped.promo2x1.nombre}</b><span>−${money(ped.promo2x1.monto)}</span></div>
-        <div class="p2-d">Gratis: ${ped.promo2x1.gratis.map(g=>g.nombre).join(', ')}</div></div>`:''}
+      <div id="promo2x1Box">${promoBox(ped)}</div>
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?tarjetaEntrega(ped):''}
       ${(!enMesa&&app.pos.tipoServicio==='domicilio')?`<div style="display:flex;gap:6px;margin-bottom:10px">
         <button class="btn accent" id="btnSeg" style="flex:1;font-size:13px"${ped&&ped.folio?'':' disabled'}>📲 Enviar seguimiento</button>
@@ -1725,12 +1724,14 @@ async function asegurarPedido(){
   }
   const p=await API.post('/api/pedidos',body);app.pos.folio=p.folio;app.pos.pedido=p;return p;
 }
-// La Mega y la Barra se pueden pedir con varias especialidades sin que cambie
-// el precio. Aquí el cliente elige en cuántas partes y qué sabor va en cada una.
+// La Mega y la Barra se pueden pedir con varias especialidades. El precio es el
+// del producto, más el cargo por cada parte de una categoría con cargo (Gourmet).
 function modalPartes(prod){
   const d=prod.divisible||{};
   const max=Math.min(4,Math.max(2,+d.maxPartes||2));
   const excluir=d.excluirCategorias||[];
+  const extraCats=d.extraCategorias||[], extraMonto=+d.extraMonto||0;
+  const precioSel=(ids)=>prod.precioBase+extraMonto*ids.filter(id=>id&&extraCats.includes((app.menu.productos[id]||{}).categoriaId)).length;
   const opciones=Object.values(app.menu.productos)
     .filter(p=>p.id!==prod.id&&p.activo!==false&&p.disponible!==false&&!excluir.includes(p.categoriaId)&&!p.divisible)
     .sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -1738,24 +1739,27 @@ function modalPartes(prod){
   let n=1, sel=[];
   const render=()=>{
     modal.innerHTML=`<h3>${prod.nombre}</h3>
-      <div class="sub">${money(prod.precioBase)} · el precio no cambia aunque la dividas</div>
+      <div class="sub">${money(prod.precioBase)}${extraMonto&&extraCats.length?` · +${money(extraMonto)} por cada parte ${extraCats.map(c=>(app.menu.categorias[c]||{}).nombre).filter(Boolean).join(' / ')}`:' · el precio no cambia aunque la dividas'}</div>
       <div class="pt-n">${Array.from({length:max},(_,i)=>i+1).map(k=>
         `<button class="pt-b ${n===k?'on':''}" data-n="${k}">${ETIQ[k]||k}</button>`).join('')}</div>
       ${n>1?Array.from({length:n},(_,i)=>`<div class="field"><label>Parte ${i+1}</label>
         <select class="pt-s" data-i="${i}"><option value="">— elige el sabor —</option>
         ${opciones.map(o=>`<option value="${o.id}" ${sel[i]===o.id?'selected':''}>${o.nombre}</option>`).join('')}</select></div>`).join('')
-        :'<div class="sub" style="margin-top:10px">Se prepara de un solo sabor, como viene en el menú.</div>'}
+        :`<div class="field"><label>Sabor</label>
+        <select class="pt-s" data-i="0"><option value="">— como viene en el menú —</option>
+        ${opciones.map(o=>`<option value="${o.id}" ${sel[0]===o.id?'selected':''}>${o.nombre}</option>`).join('')}</select></div>`}
+      <div class="sub" style="margin-top:8px;font-weight:700">Precio: <span id="ptPre">${money(precioSel(sel.slice(0,n)))}</span></div>
       ${excluir.length?`<div class="small" style="color:var(--muted);margin-top:8px">No se pueden combinar: ${excluir.map(c=>(app.menu.categorias[c]||{}).nombre).filter(Boolean).join(', ')}.</div>`:''}
       <div class="modal-foot"><button class="btn-ghost" id="ptNo">Cancelar</button><button class="btn-primary" id="ptOk">Agregar</button></div>`;
     modal.querySelectorAll('[data-n]').forEach(b=>b.onclick=()=>{n=+b.dataset.n;sel=sel.slice(0,n);render();});
-    modal.querySelectorAll('.pt-s').forEach(s2=>s2.onchange=()=>{sel[+s2.dataset.i]=s2.value;});
+    modal.querySelectorAll('.pt-s').forEach(s2=>s2.onchange=()=>{sel[+s2.dataset.i]=s2.value;$('#ptPre').textContent=money(precioSel(sel.slice(0,n)));});
     $('#ptNo').onclick=closeModal;
     $('#ptOk').onclick=async()=>{
       let partes=null;
       if(n>1){
         partes=sel.slice(0,n).filter(Boolean);
         if(partes.length!==n){toast('Elige el sabor de cada parte');return;}
-      }
+      }else if(sel[0])partes=[sel[0]];
       try{
         app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,partes});
         closeModal();renderLines();
@@ -1850,8 +1854,17 @@ function modalEntrega(actual,onOk){
     onOk(ent);
   };
 }
+// 2x1: solo empareja pizzas del mismo tamaño. Las que quedan sin pareja se cobran completas.
+function promoBox(ped){
+  const p=ped&&ped.promo2x1;if(!p)return '';
+  const sp=(p.sinPar||[]);
+  return `<div class="promo-2x1"><div class="p2-h"><b>${p.nombre}</b><span>−${money(p.monto)}</span></div>
+    ${p.gratis.length?`<div class="p2-d">Gratis: ${p.gratis.map(g=>g.nombre).join(', ')}</div>`:''}
+    ${sp.length?`<div class="p2-d" style="color:var(--muted)">Sin pareja del mismo tamaño (se cobra completa): ${sp.map(g=>g.nombre).join(', ')}</div>`:''}</div>`;
+}
 function renderLines(){
   const ped=app.pos.pedido;const cont=$('#lines');if(!cont)return;
+  const pb=$('#promo2x1Box');if(pb)pb.innerHTML=promoBox(ped);
   if(!ped||!ped.lineas.length){cont.innerHTML=`<div class="empty">${app.turno?'Toca un producto para empezar.':'Abre el turno para vender.'}</div>`;}
   else cont.innerHTML=ped.lineas.map(l=>`<div class="line"><div style="flex:1"><div class="lname">${l.cantidad}× ${l.nombre}</div>${l.partes?`<div class="lpartes">${l.fraccion}: ${l.partes.map(x=>x.nombre).join(' / ')}</div>`:''}${l.modificadores.length?`<div class="lmod">${l.modificadores.map(m=>m.opcionNombre+(m.precioDelta?` (+${money(m.precioDelta)})`:'')).join(' · ')}</div>`:''}${l.notas?`<div class="lnote">“${l.notas}”</div>`:''}</div><div class="lprice">${money(l.importe)}</div><button class="rm" data-rm="${l.id}">×</button></div>`).join('');
   cont.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{app.pos.pedido=await API.del(`/api/pedidos/${app.pos.folio}/lineas/${b.dataset.rm}`);renderLines();});
@@ -1864,19 +1877,40 @@ function renderLines(){
   const bs=$('#btnSeg');if(bs)bs.disabled=!(ped&&ped.folio);
   const bsc=$('#btnSegCopia');if(bsc)bsc.disabled=!(ped&&ped.folio);
 }
+// Pizza normal con mitad de otro sabor: solo entre productos que tienen Tamaño.
+const tieneTamano=p=>(p.gruposIds||[]).some(id=>/tama[ñn]o/i.test((app.menu.gruposModificadores[id]||{}).nombre||''));
+function precioEnTamanoUI(p,tamNom){
+  if(!tamNom)return p.precioBase;const t=tamNom.trim().toLowerCase();
+  for(const id of p.gruposIds||[]){const g=app.menu.gruposModificadores[id];if(!g||!/tama[ñn]o/i.test(g.nombre))continue;
+    const o=g.opciones.find(x=>x.nombre.trim().toLowerCase()===t);if(o)return p.precioBase+o.precioDelta;}
+  return null;
+}
 function modalModificadores(prod){
   const grupos=prod.gruposIds.map(id=>app.menu.gruposModificadores[id]);
+  if(app._mitadCobro===undefined){app._mitadCobro='mas_cara';API.get('/api/config').then(c=>{app._mitadCobro=c.mitadCobro||'mas_cara';}).catch(()=>{});}
+  const mitades=tieneTamano(prod)?Object.values(app.menu.productos).filter(p=>p.id!==prod.id&&p.activo!==false&&p.disponible!==false&&!p.divisible&&!p.precioLibre&&tieneTamano(p)).sort((a,b)=>a.nombre.localeCompare(b.nombre)):[];
   let h=`<h3>${prod.nombre}</h3><div class="sub">Precio base ${money(prod.precioBase)}</div>`;
   grupos.forEach(g=>{h+=`<div class="grp" data-grp="${g.id}"><div class="glabel"><span>${g.nombre}</span>${g.obligatorio?'<span class="req">Obligatorio</span>':''}</div>`+
     g.opciones.filter(o=>o.activo).map(o=>{const ck=g.obligatorio&&g.tipo==='unico'&&o.porDefecto?'checked':'';const inp=g.tipo==='unico'?`<input type="radio" name="g_${g.id}" value="${o.id}" ${ck}>`:`<input type="checkbox" name="g_${g.id}" value="${o.id}">`;return `<label class="opt">${inp}<span class="onm">${o.nombre}</span>${o.precioDelta?`<span class="od">+${money(o.precioDelta)}</span>`:''}</label>`;}).join('')+`</div>`;});
+  if(mitades.length)h+=`<div class="grp"><div class="glabel"><span>Mitad y mitad</span></div>
+    <select id="lnMitad" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font:inherit"><option value="">— entera, un solo sabor —</option>
+    ${mitades.map(p=>`<option value="${p.id}">Mitad ${p.nombre}</option>`).join('')}</select>
+    <div class="small" id="lnMitadInfo" style="color:var(--muted);margin-top:4px"></div></div>`;
   h+=`<div class="grp"><div class="glabel"><span>Notas para cocina</span></div><input class="nota" id="lnNota" placeholder="Ej. sin sal, extra dorada"></div>
      <div class="modal-foot"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mAdd">Agregar — <span id="mPrice">${money(prod.precioBase)}</span></button></div>`;
   modal.innerHTML=h;ov.classList.add('show');
-  const rec=()=>{let d=0,ok=true;document.querySelectorAll('#modal .grp[data-grp]').forEach(gd=>{const g=app.menu.gruposModificadores[gd.dataset.grp];const ch=[...gd.querySelectorAll('input:checked')];ch.forEach(c=>d+=g.opciones.find(x=>x.id===c.value).precioDelta);if(g.obligatorio&&!ch.length)ok=false;if(g.max&&ch.length>g.max)ok=false;});$('#mPrice').textContent=money(prod.precioBase+d);$('#mAdd').disabled=!ok;};
-  modal.querySelectorAll('input').forEach(i=>i.addEventListener('change',rec));rec();
+  const rec=()=>{let d=0,ok=true,tamNom='';document.querySelectorAll('#modal .grp[data-grp]').forEach(gd=>{const g=app.menu.gruposModificadores[gd.dataset.grp];const ch=[...gd.querySelectorAll('input:checked')];ch.forEach(c=>{const o=g.opciones.find(x=>x.id===c.value);d+=o.precioDelta;if(/tama[ñn]o/i.test(g.nombre))tamNom=o.nombre;});if(g.obligatorio&&!ch.length)ok=false;if(g.max&&ch.length>g.max)ok=false;});
+    const mi=$('#lnMitad');let dif=0;
+    if(mi&&mi.value){const o=app.menu.productos[mi.value];const pO=precioEnTamanoUI(o,tamNom),pE=precioEnTamanoUI(prod,tamNom);
+      if(pO==null){ok=false;$('#lnMitadInfo').textContent=`${o.nombre} no se prepara en tamaño ${tamNom}`;}
+      else{dif=app._mitadCobro==='no'?0:Math.max(0,pO-(pE==null?prod.precioBase:pE));$('#lnMitadInfo').textContent=dif>0?`Se cobra como la mitad más cara: +${money(dif)}`:'Sin cargo extra';}}
+    else if($('#lnMitadInfo'))$('#lnMitadInfo').textContent='';
+    $('#mPrice').textContent=money(prod.precioBase+d+dif);$('#mAdd').disabled=!ok;};
+  modal.querySelectorAll('input,select').forEach(i=>i.addEventListener('change',rec));rec();
   $('#mCancel').onclick=closeModal;
   $('#mAdd').onclick=async()=>{const mods=[];document.querySelectorAll('#modal .grp[data-grp]').forEach(gd=>{const g=app.menu.gruposModificadores[gd.dataset.grp];gd.querySelectorAll('input:checked').forEach(c=>mods.push({grupoId:g.id,opcionId:c.value}));});
-    try{app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,modsElegidos:mods,notas:$('#lnNota').value.trim()});closeModal();renderLines();}catch(e){toast(e.message);}};
+    const mc=$('#lnMitad')?$('#lnMitad').value:'';
+    try{app.pos.pedido=await API.post(`/api/pedidos/${app.pos.folio}/lineas`,{productoId:prod.id,cantidad:1,modsElegidos:mods,notas:$('#lnNota').value.trim(),mitadCon:mc||null});closeModal();renderLines();}catch(e){toast(e.message);}};
 }
 // Producto de precio libre ("Pizza especial"): caja escribe qué lleva y cuánto
 // cuesta. El server lo guarda con quién lo capturó para auditarlo en Reportes.
@@ -2831,6 +2865,8 @@ function modalDivisible(id){
   const cats=Object.values(app.menu.categorias);
   const d=p.divisible||null;
   let activo=!!d, max=(d&&+d.maxPartes)||2, excl=(d&&d.excluirCategorias)||[];
+  // Cargo por especialidad: cada parte de estas categorías suma el monto (Gourmet +$100 en la Mega)
+  let xcats=(d&&d.extraCategorias)||(d?[]:cats.filter(c=>/gourmet/i.test(c.nombre)).map(c=>c.id)), xmonto=(d&&d.extraMonto!=null)?+d.extraMonto:100;
   const render=()=>{
     modal.innerHTML=`<h3>${p.nombre}</h3><div class="sub">¿Se puede pedir con varios sabores sin cambiar el precio?</div>
       <label class="cm-o" style="margin-top:12px"><input type="checkbox" id="dvOn" ${activo?'checked':''}>
@@ -2838,15 +2874,21 @@ function modalDivisible(id){
       ${activo?`<div class="field"><label>¿En cuántas partes como máximo?</label>
         <div class="pt-n">${[2,3,4].map(k=>`<button class="pt-b ${max===k?'on':''}" data-m="${k}">${k} partes</button>`).join('')}</div></div>
         <div class="field"><label>Categorías que NO se pueden combinar</label>
-          <div class="pm-cats">${cats.map(c=>`<label><input type="checkbox" class="dv-c" value="${c.id}" ${excl.includes(c.id)?'checked':''}> ${c.nombre}</label>`).join('')}</div></div>`:''}
+          <div class="pm-cats">${cats.map(c=>`<label><input type="checkbox" class="dv-c" value="${c.id}" ${excl.includes(c.id)?'checked':''}> ${c.nombre}</label>`).join('')}</div></div>
+        <div class="field"><label>Categorías con cargo extra (se cobra por cada parte)</label>
+          <div class="pm-cats">${cats.map(c=>`<label><input type="checkbox" class="dv-x" value="${c.id}" ${xcats.includes(c.id)?'checked':''}> ${c.nombre}</label>`).join('')}</div></div>
+        <div class="field"><label>Cargo por parte</label><input id="dvXm" type="number" step="1" min="0" class="mono" value="${xmonto}"></div>`:''}
       <div class="modal-foot"><button class="btn-ghost" id="dvNo">Cancelar</button><button class="btn-primary" id="dvOk">Guardar</button></div>`;
     $('#dvOn').onchange=()=>{activo=$('#dvOn').checked;render();};
     modal.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{max=+b.dataset.m;render();});
     modal.querySelectorAll('.dv-c').forEach(c=>c.onchange=()=>{
       excl=[...modal.querySelectorAll('.dv-c:checked')].map(x=>x.value);});
+    modal.querySelectorAll('.dv-x').forEach(c=>c.onchange=()=>{
+      xcats=[...modal.querySelectorAll('.dv-x:checked')].map(x=>x.value);});
+    if($('#dvXm'))$('#dvXm').oninput=()=>{xmonto=Math.max(0,+$('#dvXm').value||0);};
     $('#dvNo').onclick=closeModal;
     $('#dvOk').onclick=async()=>{
-      const val=activo?{maxPartes:max,excluirCategorias:excl}:null;
+      const val=activo?{maxPartes:max,excluirCategorias:excl,extraCategorias:xcats,extraMonto:xmonto}:null;
       try{const r=await API.patch('/api/menu/productos/'+id,{divisible:val});
         app.menu.productos[r.id]=r;closeModal();
         toast(val?`${p.nombre} se puede dividir en ${max}`:`${p.nombre} ya no se divide`,{tipo:'ok'});vMenu();}
@@ -4008,6 +4050,14 @@ async function vAjustes(){
         <b>Por turnos</b><div class="small" style="color:var(--muted)">Se abre y se cierra a mano, con fondo inicial. Úsalo si hay relevo de cajero en el mismo día.</div></div></label>
     </div>
   </div>
+  <div class="panel" style="margin-top:16px"><h3>Pizzas mitad y mitad <span class="small">cuando una mitad es de otro sabor</span></h3>
+    <div class="cm-ops">
+      <label class="cm-o"><input type="radio" name="mitcob" value="mas_cara" ${cfg.mitadCobro!=='no'?'checked':''}><div>
+        <b>Cobrar la mitad más cara</b><div class="small" style="color:var(--muted)">Si una mitad es de un sabor más caro, se cobra la diferencia. Ej. Hawaiana Familiar con mitad Costillas BBQ.</div></div></label>
+      <label class="cm-o"><input type="radio" name="mitcob" value="no" ${cfg.mitadCobro==='no'?'checked':''}><div>
+        <b>Sin cargo extra</b><div class="small" style="color:var(--muted)">Se cobra el precio de la pizza elegida, sin importar el sabor de la otra mitad.</div></div></label>
+    </div>
+  </div>
   <div class="panel" style="margin-top:16px"><h3>Sucursales <span class="small">la dirección del local es el punto de partida de cada entrega</span></h3>
     <div id="sucBox"><div class="empty">Cargando…</div></div>
   </div>
@@ -4055,6 +4105,10 @@ async function vAjustes(){
     toast(await copiar(b.dataset.copiapedir)?'Liga copiada · pégala en tus redes':'Cópiala a mano',{tipo:'ok',ms:4000});
   });
   if($('#btnRespaldo'))$('#btnRespaldo').onclick=descargarRespaldo;
+  document.querySelectorAll('input[name=mitcob]').forEach(x=>x.onchange=async()=>{
+    try{const r=await API.patch('/api/config',{mitadCobro:x.value});app._mitadCobro=r.mitadCobro;
+      toast(x.value==='no'?'Mitades sin cargo extra':'Se cobra la mitad más cara',{tipo:'ok'});}catch(e){toast(e.message);}
+  });
   (async()=>{
     let modo='diario';try{modo=(await API.get('/api/caja/turno-actual?sucursalId='+app.sucursalId)||{}).modo||'diario';}catch{}
     const r=$('#cm'+(modo==='turnos'?'Turnos':'Diario'));if(r)r.checked=true;
