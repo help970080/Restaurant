@@ -1579,7 +1579,32 @@ function pintarBadges(){
       ||(el.dataset.bdg==='caja'&&(a.caja.porConfirmar||[]).length>0));
   });
 }
-function go(v){if(!puedeVer(v))v=vistaInicial();app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
+// ---- Botón "atrás" del teléfono ----------------------------------------------
+//  Sin historial, "atrás" cerraba la app desde cualquier pantalla. Ahora:
+//  1) si hay un modal abierto, lo cierra; 2) si el menú lateral está abierto, lo
+//  cierra; 3) regresa a la pantalla anterior; 4) en la primera pantalla pide
+//  confirmar ("otra vez para salir") en lugar de cerrar de golpe.
+let _histListo=false,_salirHasta=0;
+function histPush(v){try{history.pushState({cp:v},'');}catch(e){}}
+function armarHistorial(v){
+  if(_histListo)return;_histListo=true;
+  try{history.replaceState({cp:v,raiz:true},'');history.pushState({cp:v},'');}catch(e){}
+  window.addEventListener('popstate',ev=>{
+    const st=ev.state||{};
+    if(ov.classList.contains('show')){closeModal();histPush(app.vista);return;}
+    const sh=$('#app')&&$('#app').querySelector('.shell');
+    if(sh&&sh.classList.contains('navopen')){sh.classList.remove('navopen');histPush(app.vista);return;}
+    if(st.raiz||!st.cp){
+      if(Date.now()<_salirHasta){history.back();return;}   // segundo "atrás": ahora sí sale
+      _salirHasta=Date.now()+2500;toast('Presiona atrás otra vez para salir');histPush(app.vista);return;
+    }
+    go(st.cp,{desdeHistorial:true});
+  });
+}
+function go(v,op){op=op||{};if(!puedeVer(v))v=vistaInicial();
+  if(!_histListo)armarHistorial(v);
+  else if(!op.desdeHistorial&&v!==app.vista)histPush(v);
+  app.vista=v;$('#vtitle').textContent=(NAV().find(n=>n[0]===v)||['',''])[1];renderNav();
   if(kdsTimer){clearInterval(kdsTimer);kdsTimer=null;}
   $('#view').innerHTML='<div class="loading">Cargando…</div>';
   const fn={resumen:vResumen,pos:vPOS,cocina:vCocina,menu:vMenu,inventario:vInventario,mesas:vMesas,reportes:vReportes,promociones:vPromociones,ajustes:vAjustes,rh:vRH,asistencia:vAsistencia,reservas:vReservas,caja:vCaja,reparto:vReparto,gastos:vGastos}[v];
