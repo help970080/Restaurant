@@ -607,6 +607,9 @@ function vistaSeguimiento(e, p, { repartidor = null, ubicacion = null, etaMin = 
   const suc = e.sucursales[p.sucursalId] || {};
   return {
     folio: p.folio,
+    // Para el botón "Hacer otro pedido" y el "atrás" de la página de seguimiento
+    sucursalId: p.sucursalId || null,
+    origen: p.origen || null,
     negocio: (e.meta && e.meta.nombre) || '',
     sucursal: suc.nombre || '',
     cliente: (p.cliente && p.cliente.nombre) || '',
