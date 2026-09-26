@@ -378,6 +378,25 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
   var esc=function(x){return String(x==null?'':x).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
   var money=function(n){return '$'+(+(n||0)).toFixed(2);};
   var cerrar=function(){ov.classList.remove('show');mo.className='mo';};
+  // ---- Pedido en curso: si el cliente se sale del seguimiento, al volver al
+  //      menú lo ve arriba y regresa con un toque. seguimiento.html lo apaga
+  //      cuando el pedido se entrega o se cancela.
+  var LLAVE_SEG='cp_seg_'+ROW;
+  function pedidoEnCurso(){
+    try{var x=JSON.parse(localStorage.getItem(LLAVE_SEG)||'null');
+      if(x&&x.url&&x.activo&&Date.now()-x.ts<4*3600000)return x;}catch(e){}
+    return null;
+  }
+  function guardarEnCurso(url,folio){
+    try{localStorage.setItem(LLAVE_SEG,JSON.stringify({url:url,folio:folio,activo:true,ts:Date.now()}));}catch(e){}
+  }
+  // ---- Botón "atrás": cierra la ventana abierta en lugar de salirse de la página
+  try{history.replaceState({raiz:1},'');history.pushState({menu:1},'');}catch(e){}
+  window.addEventListener('popstate',function(){
+    if(ov.classList.contains('show')){cerrar();try{history.pushState({menu:1},'');}catch(e){}return;}
+    if(document.querySelector('#app .ok')){location.reload();return;}   // de "pedido enviado" al menú
+    history.back();
+  });
   ov.onclick=function(e){if(e.target===ov)cerrar();};
 
   fetch('/pedir/'+ROW+'/'+SUC+'/menu').then(function(r){
@@ -445,7 +464,11 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
   // cuerpo, para que el teclado del teléfono no se cierre en cada letra.
   function pintar(){
     if(M.negocio)document.title=M.negocio+' · Pedir a domicilio';
+    var enCurso=pedidoEnCurso();
     $('#app').innerHTML=
+      (enCurso?'<a href="'+esc(enCurso.url)+'" style="display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:14px 16px;border-radius:16px;background:#1D1A16;color:#fff;text-decoration:none;font-weight:700">'+
+        '<span style="font-size:22px">🛵</span><span style="flex:1">Tienes un pedido en curso'+(enCurso.folio?' <small style="opacity:.7;font-weight:600">'+esc(enCurso.folio)+'</small>':'')+
+        '<br><small style="opacity:.75;font-weight:600">Toca para ver dónde va</small></span><span>→</span></a>':'')+
       '<div class="hd">'+(M.logo?'<img src="'+esc(M.logo)+'" alt="">':'')+
         '<div><div class="hola">¡Hola! 👋 ¿Qué se te antoja hoy?</div><h1>'+esc(M.negocio)+'</h1>'+
         '<div class="dir">📍 Entregamos en '+esc(M.sucursal.nombre)+' y alrededores</div>'+
@@ -506,8 +529,14 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
       var v=sel[g.id];var ids=multi(g)?(v||[]):(v?[v]:[]);
       return g.opciones.filter(function(o){return ids.indexOf(o.id)>=0;});
     }
+    var xCats=(div&&div.extraCategorias)||[], xMonto=(div&&+div.extraMonto)||0;
+    function cargoPartes(){
+      if(!div||!xCats.length||!xMonto)return 0;
+      return xMonto*partes.slice(0,nPartes).filter(function(id){
+        var x=M.productos.find(function(y){return y.id===id;});return x&&xCats.indexOf(x.categoriaId)>=0;}).length;
+    }
     function unit(){
-      var t=p.precioBase;
+      var t=p.precioBase+cargoPartes();
       grupos.forEach(function(g){elegidas(g).forEach(function(o){t+=o.precioDelta||0;});});
       return t;
     }
@@ -517,14 +546,17 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
       mo.className='mo prod';
       mo.innerHTML='<div class="fot">'+img(p)+'<button class="cx" id="cx" aria-label="Cerrar">×</button></div><div class="pb">'+
         '<h3>'+esc(p.nombre)+'</h3>'+(p.descripcion?'<div class="sub">'+esc(p.descripcion)+'</div>':'')+
-        (div?'<div class="grp"><div class="grp-t">¿Cómo la quieres?<small>mismo precio</small></div>'+
+        (div?'<div class="grp"><div class="grp-t">¿Cómo la quieres?<small>'+(xMonto&&xCats.length?'+'+money(xMonto)+' por especialidad '+esc(xCats.map(catNombre).filter(Boolean).join(' / ')):'mismo precio')+'</small></div>'+
           '<div class="chips">'+[1,2,3,4].slice(0,maxP).map(function(k){
             return '<button class="chip '+(nPartes===k?'sel':'')+'" data-np="'+k+'">'+ETIQ[k]+'</button>';}).join('')+'</div>'+
           (nPartes>1?Array.apply(null,{length:nPartes}).map(function(_,i){
             return '<div class="f"><label>Parte '+(i+1)+'</label><select class="ps" data-i="'+i+'">'+
               '<option value="">— elige el sabor —</option>'+
               opcSab.map(function(o){return '<option value="'+o.id+'" '+(partes[i]===o.id?'selected':'')+'>'+esc(o.nombre)+'</option>';}).join('')+
-              '</select></div>';}).join(''):'')+'</div>':'')+
+              '</select></div>';}).join(''):
+            '<div class="f"><label>Sabor</label><select class="ps" data-i="0"><option value="">— como viene en el menú —</option>'+
+              opcSab.map(function(o){return '<option value="'+o.id+'" '+(partes[0]===o.id?'selected':'')+'>'+esc(o.nombre)+'</option>';}).join('')+
+              '</select></div>')+'</div>':'')+
         grupos.map(function(g){
           var m=multi(g), n=m?(sel[g.id]||[]).length:0, lleno=m&&g.max&&n>=g.max;
           return '<div class="grp"><div class="grp-t">'+esc(g.nombre)+
@@ -546,7 +578,7 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
         render();};});
       [].forEach.call(mo.querySelectorAll('[data-np]'),function(b){b.onclick=function(){
         nPartes=+b.dataset.np;partes=partes.slice(0,nPartes);render();};});
-      [].forEach.call(mo.querySelectorAll('.ps'),function(s2){s2.onchange=function(){partes[+s2.dataset.i]=s2.value;};});
+      [].forEach.call(mo.querySelectorAll('.ps'),function(s2){s2.onchange=function(){partes[+s2.dataset.i]=s2.value;$('#add').textContent='Agregar · '+money(precio());};});
       $('#me').onclick=function(){if(cant>1){cant--;render();}};
       $('#ma').onclick=function(){if(cant<20){cant++;render();}};
       $('#add').onclick=function(){
@@ -556,15 +588,18 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
         if(div&&nPartes>1){
           trozos=partes.slice(0,nPartes).filter(Boolean);
           if(trozos.length!==nPartes){alert('Elige el sabor de cada parte');return;}
-        }
+        }else if(div&&partes[0])trozos=[partes[0]];
         var mods=[],nombres=[];
         grupos.forEach(function(g){
           elegidas(g).forEach(function(o){mods.push({grupoId:g.id,opcionId:o.id});nombres.push(o.nombre);});
         });
         if(trozos)nombres=trozos.map(function(t){
           var o=opcSab.find(function(x){return x.id===t;});return o?o.nombre:'';}).concat(nombres);
+        // Para el 2x1: tamaño elegido y lo que cuesta la pizza sin extras
+        var tam='',base=p.precioBase;
+        grupos.forEach(function(g){if(/tama[ñn]o/i.test(g.nombre))elegidas(g).forEach(function(o){tam=o.nombre;base+=o.precioDelta||0;});});
         carrito.push({productoId:p.id,nombre:p.nombre,cantidad:cant,modsElegidos:mods,partes:trozos,
-          nombresMods:nombres,notas:($('#pn').value||'').trim(),importe:precio()});
+          nombresMods:nombres,notas:($('#pn').value||'').trim(),importe:precio(),tam:tam,base:base});
         cerrar();barra();
       };
     }
@@ -572,21 +607,27 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
   }
 
   function subtotal(){return carrito.reduce(function(t,i){return t+i.importe;},0);}
-  // Mismo cálculo que hace el servidor: se ordenan las piezas que participan
-  // de más cara a más barata y se regala la segunda de cada par.
+  // Mismo cálculo que hace el servidor: solo se emparejan pizzas del MISMO
+  // tamaño; en cada tamaño se ordenan de más cara a más barata y se regala la
+  // segunda de cada par. Se regala la pizza con su tamaño, no la orilla ni extras.
   function calcular2x1(){
     if(!M.promo2x1||!M.promo2x1.categorias||!M.promo2x1.categorias.length)return null;
-    var piezas=[];
+    var grupos={}, total=0;
     carrito.forEach(function(i){
       var p=M.productos.find(function(x){return x.id===i.productoId;});
       if(!p||M.promo2x1.categorias.indexOf(p.categoriaId)<0)return;
-      var unit=i.importe/i.cantidad;
-      for(var k=0;k<i.cantidad;k++)piezas.push({nombre:i.nombre,precio:unit});
+      var k=String(i.tam||'').trim().toLowerCase();
+      var precio=i.base!=null?i.base:i.importe/i.cantidad;
+      (grupos[k]=grupos[k]||[]);
+      for(var n=0;n<i.cantidad;n++){grupos[k].push({nombre:i.nombre+(i.tam?' '+i.tam:''),precio:precio});total++;}
     });
-    if(piezas.length<2)return null;
-    piezas.sort(function(a,b){return b.precio-a.precio;});
+    if(total<2)return null;
     var gratis=[];
-    for(var j=1;j<piezas.length;j+=2)gratis.push(piezas[j]);
+    Object.keys(grupos).forEach(function(k){
+      var piezas=grupos[k].sort(function(a,b){return b.precio-a.precio;});
+      for(var j=1;j<piezas.length;j+=2)gratis.push(piezas[j]);
+    });
+    if(!gratis.length)return null;
     var monto=gratis.reduce(function(t,x){return t+x.precio;},0);
     return {monto:Math.round(monto*100)/100,gratis:gratis};
   }
@@ -758,6 +799,7 @@ function artPasta(){return `<svg class=\"art\" viewBox=\"0 0 160 120\" preserveA
 
   function listo(r){
     cerrar();
+    if(r.seguimiento)guardarEnCurso(r.seguimiento,r.folio);
     $('#bar').style.display='none';
     $('#app').innerHTML='<div class="ok"><div class="big">'+(r.confirmado?'🍕':'📨')+'</div>'+
       '<h2>'+(r.confirmado?'¡Ya está en la cocina!':'Recibimos tu pedido')+'</h2>'+
