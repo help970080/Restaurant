@@ -117,8 +117,25 @@
     timer=setTimeout(function(){tick();},d);
   }
 
+  // "Atrás" en el teléfono cerraba la página y el cliente perdía su pedido.
+  // Ahora regresa al menú de pedidos (que recuerda este pedido y lo ofrece
+  // arriba) y la liga queda guardada en el teléfono.
+  var urlPedir=null, histListo=false;
+  function recordarPedido(d){
+    try{
+      localStorage.setItem('cp_seg_'+ROW, JSON.stringify({url:location.pathname, folio:d.folio,
+        activo:!d.cancelado&&d.paso<4, ts:Date.now()}));
+    }catch(e){}
+    if(d.sucursalId)urlPedir='/pedir/'+ROW+'/'+d.sucursalId;
+    if(!histListo&&urlPedir){
+      histListo=true;
+      try{history.replaceState({raiz:1},'');history.pushState({seg:1},'');}catch(e){}
+      window.addEventListener('popstate',function(){location.href=urlPedir;});
+    }
+  }
   function pintar(d){
     ultimo=d;
+    recordarPedido(d);
     if(d.cancelado){
       $('#app').innerHTML=cabeza(d)+'<div class="card fin"><div class="big">😔</div><h1 style="font-size:19px;margin:10px 0 4px">Tu pedido fue cancelado</h1><p style="color:var(--muted);margin:0;font-size:14px">Si crees que es un error, comunícate con nosotros.</p></div>';
       return;
@@ -178,6 +195,7 @@
       });
       h+='</ul><div class="tot"><span>Total<small>se paga al recibir</small></span><span>'+money(d.total)+'</span></div></div>';
     }
+    if(urlPedir)h+='<a class="enviar" style="display:block;text-align:center;text-decoration:none;background:var(--ink);box-shadow:none" href="'+urlPedir+'">'+(p===4?'Hacer otro pedido':'Volver al menú')+'</a>';
     $('#app').innerHTML=h;
     if(p===4&&d.puedeCalificar)armarCalificacion();
     if(p===3)dibujarMapa(d);
